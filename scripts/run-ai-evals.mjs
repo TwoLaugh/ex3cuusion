@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 
 const port = Number(process.env.EX3CUUSION_EVAL_PORT ?? 3021);
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -6,6 +7,8 @@ const live = process.argv.includes("--live");
 const jsonReport = process.argv.includes("--json");
 const isWindows = process.platform === "win32";
 const runner = isWindows ? "cmd.exe" : "npx";
+
+loadLocalEnv();
 
 if (live && !process.env.OPENAI_API_KEY) {
   console.error("OPENAI_API_KEY is required for --live evals.");
@@ -63,6 +66,29 @@ function stopServer() {
   } else {
     server.kill("SIGTERM");
   }
+}
+
+function loadLocalEnv() {
+  for (const file of [".env.local", ".env"]) {
+    if (!existsSync(file)) continue;
+    const lines = readFileSync(file, "utf8").split(/\r?\n/);
+    for (const line of lines) {
+      const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)\s*$/);
+      if (!match || process.env[match[1]]) continue;
+      process.env[match[1]] = unquoteEnvValue(match[2]);
+    }
+  }
+}
+
+function unquoteEnvValue(value) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
 }
 
 function scenarios() {
