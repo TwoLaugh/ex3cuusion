@@ -10,6 +10,6 @@ const messageSchema = z.object({
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const params = await context.params;
   const input = messageSchema.parse(await request.json());
-  const state = addCaptureSessionMessage(params.id, input.message.trim());
+  const state = await addCaptureSessionMessage(params.id, input.message.trim());
   return NextResponse.json({ state, plan: buildDayPlan(state) });
 }

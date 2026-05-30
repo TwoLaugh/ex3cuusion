@@ -1,6 +1,6 @@
 # T052: AI Inbox Revision Flow
 
-Status: planned.
+Status: implemented in V1 foundation.
 
 ## Goal
 

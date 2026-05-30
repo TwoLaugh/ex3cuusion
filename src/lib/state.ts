@@ -1,4 +1,4 @@
-import { interpretInboxInput, type AiInterpreter } from "./ai-actions";
+import { interpretCaptureRevision, interpretInboxInput, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
 import { buildDayPlan } from "./planner";
@@ -287,7 +287,7 @@ export function answerCaptureQuestion(sessionId: string, questionId: string, ans
   return getState();
 }
 
-export function addCaptureSessionMessage(sessionId: string, message: string): AppState {
+export async function addCaptureSessionMessage(sessionId: string, message: string, interpreter?: AiRevisionInterpreter): Promise<AppState> {
   const state = currentState();
   const session = state.captureSessions.find((candidate) => candidate.id === sessionId);
   const trimmed = message.trim();
@@ -328,12 +328,21 @@ export function addCaptureSessionMessage(sessionId: string, message: string): Ap
     return getState();
   }
 
-  const changes = applyFollowUpToTask(state, target.task, trimmed);
+  let changes: string[];
+  let summary: string | undefined;
+  try {
+    const revision = await interpretCaptureRevision(trimmed, state, session, target.task, interpreter);
+    changes = applyRevisionToTask(state, target.task, revision);
+    summary = revision.summary;
+  } catch (error) {
+    changes = applyFollowUpToTask(state, target.task, trimmed);
+    summary = error instanceof Error ? `I used the local fallback because the AI revision failed: ${error.message}` : undefined;
+  }
   if (target.action) target.action.payload = { ...target.action.payload, ...taskActionPatch(target.task) };
   addAssistantSessionMessage(
     state,
     session,
-    changes.length ? `Updated ${target.task.title}: ${changes.join(", ")}.` : `Kept that note on ${target.task.title}.`
+    changes.length ? `Updated ${target.task.title}: ${changes.join(", ")}.` : summary || `Kept that note on ${target.task.title}.`
   );
   session.updatedAt = timestampForState(state);
   return getState();
@@ -679,9 +688,151 @@ function applyFollowUpToTask(state: AppState, task: Task, message: string): stri
   return changes;
 }
 
+function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevision): string[] {
+  if (!revision.shouldApply || revision.confidence < 0.4) {
+    task.notes = [task.notes, revision.note || revision.summary].filter(Boolean).join("\n");
+    return [];
+  }
+
+  const changes: string[] = [];
+  if (revision.title?.trim() && revision.title.trim() !== task.title) {
+    task.title = revision.title.trim();
+    changes.push("renamed");
+  }
+
+  const project = revision.projectName ? findProjectMention(state, revision.projectName) : undefined;
+  if (project) {
+    task.projectId = project.id;
+    task.domainId = project.domainId;
+    task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
+    task.plannerFields.intentType = project.kind === "person" ? "relationship" : "progress";
+    changes.push(`moved under ${project.name}`);
+  }
+
+  const domain = revision.domainName ? findDomainMention(state, revision.domainName) : undefined;
+  if (domain && !project) {
+    task.domainId = domain.id;
+    changes.push(`moved to ${domain.name}`);
+  }
+
+  const dateChange = applyRevisionDate(state, task, revision);
+  if (dateChange) changes.push(dateChange);
+
+  if (revision.effortMinutes && revision.effortMinutes !== task.effortMinutes) {
+    task.effortMinutes = revision.effortMinutes;
+    task.estimateConfidence = Math.max(task.estimateConfidence ?? 0.5, revision.confidence);
+    changes.push(`set estimate to ${revision.effortMinutes}m`);
+  }
+
+  if (revision.priority) task.priority = revision.priority;
+  if (revision.importance) task.importance = revision.importance;
+  if (revision.urgency) task.urgency = revision.urgency;
+  if (revision.priority || revision.importance || revision.urgency) changes.push("updated priority");
+
+  if (revision.definitionOfDone?.trim()) {
+    task.definitionOfDone = revision.definitionOfDone.trim();
+    task.completionMode = task.completionMode === "simple_done" ? "outcome_done" : task.completionMode;
+    changes.push("updated done-state");
+  }
+
+  if (revision.completionBehavior) task.completionBehavior = revision.completionBehavior;
+  if (revision.completionMode) task.completionMode = revision.completionMode;
+  if (revision.completionBehavior || revision.completionMode) changes.push("updated completion behavior");
+
+  if (revision.note?.trim()) {
+    task.notes = [task.notes, `Follow-up: ${revision.note.trim()}`].filter(Boolean).join("\n");
+    if (!changes.length) changes.push("added note");
+  }
+
+  return uniqueChanges(changes.length ? changes : revision.changes);
+}
+
+function applyRevisionDate(state: AppState, task: Task, revision: CaptureRevision): string | undefined {
+  if (!revision.dateIntent || revision.dateIntent === "unchanged") return undefined;
+
+  if (revision.dateIntent === "next_week") {
+    const range = nextWeekRange(state.currentDate);
+    task.scheduledDate = undefined;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "week_window", originalText: revision.summary, ...range, confidence: revision.confidence };
+    task.plannerFields.pressureLevel = "soft";
+    return "moved to next week";
+  }
+
+  if (revision.dateIntent === "this_week") {
+    const range = weekRange(state.currentDate);
+    task.scheduledDate = undefined;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "week_window", originalText: revision.summary, ...range, confidence: revision.confidence };
+    task.plannerFields.pressureLevel = "soft";
+    return "kept in this week";
+  }
+
+  if (revision.dateIntent === "tomorrow") {
+    const scheduledDate = validDateOr(revision.scheduledDate, addDays(state.currentDate, 1));
+    task.scheduledDate = scheduledDate;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "tomorrow", originalText: revision.summary, scheduledDate, confidence: revision.confidence };
+    task.plannerFields.pressureLevel = "scheduled";
+    return "scheduled for tomorrow";
+  }
+
+  if (revision.dateIntent === "today") {
+    const scheduledDate = validDateOr(revision.scheduledDate, state.currentDate);
+    task.scheduledDate = scheduledDate;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "today", originalText: revision.summary, scheduledDate, confidence: revision.confidence };
+    task.plannerFields.pressureLevel = "scheduled";
+    return "scheduled for today";
+  }
+
+  if (revision.dateIntent === "someday") {
+    task.scheduledDate = undefined;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "someday", originalText: revision.summary, confidence: revision.confidence };
+    task.plannerFields.pressureLevel = "someday";
+    return "moved to someday";
+  }
+
+  if (revision.dateIntent === "specific_date" && validDate(revision.scheduledDate)) {
+    task.scheduledDate = revision.scheduledDate;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "specific_date", originalText: revision.summary, scheduledDate: revision.scheduledDate, confidence: revision.confidence };
+    task.plannerFields.pressureLevel = "scheduled";
+    return `scheduled for ${revision.scheduledDate}`;
+  }
+
+  if (revision.dateIntent === "deadline" && validDate(revision.dueDate)) {
+    task.dueDate = revision.dueDate;
+    task.scheduledDate = undefined;
+    task.dateIntent = { kind: "deadline", originalText: revision.summary, dueDate: revision.dueDate, confidence: revision.confidence };
+    task.plannerFields.pressureLevel = "due";
+    return `deadline set to ${revision.dueDate}`;
+  }
+
+  return undefined;
+}
+
 function findProjectMention(state: AppState, message: string): AppState["projects"][number] | undefined {
   const lower = message.toLowerCase();
   return state.projects.find((project) => lower.includes(project.name.toLowerCase()));
+}
+
+function findDomainMention(state: AppState, message: string): AppState["domains"][number] | undefined {
+  const lower = message.toLowerCase();
+  return state.domains.find((domain) => lower.includes(domain.name.toLowerCase()));
+}
+
+function uniqueChanges(changes: string[]): string[] {
+  return changes.filter((change, index, all) => all.indexOf(change) === index);
+}
+
+function validDate(value: string | null | undefined): value is string {
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
+
+function validDateOr(value: string | null | undefined, fallback: string): string {
+  return validDate(value) ? value : fallback;
 }
 
 function taskActionPatch(task: Task): Record<string, unknown> {

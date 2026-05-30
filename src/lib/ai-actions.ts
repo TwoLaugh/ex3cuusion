@@ -3,7 +3,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { addDays, nextDayOfWeek, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
-import type { AiAction, AppState, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
+import type { AiAction, AppState, CaptureSession, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
 
 const aiActionSchema = z.object({
   summary: z.string(),
@@ -41,6 +41,35 @@ type ParsedAiResponse = z.infer<typeof aiActionSchema>;
 type ParsedAiAction = ParsedAiResponse["actions"][number];
 export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAiResponse & { model?: string }>;
 
+const captureRevisionSchema = z.object({
+  summary: z.string(),
+  shouldApply: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  title: z.string().nullable(),
+  projectName: z.string().nullable(),
+  domainName: z.string().nullable(),
+  dateIntent: z.enum(["unchanged", "today", "tomorrow", "this_week", "next_week", "someday", "specific_date", "deadline"]).nullable(),
+  scheduledDate: z.string().nullable(),
+  dueDate: z.string().nullable(),
+  effortMinutes: z.number().int().min(5).max(480).nullable(),
+  priority: z.number().int().min(1).max(9).nullable(),
+  importance: z.number().int().min(1).max(9).nullable(),
+  urgency: z.number().int().min(1).max(9).nullable(),
+  definitionOfDone: z.string().nullable(),
+  completionBehavior: z.enum(["exhaust_once", "repeatable", "keep_as_suggestion", "regenerate_after_completion"]).nullable(),
+  completionMode: z.enum(["simple_done", "outcome_done", "timebox", "repeatable_checkoff", "progress_accumulating", "suggestion_used"]).nullable(),
+  note: z.string().nullable(),
+  changes: z.array(z.string())
+});
+
+export type CaptureRevision = z.infer<typeof captureRevisionSchema> & { model?: string };
+export type AiRevisionInterpreter = (input: {
+  message: string;
+  state: AppState;
+  session: CaptureSession;
+  task: Task;
+}) => Promise<CaptureRevision>;
+
 const highRiskActions: ReadonlySet<AiAction["type"]> = new Set([
   "archive_task",
   "archive_project",
@@ -76,9 +105,19 @@ export async function interpretInboxInput(
   };
 }
 
+export async function interpretCaptureRevision(
+  message: string,
+  state: AppState,
+  session: CaptureSession,
+  task: Task,
+  interpreter: AiRevisionInterpreter = defaultRevisionInterpreter
+): Promise<CaptureRevision> {
+  return interpreter({ message, state, session, task });
+}
+
 async function defaultInterpreter(input: string, state: AppState): Promise<ParsedAiResponse & { model?: string }> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (process.env.EX3CUUSION_AI_MODE === "fixture" || (!apiKey && process.env.NODE_ENV !== "production")) {
+  if (process.env.EX3CUUSION_AI_MODE === "fixture" || process.env.NODE_ENV === "test" || (!apiKey && process.env.NODE_ENV !== "production")) {
     return fixtureInterpreter(input, state);
   }
 
@@ -137,6 +176,151 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
   }
 
   return { ...response.output_parsed, model };
+}
+
+async function defaultRevisionInterpreter({
+  message,
+  state,
+  session,
+  task
+}: {
+  message: string;
+  state: AppState;
+  session: CaptureSession;
+  task: Task;
+}): Promise<CaptureRevision> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (process.env.EX3CUUSION_AI_MODE === "fixture" || process.env.NODE_ENV === "test" || (!apiKey && process.env.NODE_ENV !== "production")) {
+    return fixtureRevisionInterpreter({ message, state, session, task });
+  }
+
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+  const openai = new OpenAI({
+    apiKey,
+    timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
+    maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 1)
+  });
+  const response = await openai.responses.parse({
+    model,
+    instructions:
+      "You revise one existing task inside a personal execution planner from a short follow-up message. " +
+      "Return only fields the user is clearly correcting or adding. Do not create a new task. " +
+      "Use projectName only when it exactly matches an existing project/person/container. " +
+      "For broad date windows like 'next week' set dateIntent to next_week and leave scheduledDate/dueDate null. " +
+      "For deadline wording like 'by Friday' use dueDate. For execution wording like 'tomorrow' or 'today' use scheduledDate/dateIntent. " +
+      "If the message is just extra context, put it in note and shouldApply true. If it is unrelated or unsafe, shouldApply false.",
+    input: [
+      {
+        role: "user",
+        content:
+          `Current date: ${state.currentDate}. Current time: ${state.currentTime}. ` +
+          `Projects: ${state.projects.map((project) => project.name).join(", ")}. ` +
+          `Domains: ${state.domains.map((domain) => domain.name).join(", ")}. ` +
+          `Session summary: ${session.summary}. ` +
+          `Existing task: ${JSON.stringify({
+            title: task.title,
+            projectId: task.projectId,
+            domainId: task.domainId,
+            scheduledDate: task.scheduledDate,
+            dueDate: task.dueDate,
+            dateIntent: task.dateIntent,
+            effortMinutes: task.effortMinutes,
+            completionBehavior: task.completionBehavior,
+            completionMode: task.completionMode,
+            definitionOfDone: task.definitionOfDone,
+            notes: task.notes
+          })}. ` +
+          `Follow-up message: ${message}`
+      }
+    ],
+    text: {
+      format: zodTextFormat(captureRevisionSchema, "capture_revision")
+    }
+  });
+
+  if (!response.output_parsed) {
+    throw new Error("OpenAI response did not match the expected capture revision schema");
+  }
+
+  return { ...response.output_parsed, model };
+}
+
+export async function fixtureRevisionInterpreter({
+  message,
+  state
+}: {
+  message: string;
+  state: AppState;
+  session: CaptureSession;
+  task: Task;
+}): Promise<CaptureRevision> {
+  const lower = message.toLowerCase();
+  const changes: string[] = [];
+  const revision: CaptureRevision = {
+    model: "fixture",
+    summary: "I updated the existing capture.",
+    shouldApply: true,
+    confidence: 0.72,
+    title: null,
+    projectName: null,
+    domainName: null,
+    dateIntent: null,
+    scheduledDate: null,
+    dueDate: null,
+    effortMinutes: null,
+    priority: null,
+    importance: null,
+    urgency: null,
+    definitionOfDone: null,
+    completionBehavior: null,
+    completionMode: null,
+    note: null,
+    changes
+  };
+
+  if (/\bnext week\b/.test(lower)) {
+    revision.dateIntent = "next_week";
+    changes.push("moved to next week");
+  } else if (/\bthis week\b/.test(lower)) {
+    revision.dateIntent = "this_week";
+    changes.push("kept in this week");
+  } else if (/\btomorrow\b/.test(lower)) {
+    revision.dateIntent = "tomorrow";
+    revision.scheduledDate = addDays(state.currentDate, 1);
+    changes.push("scheduled for tomorrow");
+  } else if (/\b(today|tonight)\b/.test(lower)) {
+    revision.dateIntent = "today";
+    revision.scheduledDate = state.currentDate;
+    changes.push("scheduled for today");
+  }
+
+  const project = state.projects.find((candidate) => lower.includes(candidate.name.toLowerCase()));
+  if (project) {
+    revision.projectName = project.name;
+    changes.push(`moved under ${project.name}`);
+  }
+
+  const minutes = lower.match(/\b(\d{1,3})\s*(?:m|min|mins|minutes)\b/);
+  if (minutes) {
+    revision.effortMinutes = Number(minutes[1]);
+    changes.push(`set estimate to ${minutes[1]}m`);
+  }
+
+  if (/not urgent|no rush|someday|eventually/.test(lower)) {
+    revision.dateIntent = "someday";
+    changes.push("moved to someday");
+  }
+
+  if (!changes.length) {
+    revision.note = message;
+    revision.summary = "I kept that as context on the existing task.";
+  }
+
+  return revision;
 }
 
 export async function fixtureInterpreter(input: string, state: AppState): Promise<ParsedAiResponse & { model: string }> {

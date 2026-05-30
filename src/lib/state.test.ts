@@ -224,7 +224,7 @@ describe("state integration", () => {
 
     expect(task).toBeDefined();
 
-    const afterFollowUp = addCaptureSessionMessage(session.id, "actually make that next week and put it under Diet App");
+    const afterFollowUp = await addCaptureSessionMessage(session.id, "actually make that next week and put it under Diet App");
     const updated = afterFollowUp.tasks.find((candidate) => candidate.id === task!.id);
 
     expect(afterFollowUp.tasks.filter((candidate) => candidate.title === "Water plants")).toHaveLength(1);
@@ -232,6 +232,41 @@ describe("state integration", () => {
     expect(updated?.dateIntent?.kind).toBe("week_window");
     expect(updated?.scheduledDate).toBeUndefined();
     expect(afterFollowUp.captureSessions[0].messages.some((message) => /Updated Water plants/.test(message.content))).toBe(true);
+  });
+
+  it("uses structured AI revision output for natural follow-up corrections", async () => {
+    const afterCapture = await submitInbox("Add a task called Water plants today for 10 minutes.", fixtureInterpreter);
+    const session = afterCapture.captureSessions[0];
+    const task = afterCapture.tasks.find((candidate) => candidate.title === "Water plants");
+
+    const afterFollowUp = await addCaptureSessionMessage(session.id, "this belongs with Emma and should be a relaxed someday idea", async () => ({
+      model: "revision-fixture",
+      summary: "Moved the task to Emma and made it a soft idea.",
+      shouldApply: true,
+      confidence: 0.9,
+      title: null,
+      projectName: "Emma",
+      domainName: null,
+      dateIntent: "someday",
+      scheduledDate: null,
+      dueDate: null,
+      effortMinutes: null,
+      priority: 2,
+      importance: 4,
+      urgency: 1,
+      definitionOfDone: null,
+      completionBehavior: "keep_as_suggestion",
+      completionMode: "suggestion_used",
+      note: "Relaxed someday idea.",
+      changes: ["moved under Emma", "moved to someday"]
+    }));
+    const updated = afterFollowUp.tasks.find((candidate) => candidate.id === task!.id);
+
+    expect(updated?.projectId).toBe("container_emma");
+    expect(updated?.dateIntent?.kind).toBe("someday");
+    expect(updated?.completionBehavior).toBe("keep_as_suggestion");
+    expect(updated?.completionMode).toBe("suggestion_used");
+    expect(updated?.notes).toContain("Relaxed someday idea.");
   });
 
   it("advances dates for full-week simulations", () => {

@@ -276,6 +276,21 @@ function weekDateIntentScenarios() {
         taskNestedField("Text Alex", ["dateIntent", "kind"], "today"),
         taskNestedField(/dentist/i, ["dateIntent", "kind"], "week_window")
       ]
+    },
+    {
+      phase: "week-date",
+      name: "follow-up message revises existing capture",
+      steps: [
+        setTime("2026-06-02", "08:30"),
+        inbox("Add a task called Water plants today for 10 minutes."),
+        followUpLatestSession("actually make that next week and put it under Diet App")
+      ],
+      expects: [
+        taskExists("Water plants"),
+        taskField("Water plants", "projectId", "project_diet_app"),
+        taskNestedField("Water plants", ["dateIntent", "kind"], "week_window"),
+        notInPlan("Water plants")
+      ]
     }
   ];
 }
@@ -290,6 +305,10 @@ function inbox(input) {
 
 function outcomeByTitle(title, outcome) {
   return { type: "outcome-by-title", title, outcome };
+}
+
+function followUpLatestSession(message) {
+  return { type: "follow-up-latest-session", message };
 }
 
 async function runScenario(scenario) {
@@ -311,6 +330,12 @@ async function runScenario(scenario) {
         } else {
           lastState = await post("/api/plan/outcome", { planItemId: item.id, ...step.outcome });
         }
+      }
+      if (step.type === "follow-up-latest-session") {
+        const debug = await getDebug();
+        const session = debug.captureSessions[0];
+        if (!session) throw new Error("No capture session exists for follow-up.");
+        lastState = await post(`/api/capture-sessions/${session.id}/message`, { message: step.message });
       }
     } catch (error) {
       throw new Error(`${scenario.phase}/${scenario.name} failed during ${describeStep(step)}: ${errorMessage(error)}`);
@@ -583,6 +608,7 @@ function describeStep(step) {
   if (step.type === "set-time") return `set-time ${step.date} ${step.time}`;
   if (step.type === "inbox") return `inbox "${step.input}"`;
   if (step.type === "outcome-by-title") return `outcome "${step.title}"`;
+  if (step.type === "follow-up-latest-session") return `follow-up "${step.message}"`;
   return step.type;
 }
 
