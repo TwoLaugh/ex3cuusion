@@ -8,7 +8,13 @@ const inboxSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const { input } = inboxSchema.parse(await request.json());
-  const state = await submitInbox(input);
-  return NextResponse.json({ state, plan: buildDayPlan(state) });
+  try {
+    const { input } = inboxSchema.parse(await request.json());
+    const state = await submitInbox(input);
+    return NextResponse.json({ state, plan: buildDayPlan(state) });
+  } catch (error) {
+    const status = error instanceof z.ZodError ? 400 : 502;
+    const message = error instanceof Error ? error.message : "AI inbox request failed.";
+    return NextResponse.json({ error: message }, { status });
+  }
 }

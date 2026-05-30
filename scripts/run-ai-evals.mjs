@@ -7,6 +7,7 @@ const live = process.argv.includes("--live");
 const jsonReport = process.argv.includes("--json");
 const isWindows = process.platform === "win32";
 const runner = isWindows ? "cmd.exe" : "npx";
+const requestTimeoutMs = Number(process.env.EX3CUUSION_EVAL_REQUEST_TIMEOUT_MS ?? (live ? 70_000 : 20_000));
 
 loadLocalEnv();
 
@@ -291,20 +292,24 @@ async function runScenario(scenario) {
   await post("/api/state", {});
   let lastState;
   for (const step of scenario.steps) {
-    if (step.type === "set-time") {
-      lastState = await post("/api/time", { date: step.date, time: step.time });
-    }
-    if (step.type === "inbox") {
-      lastState = await post("/api/inbox", { input: step.input });
-    }
-    if (step.type === "outcome-by-title") {
-      const debug = await getDebug();
-      const item = debug.planItems.find((candidate) => candidate.title === step.title);
-      if (!item) {
-        lastState = await getState();
-      } else {
-        lastState = await post("/api/plan/outcome", { planItemId: item.id, ...step.outcome });
+    try {
+      if (step.type === "set-time") {
+        lastState = await post("/api/time", { date: step.date, time: step.time });
       }
+      if (step.type === "inbox") {
+        lastState = await post("/api/inbox", { input: step.input });
+      }
+      if (step.type === "outcome-by-title") {
+        const debug = await getDebug();
+        const item = debug.planItems.find((candidate) => candidate.title === step.title);
+        if (!item) {
+          lastState = await getState();
+        } else {
+          lastState = await post("/api/plan/outcome", { planItemId: item.id, ...step.outcome });
+        }
+      }
+    } catch (error) {
+      throw new Error(`${scenario.phase}/${scenario.name} failed during ${describeStep(step)}: ${errorMessage(error)}`);
     }
   }
   const debug = await getDebug();
@@ -502,7 +507,7 @@ async function waitForServer() {
   const started = Date.now();
   while (Date.now() - started < 45_000) {
     try {
-      const response = await fetch(baseUrl);
+      const response = await fetchWithTimeout("/", {}, 5_000);
       if (response.ok) return;
     } catch {
       // server still starting
@@ -513,7 +518,7 @@ async function waitForServer() {
 }
 
 async function post(path, body) {
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await fetchWithTimeout(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -525,15 +530,44 @@ async function post(path, body) {
 }
 
 async function getState() {
-  const response = await fetch(`${baseUrl}/api/state`);
+  const response = await fetchWithTimeout("/api/state");
   if (!response.ok) throw new Error(`state failed with ${response.status}`);
   return response.json();
 }
 
 async function getDebug() {
-  const response = await fetch(`${baseUrl}/api/debug`);
+  const response = await fetchWithTimeout("/api/debug");
   if (!response.ok) throw new Error(`debug failed with ${response.status}`);
   return response.json();
+}
+
+async function fetchWithTimeout(path, options = {}, timeoutMs = requestTimeoutMs) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(`${baseUrl}${path}`, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) throw new Error(`${path} timed out after ${timeoutMs}ms`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function describeStep(step) {
+  if (step.type === "set-time") return `set-time ${step.date} ${step.time}`;
+  if (step.type === "inbox") return `inbox "${step.input}"`;
+  if (step.type === "outcome-by-title") return `outcome "${step.title}"`;
+  return step.type;
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function delay(ms) {

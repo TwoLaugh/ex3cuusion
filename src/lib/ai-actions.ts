@@ -87,7 +87,11 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
   }
 
   const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
-  const openai = new OpenAI({ apiKey });
+  const openai = new OpenAI({
+    apiKey,
+    timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
+    maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 1)
+  });
   const response = await openai.responses.parse({
     model,
     instructions:
