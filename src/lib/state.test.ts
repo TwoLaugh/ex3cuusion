@@ -181,6 +181,7 @@ describe("state integration", () => {
     expect(session.status).toBe("waiting_for_user");
     expect(question.kind).toBe("definition_of_done");
     expect(question.materiality).toBe("high");
+    expect(session.draftActionIds).toContain(afterCapture.inbox[0].actions[0].id);
     expect(session.messages.some((message) => message.role === "assistant" && message.content === question.question)).toBe(true);
     expect(afterCapture.inbox[0].actions[0].type).toBe("ask_clarification");
 
@@ -190,6 +191,13 @@ describe("state integration", () => {
     expect(created?.definitionOfDone).toBe("Kitchen and bathroom are clean enough.");
     expect(created?.completionMode).toBe("progress_accumulating");
     expect(afterAnswer.captureSessions[0].status).toBe("applied");
+    expect(afterAnswer.captureSessions[0].answeredFields).toContain("definition_of_done");
+    expect(afterAnswer.captureSessions[0].appliedEntityIds).toContain(created?.id);
+    expect(afterAnswer.captureSessions[0].revisionEvents[0]).toMatchObject({
+      source: "clarification_answer",
+      taskId: created?.id,
+      changes: ["answered definition_of_done"]
+    });
     expect(afterAnswer.inbox[0].actions.some((action) => action.type === "create_task" && action.status === "applied")).toBe(true);
   });
 
@@ -225,12 +233,26 @@ describe("state integration", () => {
     expect(task).toBeDefined();
 
     const afterFollowUp = await addCaptureSessionMessage(session.id, "actually make that next week and put it under Diet App");
-    const updated = afterFollowUp.tasks.find((candidate) => candidate.id === task!.id);
+    const afterSecondFollowUp = await addCaptureSessionMessage(session.id, "actually tomorrow is better");
+    const updated = afterSecondFollowUp.tasks.find((candidate) => candidate.id === task!.id);
 
-    expect(afterFollowUp.tasks.filter((candidate) => candidate.title === "Water plants")).toHaveLength(1);
+    expect(afterSecondFollowUp.tasks.filter((candidate) => candidate.title === "Water plants")).toHaveLength(1);
     expect(updated?.projectId).toBe("project_diet_app");
-    expect(updated?.dateIntent?.kind).toBe("week_window");
-    expect(updated?.scheduledDate).toBeUndefined();
+    expect(updated?.dateIntent?.kind).toBe("tomorrow");
+    expect(updated?.scheduledDate).toBe("2026-06-02");
+    expect(afterSecondFollowUp.captureSessions[0].appliedEntityIds).toEqual([task!.id]);
+    expect(afterSecondFollowUp.captureSessions[0].revisionEvents).toHaveLength(2);
+    expect(afterSecondFollowUp.captureSessions[0].revisionEvents[0]).toMatchObject({
+      source: "follow_up",
+      taskId: task!.id,
+      before: { scheduledDate: "2026-06-01" },
+      after: { projectId: "project_diet_app", dateIntent: { kind: "week_window" } }
+    });
+    expect(afterSecondFollowUp.captureSessions[0].revisionEvents[1]).toMatchObject({
+      source: "follow_up",
+      before: { dateIntent: { kind: "week_window" } },
+      after: { scheduledDate: "2026-06-02", dateIntent: { kind: "tomorrow" } }
+    });
     expect(afterFollowUp.captureSessions[0].messages.some((message) => /Updated Water plants/.test(message.content))).toBe(true);
   });
 
@@ -267,6 +289,11 @@ describe("state integration", () => {
     expect(updated?.completionBehavior).toBe("keep_as_suggestion");
     expect(updated?.completionMode).toBe("suggestion_used");
     expect(updated?.notes).toContain("Relaxed someday idea.");
+    expect(afterFollowUp.captureSessions[0].revisionEvents[0]).toMatchObject({
+      model: "revision-fixture",
+      confidence: 0.9,
+      changes: ["moved under Emma", "moved to someday", "updated priority", "updated completion behavior", "added note"]
+    });
   });
 
   it("advances dates for full-week simulations", () => {

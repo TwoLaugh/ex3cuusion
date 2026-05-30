@@ -66,5 +66,15 @@ export function setRepositoryForTests(repository: AppStateRepository) {
 function normalizeState(state: AppState): AppState {
   state.executionEvents ??= [];
   state.captureSessions ??= [];
+  for (const session of state.captureSessions) {
+    session.messages ??= [];
+    session.questions ??= [];
+    session.actionIds ??= [];
+    session.draftActionIds ??= [];
+    session.appliedEntityIds ??= [];
+    session.answeredFields ??= [];
+    session.revisionEvents ??= [];
+    session.unresolvedFields ??= [];
+  }
   return state;
 }

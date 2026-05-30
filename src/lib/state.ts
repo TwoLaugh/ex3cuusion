@@ -229,6 +229,7 @@ export async function submitInbox(input: string, interpreter?: AiInterpreter): P
     action.captureSessionId = session.id;
     action.sourceMessageId = entry.id;
     if (action.type === "ask_clarification") {
+      pushUnique(session.draftActionIds, action.id);
       const question = buildClarificationQuestion(state, action);
       action.pendingQuestionId = question.id;
       session.questions.push(question);
@@ -245,6 +246,7 @@ export async function submitInbox(input: string, interpreter?: AiInterpreter): P
 
   for (const action of entry.actions) {
     applyAutoAction(state, action);
+    recordAppliedEntity(session, action);
   }
   session.status = session.questions.some((question) => question.status === "pending")
     ? "waiting_for_user"
@@ -274,6 +276,7 @@ export function answerCaptureQuestion(sessionId: string, questionId: string, ans
   action.skippedReason = `Answered: ${answer}`;
   appendActionToInboxEntry(state, action.sourceMessageId, draftAction);
   session.actionIds.push(draftAction.id);
+  pushUnique(session.draftActionIds, draftAction.id);
   session.messages.push({
     id: nextId("message"),
     role: "user",
@@ -281,7 +284,18 @@ export function answerCaptureQuestion(sessionId: string, questionId: string, ans
     createdAt: timestampForState(state)
   });
   session.unresolvedFields = session.unresolvedFields.filter((field) => field !== question.kind);
+  pushUnique(session.answeredFields, question.kind);
   applyAutoAction(state, draftAction);
+  recordAppliedEntity(session, draftAction);
+  recordRevisionEvent(state, session, {
+    source: "clarification_answer",
+    actionId: draftAction.id,
+    taskId: draftAction.appliedEntityId,
+    model: draftAction.model,
+    summary: `Answered ${question.kind}.`,
+    changes: [`answered ${question.kind}`],
+    after: taskSnapshotById(state, draftAction.appliedEntityId)
+  });
   session.status = session.questions.some((candidate) => candidate.status === "pending") ? "waiting_for_user" : "applied";
   session.updatedAt = timestampForState(state);
   return getState();
@@ -312,8 +326,20 @@ export async function addCaptureSessionMessage(sessionId: string, message: strin
       action.skippedReason = `Answered: ${trimmed}`;
       appendActionToInboxEntry(state, action.sourceMessageId, draftAction);
       session.actionIds.push(draftAction.id);
+      pushUnique(session.draftActionIds, draftAction.id);
       session.unresolvedFields = session.unresolvedFields.filter((field) => field !== pendingQuestion.kind);
+      pushUnique(session.answeredFields, pendingQuestion.kind);
       applyAutoAction(state, draftAction);
+      recordAppliedEntity(session, draftAction);
+      recordRevisionEvent(state, session, {
+        source: "clarification_answer",
+        actionId: draftAction.id,
+        taskId: draftAction.appliedEntityId,
+        model: draftAction.model,
+        summary: `Answered ${pendingQuestion.kind}.`,
+        changes: [`answered ${pendingQuestion.kind}`],
+        after: taskSnapshotById(state, draftAction.appliedEntityId)
+      });
       session.status = session.questions.some((candidate) => candidate.status === "pending") ? "waiting_for_user" : "applied";
       addAssistantSessionMessage(state, session, `Applied that answer to ${String(draftAction.payload.title ?? "the draft")}.`);
       session.updatedAt = timestampForState(state);
@@ -330,15 +356,30 @@ export async function addCaptureSessionMessage(sessionId: string, message: strin
 
   let changes: string[];
   let summary: string | undefined;
+  let revisionMeta: Partial<Pick<CaptureRevision, "model" | "confidence">> = {};
+  const before = taskSnapshot(target.task);
   try {
     const revision = await interpretCaptureRevision(trimmed, state, session, target.task, interpreter);
     changes = applyRevisionToTask(state, target.task, revision);
     summary = revision.summary;
+    revisionMeta = { model: revision.model, confidence: revision.confidence };
   } catch (error) {
     changes = applyFollowUpToTask(state, target.task, trimmed);
     summary = error instanceof Error ? `I used the local fallback because the AI revision failed: ${error.message}` : undefined;
+    revisionMeta = { model: "fallback", confidence: 0.4 };
   }
   if (target.action) target.action.payload = { ...target.action.payload, ...taskActionPatch(target.task) };
+  recordRevisionEvent(state, session, {
+    source: revisionMeta.model === "fallback" ? "fallback" : "follow_up",
+    actionId: target.action?.id,
+    taskId: target.task.id,
+    model: revisionMeta.model,
+    confidence: revisionMeta.confidence,
+    summary: summary || "Follow-up applied.",
+    changes,
+    before,
+    after: taskSnapshot(target.task)
+  });
   addAssistantSessionMessage(
     state,
     session,
@@ -499,6 +540,10 @@ function buildCaptureSession(state: AppState, input: string, entry: AppState["in
     ],
     questions: [],
     actionIds: [],
+    draftActionIds: [],
+    appliedEntityIds: [],
+    answeredFields: [],
+    revisionEvents: [],
     unresolvedFields: [],
     summary: entry.summary
   };
@@ -616,6 +661,56 @@ function addAssistantSessionMessage(state: AppState, session: CaptureSession, co
     content,
     createdAt: timestampForState(state)
   });
+}
+
+function recordAppliedEntity(session: CaptureSession, action: AiAction) {
+  if (action.appliedEntityId) pushUnique(session.appliedEntityIds, action.appliedEntityId);
+}
+
+function recordRevisionEvent(
+  state: AppState,
+  session: CaptureSession,
+  event: Omit<NonNullable<CaptureSession["revisionEvents"]>[number], "id" | "createdAt">
+) {
+  session.revisionEvents.push({
+    id: nextId("revision"),
+    createdAt: timestampForState(state),
+    ...event
+  });
+}
+
+function taskSnapshotById(state: AppState, taskId: string | undefined): Partial<Task> | undefined {
+  if (!taskId) return undefined;
+  const task = state.tasks.find((candidate) => candidate.id === taskId);
+  return task ? taskSnapshot(task) : undefined;
+}
+
+function taskSnapshot(task: Task): Partial<Task> {
+  return {
+    id: task.id,
+    title: task.title,
+    type: task.type,
+    domainId: task.domainId,
+    projectId: task.projectId,
+    status: task.status,
+    completionBehavior: task.completionBehavior,
+    completionMode: task.completionMode,
+    definitionOfDone: task.definitionOfDone,
+    plannerFields: structuredClone(task.plannerFields),
+    priority: task.priority,
+    importance: task.importance,
+    urgency: task.urgency,
+    dueDate: task.dueDate,
+    scheduledDate: task.scheduledDate,
+    scheduledTime: task.scheduledTime,
+    dateIntent: task.dateIntent ? structuredClone(task.dateIntent) : undefined,
+    effortMinutes: task.effortMinutes,
+    notes: task.notes
+  };
+}
+
+function pushUnique(values: string[], value: string) {
+  if (!values.includes(value)) values.push(value);
 }
 
 function looksLikeRevision(message: string): boolean {
@@ -741,7 +836,7 @@ function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevis
 
   if (revision.note?.trim()) {
     task.notes = [task.notes, `Follow-up: ${revision.note.trim()}`].filter(Boolean).join("\n");
-    if (!changes.length) changes.push("added note");
+    changes.push("added note");
   }
 
   return uniqueChanges(changes.length ? changes : revision.changes);

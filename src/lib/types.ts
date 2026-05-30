@@ -366,6 +366,20 @@ export interface ClarificationQuestion {
   answeredAt?: string;
 }
 
+export interface CaptureRevisionEvent {
+  id: string;
+  createdAt: string;
+  source: "clarification_answer" | "follow_up" | "fallback";
+  taskId?: string;
+  actionId?: string;
+  model?: string;
+  confidence?: number;
+  summary: string;
+  changes: string[];
+  before?: Partial<Task>;
+  after?: Partial<Task>;
+}
+
 export interface CaptureSession {
   id: string;
   status: CaptureSessionStatus;
@@ -375,6 +389,10 @@ export interface CaptureSession {
   messages: CaptureMessage[];
   questions: ClarificationQuestion[];
   actionIds: string[];
+  draftActionIds: string[];
+  appliedEntityIds: string[];
+  answeredFields: string[];
+  revisionEvents: CaptureRevisionEvent[];
   unresolvedFields: string[];
   summary: string;
 }

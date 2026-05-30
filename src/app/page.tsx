@@ -606,9 +606,15 @@ function SecondaryPanel({
               <div>
                 <h2>{session.summary}</h2>
                 <p>{session.questions[0]?.question ?? session.messages[0]?.content ?? "No open questions."}</p>
+                {session.revisionEvents.length > 0 && (
+                  <small>
+                    Last revision: {session.revisionEvents[session.revisionEvents.length - 1].changes.join(", ") || session.revisionEvents[session.revisionEvents.length - 1].summary}
+                  </small>
+                )}
               </div>
               <span>
-                {session.status} - {session.actionIds.length} action{session.actionIds.length === 1 ? "" : "s"}
+                {session.status} - {session.actionIds.length} action{session.actionIds.length === 1 ? "" : "s"} - {session.appliedEntityIds.length} applied -{" "}
+                {session.revisionEvents.length} revision{session.revisionEvents.length === 1 ? "" : "s"}
               </span>
             </article>
           ))}

@@ -1,6 +1,6 @@
 # T050: Clarification Session Memory
 
-Status: planned.
+Status: implemented in V1 foundation.
 
 ## Goal
 
