@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Check, ChevronLeft, ChevronRight, Clock3, Menu, Send, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronLeft, ChevronRight, Clock3, Layers3, Menu, Send, Undo2, X } from "lucide-react";
 import { Dispatch, SetStateAction, useEffect, useMemo, useState } from "react";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 
@@ -181,14 +181,16 @@ export default function Home() {
           </div>
           <div className="calendarGrid" style={{ height: timeline?.height }}>
             {timeline?.hours.map((hour) => <div className="hourLine" key={hour.time} style={{ top: hour.top }} />)}
-            {timeline?.items.map(({ item, top, height }) => (
+            {timeline?.items.map(({ item, top, height, left, width, laneCount }) => (
               <article
                 className={`timelineBlock ${item.status} ${item.estimatedMinutes < 30 ? "compactBlock" : ""} ${
                   item.estimatedMinutes <= 15 ? "microBlock" : ""
+                } ${laneCount > 1 ? "overlapBlock" : ""} ${
+                  item.schedulingMode && item.schedulingMode !== "exclusive" ? `mode-${item.schedulingMode}` : ""
                 }`}
                 key={item.id}
                 data-testid={`plan-item-${item.title}`}
-                style={{ top, height }}
+                style={{ top, height, left: `${left}%`, width: `${width}%` }}
               >
                 <div className="blockContent">
                   <div>
@@ -197,7 +199,7 @@ export default function Home() {
                     </div>
                     <h2>{item.title}</h2>
                     <p>{item.reason}</p>
-                    <span>{item.estimatedMinutes}m - {labelForSection(item.section)}</span>
+                    <PlanItemMeta item={item} />
                     {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
                   </div>
                   <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} />
@@ -211,7 +213,7 @@ export default function Home() {
             <div>
               <h2>{item.title}</h2>
               <p>{item.reason}</p>
-              <span>{item.estimatedMinutes}m - {labelForSection(item.section)}</span>
+              <PlanItemMeta item={item} />
               {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
             </div>
             <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} />
@@ -415,9 +417,7 @@ function SecondaryPanel({
                 <h2>{task.title}</h2>
                 <p>{task.definitionOfDone || task.notes || task.plannerFields.intentType}</p>
               </div>
-              <span>
-                {task.status} - {task.effortMinutes}m - {task.completionMode ?? task.completionBehavior}
-              </span>
+              <span>{taskSummary(task)}</span>
             </article>
           ))}
         </div>
@@ -446,7 +446,7 @@ function SecondaryPanel({
           </article>
           <article>
             <h2>Time Model</h2>
-            <p>Week/date intent, background phases, and concurrent work are tracked as upcoming model work.</p>
+            <p>{schedulingSummary(state)}</p>
             <span>{state.currentDate} - {state.currentTime}</span>
           </article>
         </div>
@@ -468,6 +468,21 @@ function SecondaryPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function PlanItemMeta({ item }: { item: PlanItem }) {
+  return (
+    <div className="metaRow">
+      <span>{item.estimatedMinutes}m - {labelForSection(item.section)}</span>
+      {item.schedulingMode && item.schedulingMode !== "exclusive" && (
+        <span className="modeBadge" title={schedulingLabel(item)}>
+          <Layers3 size={13} />
+          {item.schedulingMode}
+        </span>
+      )}
+      {item.attentionLoad && item.attentionLoad !== "full" && <span className="loadPill">{item.attentionLoad}</span>}
+    </div>
   );
 }
 
@@ -507,6 +522,7 @@ const pixelsPerMinute = 2;
 function buildTimeline(items: PlanItem[], currentTime?: string) {
   const scheduled = items.filter((item) => isClockTime(item.startTime) && isClockTime(item.endTime));
   const unscheduled = items.filter((item) => !isClockTime(item.startTime) || !isClockTime(item.endTime));
+  const scheduledWithLanes = assignOverlapLanes(scheduled, currentTime);
   const fallbackStart = currentTime ? toMinutes(currentTime) : 8 * 60;
   const fallbackEnd = currentTime ? toMinutes(currentTime) : 17 * 60;
   const startMinutes = Math.max(0, Math.min(...scheduled.map((item) => absoluteStartMinutes(item, currentTime)), fallbackStart) - 30);
@@ -523,16 +539,48 @@ function buildTimeline(items: PlanItem[], currentTime?: string) {
     height,
     hours,
     unscheduled,
-    items: scheduled.map((item) => {
+    items: scheduledWithLanes.map(({ item, lane, laneCount }) => {
       const itemStart = absoluteStartMinutes(item, currentTime);
       const itemEnd = absoluteEndMinutes(item, currentTime);
+      const gutter = laneCount > 1 ? 1.5 : 0;
+      const width = laneCount > 1 ? 100 / laneCount - gutter : 100;
       return {
         item,
         top: (itemStart - startMinutes) * pixelsPerMinute,
-        height: Math.max(22, (itemEnd - itemStart) * pixelsPerMinute - 6)
+        height: Math.max(22, (itemEnd - itemStart) * pixelsPerMinute - 6),
+        left: laneCount > 1 ? lane * (100 / laneCount) : 0,
+        width,
+        laneCount
       };
     })
   };
+}
+
+function assignOverlapLanes(items: PlanItem[], currentTime?: string) {
+  const sorted = [...items].sort((a, b) => absoluteStartMinutes(a, currentTime) - absoluteStartMinutes(b, currentTime));
+  const laneEnds: number[] = [];
+  const assigned = sorted.map((item) => {
+    const start = absoluteStartMinutes(item, currentTime);
+    const end = absoluteEndMinutes(item, currentTime);
+    let lane = laneEnds.findIndex((candidateEnd) => candidateEnd <= start);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(end);
+    } else {
+      laneEnds[lane] = end;
+    }
+    return { item, lane, start, end, laneCount: 1 };
+  });
+
+  return assigned.map((entry) => {
+    const laneCount = Math.max(
+      1,
+      ...assigned
+        .filter((candidate) => candidate.start < entry.end && candidate.end > entry.start)
+        .map((candidate) => candidate.lane + 1)
+    );
+    return { ...entry, laneCount };
+  });
 }
 
 function isClockTime(value: string): boolean {
@@ -615,6 +663,26 @@ function labelForSection(section: PlanItem["section"]): string {
     soft_invitations: "soft invitation",
     later: "later"
   }[section];
+}
+
+function schedulingLabel(item: PlanItem): string {
+  const blocking = item.blockingMinutes ?? item.estimatedMinutes;
+  const clock = item.clockMinutes ?? item.estimatedMinutes;
+  return `${item.schedulingMode} - ${item.attentionLoad ?? "full"} attention - ${blocking}/${clock}m blocking`;
+}
+
+function taskSummary(task: AppState["tasks"][number]): string {
+  const scheduling = task.scheduling?.mode && task.scheduling.mode !== "exclusive" ? ` - ${task.scheduling.mode}/${task.scheduling.attentionLoad}` : "";
+  return `${task.status} - ${task.effortMinutes}m - ${task.completionMode ?? task.completionBehavior}${scheduling}`;
+}
+
+function schedulingSummary(state: AppState): string {
+  const counts = state.tasks.reduce<Record<string, number>>((acc, task) => {
+    const mode = task.scheduling?.mode ?? "exclusive";
+    acc[mode] = (acc[mode] ?? 0) + 1;
+    return acc;
+  }, {});
+  return `${counts.background ?? 0} background, ${counts.concurrent ?? 0} concurrent, ${counts.phased ?? 0} phased tasks tracked. Passive work can overlap; full-focus work still blocks the day.`;
 }
 
 function statusLabel(status: PlanItem["status"]): string {

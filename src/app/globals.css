@@ -229,10 +229,9 @@ h1 {
 }
 
 .timelineBlock {
-  left: 16px;
   min-height: 22px;
+  padding-left: 16px;
   position: absolute;
-  right: 0;
 }
 
 .blockContent,
@@ -304,7 +303,7 @@ h1 {
 }
 
 .compactBlock .blockContent p,
-.compactBlock .blockContent span,
+.compactBlock .metaRow,
 .compactBlock .statusPill {
   display: none;
 }
@@ -360,6 +359,54 @@ h1 {
   min-height: 22px;
 }
 
+.overlapBlock .blockContent {
+  padding: 8px 42px 8px 16px;
+}
+
+.overlapBlock .blockContent::after,
+.overlapBlock .blockContent p {
+  display: none;
+}
+
+.overlapBlock .blockContent h2 {
+  font-size: 0.9rem;
+  line-height: 1.08;
+  margin-bottom: 5px;
+}
+
+.overlapBlock .metaRow {
+  gap: 4px;
+}
+
+.overlapBlock .metaRow span {
+  font-size: 0.68rem;
+  padding: 2px 5px;
+}
+
+.overlapBlock .itemActions {
+  flex-direction: column;
+  gap: 4px;
+  right: 6px;
+  top: 6px;
+}
+
+.overlapBlock .itemActions button {
+  justify-content: center;
+  min-height: 25px;
+  padding: 0;
+  width: 28px;
+}
+
+.overlapBlock .deferButton {
+  font-size: 0;
+}
+
+.overlapBlock .deferButton::after {
+  content: "!";
+  font-size: 0.86rem;
+  line-height: 1;
+}
+
 .timelineBlock.completed .blockContent {
   border-color: rgba(107, 214, 184, 0.46);
   opacity: 0.68;
@@ -394,6 +441,21 @@ h1 {
   opacity: 0.76;
 }
 
+.timelineBlock.mode-background .blockContent,
+.timelineBlock.mode-concurrent .blockContent,
+.timelineBlock.mode-phased .blockContent {
+  border-color: rgba(139, 184, 255, 0.38);
+}
+
+.timelineBlock.mode-background .blockContent::before,
+.timelineBlock.mode-phased .blockContent::before {
+  background: var(--blue);
+}
+
+.timelineBlock.mode-concurrent .blockContent::before {
+  background: var(--warning);
+}
+
 .blockTime {
   color: var(--blue);
   font-size: 0.76rem;
@@ -423,6 +485,28 @@ h1 {
   font-size: 0.78rem;
   font-weight: 700;
   padding: 3px 8px;
+}
+
+.metaRow {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.metaRow .modeBadge {
+  align-items: center;
+  background: rgba(107, 214, 184, 0.1);
+  border-color: rgba(107, 214, 184, 0.22);
+  color: var(--accent-strong);
+  display: inline-flex;
+  gap: 4px;
+}
+
+.metaRow .loadPill {
+  background: rgba(240, 195, 106, 0.11);
+  border-color: rgba(240, 195, 106, 0.24);
+  color: #f7d998;
 }
 
 .unscheduledItem {

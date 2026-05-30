@@ -17,6 +17,10 @@ export type CompletionMode =
 export type IntentType = "obligation" | "maintenance" | "progress" | "relationship" | "idea" | "admin" | "health" | "recovery";
 export type PressureLevel = "fixed" | "due" | "scheduled" | "soft" | "someday";
 export type DateIntentKind = "none" | "today" | "tomorrow" | "specific_date" | "deadline" | "week_window" | "someday" | "recurring";
+export type SchedulingMode = "exclusive" | "background" | "concurrent" | "phased";
+export type AttentionLoad = "full" | "partial" | "passive";
+export type OverlapKind = "phone" | "audio" | "passive_waiting" | "ai_running" | "travel" | "cooking" | "household" | "computer";
+export type TaskPhaseKind = "active" | "passive" | "return";
 export type ExecutionEventType =
   | "completed"
   | "worked_on"
@@ -128,6 +132,25 @@ export interface DateIntent {
   confidence: number;
 }
 
+export interface TaskPhase {
+  id: string;
+  title: string;
+  kind: TaskPhaseKind;
+  effortMinutes: number;
+  offsetMinutes?: number;
+  attentionLoad: AttentionLoad;
+  canOverlap?: boolean;
+  overlapKinds?: OverlapKind[];
+}
+
+export interface SchedulingMetadata {
+  mode: SchedulingMode;
+  attentionLoad: AttentionLoad;
+  canOverlap: boolean;
+  overlapKinds?: OverlapKind[];
+  phases?: TaskPhase[];
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -153,6 +176,7 @@ export interface Task {
   scheduledDate?: string;
   scheduledTime?: string;
   dateIntent?: DateIntent;
+  scheduling?: SchedulingMetadata;
   effortMinutes: number;
   minMinutes?: number;
   maxMinutes?: number;
@@ -195,6 +219,15 @@ export interface PlanItem {
   routineId?: string;
   selectedTaskIds?: string[];
   estimatedMinutes: number;
+  clockMinutes?: number;
+  blockingMinutes?: number;
+  schedulingMode?: SchedulingMode;
+  attentionLoad?: AttentionLoad;
+  canOverlap?: boolean;
+  overlapKinds?: OverlapKind[];
+  phaseKind?: TaskPhaseKind;
+  phaseIndex?: number;
+  parentTaskId?: string;
   reason: string;
 }
 

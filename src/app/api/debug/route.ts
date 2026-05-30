@@ -45,6 +45,7 @@ export async function GET() {
       scheduledDate: task.scheduledDate,
       scheduledTime: task.scheduledTime,
       dateIntent: task.dateIntent,
+      scheduling: task.scheduling,
       effortMinutes: task.effortMinutes
     })),
     planItems: buildDayPlan(state).items.map((item) => ({
@@ -55,6 +56,14 @@ export async function GET() {
       endTime: item.endTime,
       type: item.type,
       taskId: item.taskId,
+      schedulingMode: item.schedulingMode,
+      attentionLoad: item.attentionLoad,
+      canOverlap: item.canOverlap,
+      overlapKinds: item.overlapKinds,
+      phaseKind: item.phaseKind,
+      parentTaskId: item.parentTaskId,
+      blockingMinutes: item.blockingMinutes,
+      clockMinutes: item.clockMinutes,
       selectedTaskIds: item.selectedTaskIds
     })),
     executionEvents: state.executionEvents,

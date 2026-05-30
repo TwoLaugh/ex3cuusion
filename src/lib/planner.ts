@@ -165,7 +165,7 @@ export function buildDayPlan(state: AppState): DayPlan {
         : "quick_tasks";
     const fixedStartTime = task.scheduledDate === date ? task.scheduledTime : undefined;
     const hardAnchor = fixedStartTime ? task.strictness === "strict" || /sleep|bed/i.test(task.title) : false;
-    items.push({
+    const baseCandidate: PlanCandidate = {
       id: `plan_${date}_${task.id}`,
       type: isRepeatingTask ? "routine" : section === "soft_invitations" ? "soft_invitation" : "atomic_task",
       title: task.status === "blocked" && task.blocked?.unblockAction ? `Unblock: ${task.title}` : task.status === "waiting" ? `Follow up: ${task.title}` : task.title,
@@ -174,6 +174,12 @@ export function buildDayPlan(state: AppState): DayPlan {
       domainId: task.domainId,
       taskId: task.id,
       estimatedMinutes: task.effortMinutes,
+      clockMinutes: task.effortMinutes,
+      blockingMinutes: blockingMinutesForTask(task),
+      schedulingMode: task.scheduling?.mode ?? "exclusive",
+      attentionLoad: task.scheduling?.attentionLoad ?? "full",
+      canOverlap: task.scheduling?.canOverlap ?? false,
+      overlapKinds: task.scheduling?.overlapKinds,
       reason: fixedStartTime
         ? hardAnchor
           ? `Fixed anchor at ${fixedStartTime}. Flexible work must fit around it.`
@@ -186,12 +192,13 @@ export function buildDayPlan(state: AppState): DayPlan {
           ? task.completionBehavior === "keep_as_suggestion"
             ? "Reusable suggestion if there is spare capacity."
             : "Useful if there is spare capacity."
-          : isRepeatingTask
+        : isRepeatingTask
             ? "Repeating task due today."
-          : "Small task with time pressure.",
+          : schedulingReason(task) ?? "Small task with time pressure.",
       fixedStartTime,
       hardAnchor
-    });
+    };
+    items.push(...expandPhasedTaskCandidate(baseCandidate, task));
   }
 
   const completed = new Set(state.completions.filter((event) => event.date === date).map((event) => event.planItemId));
@@ -209,7 +216,7 @@ export function buildDayPlan(state: AppState): DayPlan {
   });
   const estimatedTotalMinutes = resolvedItems
     .filter((item) => item.status === "planned")
-    .reduce((sum, item) => sum + item.estimatedMinutes, 0);
+    .reduce((sum, item) => sum + (item.blockingMinutes ?? item.estimatedMinutes), 0);
 
   return {
     date,
@@ -299,16 +306,17 @@ function scheduleItems(items: PlanCandidate[], currentTime: string): PlanItem[] 
   const afternoonRoutines = items.filter((item) => item.section === "routines" && item.preferredWindow === "afternoon");
   const eveningRoutines = items.filter((item) => item.section === "routines" && item.preferredWindow === "evening");
   const unspecificRoutines = items.filter((item) => item.section === "routines" && !item.preferredWindow);
-  const flexible = [
+  const flexible = uniqueCandidates([
     ...morningRoutines,
     ...unspecificRoutines,
     ...items.filter((item) => item.section === "main_blocks"),
     ...afternoonRoutines,
     ...items.filter((item) => item.section === "quick_tasks"),
+    ...items.filter((item) => item.attentionLoad === "passive" && item.canOverlap),
     ...eveningRoutines,
-    ...items.filter((item) => item.section === "soft_invitations"),
+    ...items.filter((item) => item.section === "soft_invitations" && !(item.attentionLoad === "passive" && item.canOverlap)),
     ...items.filter((item) => item.section === "later")
-  ].filter((item) => !item.fixedStartTime);
+  ]).filter((item) => !item.fixedStartTime);
 
   const scheduled: PlanItem[] = [];
   const unscheduled: PlanItem[] = [];
@@ -329,7 +337,7 @@ function scheduleItems(items: PlanCandidate[], currentTime: string): PlanItem[] 
         const [item] = remainingFlexible.splice(fitIndex, 1);
         const scheduledItem = scheduleFlexibleItem(item, cursor);
         scheduled.push(scheduledItem);
-        cursor = nextCursor(scheduledItem);
+        cursor = maxTime(cursor, nextCursor(scheduledItem));
       }
     }
 
@@ -345,9 +353,9 @@ function scheduleItems(items: PlanCandidate[], currentTime: string): PlanItem[] 
   if (!hasSleepAnchor) {
     while (remainingFlexible.length > 0) {
       const [item] = remainingFlexible.splice(0, 1);
-      const scheduledItem = scheduleFlexibleItem(item, cursor);
+      const scheduledItem = scheduleFlexibleItem(item, overlapStartFor(item, scheduled) ?? cursor);
       scheduled.push(scheduledItem);
-      cursor = nextCursor(scheduledItem);
+      cursor = maxTime(cursor, nextCursor(scheduledItem));
     }
   }
 
@@ -368,7 +376,7 @@ function scheduleItems(items: PlanCandidate[], currentTime: string): PlanItem[] 
 }
 
 function fitsBefore(item: PlanCandidate, cursor: string, anchorStart: string): boolean {
-  return timeToMinutes(cursor) + item.estimatedMinutes <= timeToMinutes(anchorStart);
+  return timeToMinutes(cursor) + (item.blockingMinutes ?? item.estimatedMinutes) <= timeToMinutes(anchorStart);
 }
 
 function scheduleFlexibleItem(item: PlanCandidate, cursor: string): PlanItem {
@@ -377,16 +385,91 @@ function scheduleFlexibleItem(item: PlanCandidate, cursor: string): PlanItem {
     ...item,
     status: "planned",
     startTime,
-    endTime: addMinutes(startTime, item.estimatedMinutes)
+    endTime: addMinutes(startTime, item.clockMinutes ?? item.estimatedMinutes)
   };
 }
 
+function uniqueCandidates(items: PlanCandidate[]): PlanCandidate[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
+function overlapStartFor(item: PlanCandidate, scheduled: PlanItem[]): string | undefined {
+  if (item.attentionLoad !== "passive" || !item.canOverlap) return undefined;
+  const previous = [...scheduled].reverse().find((candidate) => candidate.status === "planned" && isCompatibleOverlap(item, candidate));
+  return previous?.startTime;
+}
+
+function isCompatibleOverlap(item: PlanCandidate, candidate: PlanItem): boolean {
+  if (!candidate.canOverlap && candidate.attentionLoad === "full") return false;
+  if (item.attentionLoad === "passive" && candidate.attentionLoad === "partial") return true;
+  const itemKinds = new Set(item.overlapKinds ?? []);
+  const candidateKinds = candidate.overlapKinds ?? [];
+  if (!itemKinds.size || !candidateKinds.length) return true;
+  return candidateKinds.some((kind) => itemKinds.has(kind));
+}
+
 function nextCursor(item: PlanItem): string {
-  return addMinutes(item.endTime, item.estimatedMinutes >= 60 ? 20 : 10);
+  const blockingMinutes = item.blockingMinutes ?? item.estimatedMinutes;
+  if (item.phaseKind === "passive") return addMinutes(item.startTime, item.clockMinutes ?? item.estimatedMinutes);
+  if (blockingMinutes <= 0) return item.startTime;
+  if (item.attentionLoad === "partial" && item.canOverlap) return item.endTime;
+  return addMinutes(item.startTime, blockingMinutes + (blockingMinutes >= 60 ? 20 : 10));
 }
 
 
 function sortTime(time: string): number {
   if (time === "Later") return Number.POSITIVE_INFINITY;
   return timeToMinutes(time);
+}
+
+function blockingMinutesForTask(task: Task): number {
+  if (!task.scheduling) return task.effortMinutes;
+  if (task.scheduling.attentionLoad === "passive") return 0;
+  if (task.scheduling.attentionLoad === "partial") return Math.max(5, Math.round(task.effortMinutes * 0.45));
+  return task.effortMinutes;
+}
+
+function expandPhasedTaskCandidate(base: PlanCandidate, task: Task): PlanCandidate[] {
+  if (task.scheduling?.mode !== "phased" || !task.scheduling.phases?.length) return [base];
+  let runningOffset = 0;
+  return task.scheduling.phases.map((phase, index) => {
+    const phaseOffset = phase.offsetMinutes ?? runningOffset;
+    runningOffset = phaseOffset + phase.effortMinutes;
+    return {
+      ...base,
+      id: `${base.id}_phase_${index + 1}`,
+      title: phase.title,
+      estimatedMinutes: phase.effortMinutes,
+      clockMinutes: phase.effortMinutes,
+      blockingMinutes: phase.attentionLoad === "passive" ? 0 : phase.attentionLoad === "partial" ? Math.max(5, Math.round(phase.effortMinutes * 0.45)) : phase.effortMinutes,
+      schedulingMode: "phased",
+      attentionLoad: phase.attentionLoad,
+      canOverlap: phase.canOverlap ?? phase.attentionLoad !== "full",
+      overlapKinds: phase.overlapKinds ?? task.scheduling?.overlapKinds,
+      phaseKind: phase.kind,
+      phaseIndex: index,
+      parentTaskId: task.id,
+      reason:
+        phase.kind === "passive"
+          ? `${task.title}: passive phase can run while compatible work continues.`
+          : phase.kind === "return"
+            ? `${task.title}: return point after the background phase.`
+            : `${task.title}: active phase ${index + 1}.`,
+      fixedStartTime: base.fixedStartTime ? addMinutes(base.fixedStartTime, phaseOffset) : undefined,
+      hardAnchor: base.hardAnchor && phase.attentionLoad === "full"
+    };
+  });
+}
+
+function schedulingReason(task: Task): string | undefined {
+  if (!task.scheduling || task.scheduling.mode === "exclusive") return undefined;
+  if (task.scheduling.mode === "background") return "Background work: visible on the timeline but does not consume full attention.";
+  if (task.scheduling.mode === "concurrent") return "Concurrent work: can share time with compatible low-conflict tasks.";
+  if (task.scheduling.mode === "phased") return "Phased work: active and passive phases are planned separately.";
+  return undefined;
 }

@@ -339,15 +339,18 @@ Done in the current V1 foundation:
 22. Added date-intent task structure.
 23. Added week-level read model and `/api/week`.
 24. Added week-aware AI capture and eval coverage.
+25. Added background/phased/concurrent scheduling semantics.
+26. Added planner support for passive and partial-attention overlap.
+27. Added AI capture inference for laundry, cooking, travel, and AI side-work style inputs.
+28. Added visible timeline/task panel UX for overlapped work.
 
 Still open for V1:
 
 1. Decide whether to rename `Project` to `Container` internally, or keep `Project` as the storage name with `kind`.
 2. Collapse routine templates into repeating-task semantics, or document exactly why they stay separate.
-3. Add background/phased/concurrent work semantics.
-4. Add a UI surface for the week read model.
-5. Add durable Postgres storage after the task/week model settles.
-6. Run live-model evals whenever `OPENAI_API_KEY` is present in the local environment.
+3. Add a UI surface for the week read model.
+4. Add durable Postgres storage after the task/week model settles.
+5. Expand live-model evals around phased/background edge cases.
 
 ## V2: Proactive AI Structure Hygiene
 

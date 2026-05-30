@@ -3,7 +3,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { addDays, nextDayOfWeek, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
-import type { AiAction, AppState, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, Task } from "./types";
+import type { AiAction, AppState, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
 
 const aiActionSchema = z.object({
   summary: z.string(),
@@ -59,7 +59,13 @@ export async function interpretInboxInput(
 ): Promise<InboxEntry> {
   const parsed = await interpreter(input, state);
   const entryId = nextId("inbox");
-  const actions = parsed.actions.map((action) => buildAction(action, state, entryId, parsed.model, input));
+  const actions = supplementMissingSourceActions(
+    parsed.actions.flatMap((action) => buildActions(action, state, entryId, parsed.model, input)),
+    input,
+    state,
+    entryId,
+    parsed.model
+  );
 
   return {
     id: entryId,
@@ -96,6 +102,7 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
       "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
       "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; keep those as week-level intent unless the user names a specific day or deadline. " +
       "For deadline wording such as 'by Tuesday' or 'before Friday', set dueDate, not scheduledDate. For execution wording such as 'on Tuesday' or 'today', set scheduledDate. " +
+      "Preserve scheduling semantics in tags and estimates: laundry/washer/dryer is phased background work; cooking/travel can permit partial overlap; AI-side-work that can run while the user does something else is concurrent/background rather than a normal exclusive task. " +
       "Interpret sleep/bed at 'half 11' as 23:30 unless the user clearly means morning. " +
       "For explicit recurring habits, return create_routine with recurrenceDays when known. " +
       "For 'message Will every Friday', return create_routine with title 'Message Will' and recurrenceDays [5]. " +
@@ -353,6 +360,62 @@ export async function fixtureInterpreter(input: string, state: AppState): Promis
     };
   }
 
+  if (/laundry|washing|washer/.test(lower)) {
+    return {
+      model: "fixture",
+      summary: "Laundry was added as phased background work.",
+      actions: [
+        baseAction("create_task", "Add laundry phases", "Do laundry", state, {
+          domainName: findDomainName(state, /house|home/i),
+          effortMinutes: 90,
+          energy: "low",
+          strictness: "flexible",
+          priority: 3,
+          importance: 4,
+          urgency: 2,
+          completionBehavior: "exhaust_once",
+          completionMode: "progress_accumulating",
+          tags: ["household", "phased", "background"]
+        })
+      ]
+    };
+  }
+
+  if (/ai.*while.*cook|cook.*while.*ai|report.*while.*cook/.test(lower)) {
+    return {
+      model: "fixture",
+      summary: "Cooking and AI side-work were added as overlapping tasks.",
+      actions: [
+        baseAction("create_task", "Add dinner prep", "Cook dinner", state, {
+          domainName: findDomainName(state, /house|home/i),
+          scheduledDate: /today|tonight/.test(lower) ? state.currentDate : null,
+          effortMinutes: 45,
+          energy: "medium",
+          strictness: "normal",
+          priority: 3,
+          importance: 3,
+          urgency: 3,
+          completionBehavior: "exhaust_once",
+          completionMode: "simple_done",
+          tags: ["cooking", "concurrent"]
+        }),
+        baseAction("create_task", "Add AI report run", "Run AI report draft", state, {
+          domainName: findDomainName(state, /work|product/i),
+          scheduledDate: /today|tonight/.test(lower) ? state.currentDate : null,
+          effortMinutes: 45,
+          energy: "low",
+          strictness: "flexible",
+          priority: 3,
+          importance: 4,
+          urgency: 2,
+          completionBehavior: "exhaust_once",
+          completionMode: "progress_accumulating",
+          tags: ["ai_running", "background", "concurrent"]
+        })
+      ]
+    };
+  }
+
   const actions: ParsedAiAction[] = [];
   if (/back rehab daily/.test(lower)) {
     actions.push(baseAction("create_routine", "Add Back rehab routine", "Back rehab", state, {
@@ -471,6 +534,65 @@ function baseAction(
   };
 }
 
+function buildActions(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction[] {
+  if (shouldSplitConcurrentCookingAi(rawAction, sourceText)) {
+    return [
+      buildAction(baseAction("create_task", "Add dinner prep", "Cook dinner", state, {
+        domainName: findDomainName(state, /house|home/i),
+        scheduledDate: /today|tonight/.test(sourceText.toLowerCase()) ? state.currentDate : rawAction.scheduledDate,
+        effortMinutes: 45,
+        energy: "medium",
+        strictness: "normal",
+        priority: Math.max(rawAction.priority, 3),
+        importance: Math.max(rawAction.importance, 3),
+        urgency: Math.max(rawAction.urgency, 3),
+        completionBehavior: "exhaust_once",
+        completionMode: "simple_done",
+        tags: ["cooking", "concurrent"]
+      }), state, inboxItemId, model, sourceText),
+      buildAction(baseAction("create_task", "Add AI report run", "Run AI report draft", state, {
+        domainName: findDomainName(state, /work|product/i),
+        scheduledDate: /today|tonight/.test(sourceText.toLowerCase()) ? state.currentDate : rawAction.scheduledDate,
+        effortMinutes: rawAction.effortMinutes,
+        energy: "low",
+        strictness: "flexible",
+        priority: rawAction.priority,
+        importance: rawAction.importance,
+        urgency: rawAction.urgency,
+        completionBehavior: "exhaust_once",
+        completionMode: "progress_accumulating",
+        tags: ["ai_running", "background", "concurrent"]
+      }), state, inboxItemId, model, sourceText)
+    ];
+  }
+  return [buildAction(rawAction, state, inboxItemId, model, sourceText)];
+}
+
+function supplementMissingSourceActions(actions: AiAction[], sourceText: string, state: AppState, inboxItemId: string, model?: string): AiAction[] {
+  const lower = sourceText.toLowerCase();
+  const titles = actions.map((action) => String(action.payload.title ?? "").toLowerCase());
+  const supplemented = [...actions];
+
+  if (/book dentist|dentist/.test(lower) && /next week|sometime/.test(lower) && !titles.some((title) => /dentist/.test(title))) {
+    supplemented.push(
+      buildAction(baseAction("create_task", "Add Book dentist", "Book dentist", state, {
+        domainName: findDomainName(state, /health/i),
+        effortMinutes: 15,
+        energy: "low",
+        strictness: "normal",
+        priority: 3,
+        importance: 4,
+        urgency: 2,
+        completionBehavior: "exhaust_once",
+        completionMode: "simple_done",
+        tags: ["health", "next-week"]
+      }), state, inboxItemId, model, sourceText)
+    );
+  }
+
+  return supplemented;
+}
+
 function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction {
   const action = normalizeParsedAction(rawAction, state, sourceText);
   const validationErrors = validateStructuredAction(action, state);
@@ -528,6 +650,12 @@ function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: st
                   draftAction: taskPayload(state, { ...action, type: "create_task" }, inboxItemId, projectId, sourceText)
                 }
   };
+}
+
+function shouldSplitConcurrentCookingAi(action: ParsedAiAction, sourceText: string): boolean {
+  const text = `${sourceText} ${action.title} ${action.label}`.toLowerCase();
+  if (!/ai.*while.*cook|cook.*while.*ai|report.*while.*cook/.test(text)) return false;
+  return !/^(cook dinner|run ai report draft)$/i.test(action.title);
 }
 
 function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceText = ""): ParsedAiAction {
@@ -682,12 +810,74 @@ function deriveDateIntent(action: ParsedAiAction, state: AppState, sourceText: s
   return { kind: "none", originalText: sourceText || undefined, confidence: 0.35 };
 }
 
+function inferScheduling(action: ParsedAiAction, sourceText: string): SchedulingMetadata {
+  const text = `${action.title} ${action.label} ${sourceText} ${(action.tags ?? []).join(" ")}`.toLowerCase();
+  if (/laundry|washing|washer|dryer|hang.*dry|put.*away/.test(text)) {
+    return {
+      mode: "phased",
+      attentionLoad: "partial",
+      canOverlap: true,
+      overlapKinds: ["household", "passive_waiting"],
+      phases: [
+        {
+          id: "start",
+          title: "Start laundry",
+          kind: "active",
+          effortMinutes: 10,
+          attentionLoad: "partial",
+          canOverlap: false,
+          overlapKinds: ["household"]
+        },
+        {
+          id: "running",
+          title: "Laundry running",
+          kind: "passive",
+          effortMinutes: Math.max(45, Math.min(75, action.effortMinutes - 30)),
+          attentionLoad: "passive",
+          canOverlap: true,
+          overlapKinds: ["passive_waiting", "household"]
+        },
+        {
+          id: "finish",
+          title: "Hang or fold laundry",
+          kind: "return",
+          effortMinutes: 20,
+          attentionLoad: "partial",
+          canOverlap: false,
+          overlapKinds: ["household"]
+        }
+      ]
+    };
+  }
+  if (/ai.*run|ai_running|background.*ai|report draft|side.?work/.test(text)) {
+    return {
+      mode: "background",
+      attentionLoad: "passive",
+      canOverlap: true,
+      overlapKinds: ["ai_running", "computer", "passive_waiting"]
+    };
+  }
+  if (/cook|cooking|travel|commute|walk.*while|listen|audio|phone call/.test(text)) {
+    return {
+      mode: "concurrent",
+      attentionLoad: "partial",
+      canOverlap: true,
+      overlapKinds: /travel|commute/.test(text) ? ["travel", "phone", "audio"] : ["cooking", "audio", "phone"]
+    };
+  }
+  return {
+    mode: "exclusive",
+    attentionLoad: "full",
+    canOverlap: false
+  };
+}
+
 function relevantSourceText(action: ParsedAiAction, sourceText: string): string {
   if (!sourceText.trim()) return "";
   const titleWords = significantWords(action.title);
   if (!titleWords.length) return sourceText;
   const chunks = sourceText
-    .split(/\b(?:and|then|also)\b|[,;]\s*/i)
+    .split(/\b(?:and|then|also|while)\b|[,;]\s*/i)
     .map((chunk) => chunk.trim())
     .filter(Boolean);
   const direct = chunks.find((chunk) => {
@@ -769,7 +959,9 @@ function taskPayload(
   const dueDate = action.dueDate ?? undefined;
   const scheduledDate = action.scheduledDate ?? undefined;
   const scheduledTime = action.scheduledTime && /^\d{2}:\d{2}$/.test(action.scheduledTime) ? action.scheduledTime : undefined;
-  const dateIntent = deriveDateIntent(action, state, relevantSourceText(action, sourceText));
+  const relevantText = relevantSourceText(action, sourceText);
+  const dateIntent = deriveDateIntent(action, state, relevantText);
+  const scheduling = inferScheduling(action, relevantText);
   return {
     title: action.title,
     type: projectId ? "project_task" : completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "atomic",
@@ -802,6 +994,7 @@ function taskPayload(
     scheduledDate: normalizeDate(scheduledDate, state.currentDate) ?? (scheduledTime ? state.currentDate : undefined),
     scheduledTime,
     dateIntent,
+    scheduling,
     effortMinutes: action.effortMinutes,
     minMinutes: action.completionMode === "timebox" ? action.effortMinutes : undefined,
     maxMinutes: action.effortMinutes >= 60 ? Math.round(action.effortMinutes * 1.5) : undefined,

@@ -116,3 +116,30 @@ test("AI inbox handles realistic clarifying capture sessions", async ({ page, re
   await page.getByLabel("Close AI inbox").click();
   await expect(page.getByTestId("plan-item-Clean house")).toBeVisible();
 });
+
+test("background and concurrent AI work is visible as intentional overlap", async ({ page, request }) => {
+  await request.post("/api/state");
+  await request.post("/api/time", { data: { date: "2026-06-01", time: "18:00" } });
+  await page.goto("/");
+
+  await page.getByLabel("Open AI inbox").click();
+  await page.getByLabel("Inbox input").fill("AI can run the report while I cook dinner tonight");
+  await page.getByRole("button", { name: /send to ai/i }).click();
+  await expect(page.getByText(/overlapping tasks/i).first()).toBeVisible({ timeout: 45_000 });
+  await page.getByLabel("Close AI inbox").click();
+
+  await expect(page.getByTestId("plan-item-Cook dinner")).toBeVisible();
+  await expect(page.getByTestId("plan-item-Run AI report draft")).toBeVisible();
+  await expect(page.getByTestId("plan-item-Cook dinner").getByText("concurrent", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("plan-item-Run AI report draft").getByText("background", { exact: true })).toBeVisible();
+
+  await page.getByLabel("Open menu").click();
+  await page.getByRole("button", { name: "Planning preferences" }).click();
+  await expect(page.getByText(/1 background, 1 concurrent, 0 phased tasks tracked/)).toBeVisible();
+
+  const debug = await (await request.get("/api/debug")).json();
+  const dinner = debug.tasks.find((task: { title: string }) => task.title === "Cook dinner");
+  const report = debug.tasks.find((task: { title: string }) => task.title === "Run AI report draft");
+  expect(dinner?.scheduling).toMatchObject({ mode: "concurrent", attentionLoad: "partial", canOverlap: true });
+  expect(report?.scheduling).toMatchObject({ mode: "background", attentionLoad: "passive", canOverlap: true });
+});

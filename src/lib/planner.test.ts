@@ -136,4 +136,112 @@ describe("buildDayPlan", () => {
     expect(walk?.type).toBe("routine");
     expect(walk?.section).toBe("routines");
   });
+
+  it("shows phased background tasks as active and passive timeline phases", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+    state.tasks = [
+      {
+        id: "task_laundry",
+        title: "Do laundry",
+        type: "atomic",
+        domainId: "domain_house",
+        status: "active",
+        repeatPolicy: { type: "none" },
+        completionBehavior: "exhaust_once",
+        completionMode: "progress_accumulating",
+        plannerFields: { intentType: "maintenance", pressureLevel: "scheduled", location: "home", setupCost: "low" },
+        priority: 4,
+        importance: 4,
+        urgency: 3,
+        scheduledDate: "2026-06-01",
+        effortMinutes: 90,
+        energy: "low",
+        strictness: "normal",
+        scheduling: {
+          mode: "phased",
+          attentionLoad: "partial",
+          canOverlap: true,
+          overlapKinds: ["household", "passive_waiting"],
+          phases: [
+            { id: "start", title: "Start laundry", kind: "active", effortMinutes: 10, attentionLoad: "partial" },
+            { id: "run", title: "Laundry running", kind: "passive", effortMinutes: 60, attentionLoad: "passive", canOverlap: true },
+            { id: "finish", title: "Hang laundry", kind: "return", effortMinutes: 20, attentionLoad: "partial" }
+          ]
+        }
+      }
+    ];
+    state.projects = [];
+    state.routines = [];
+
+    const plan = buildDayPlan(state);
+    const passive = plan.items.find((item) => item.title === "Laundry running");
+
+    expect(plan.items.map((item) => item.title)).toEqual(["Start laundry", "Laundry running", "Hang laundry"]);
+    expect(passive).toMatchObject({
+      schedulingMode: "phased",
+      attentionLoad: "passive",
+      blockingMinutes: 0,
+      clockMinutes: 60
+    });
+    expect(plan.estimatedTotalMinutes).toBe(14);
+  });
+
+  it("lets passive concurrent work share clock time with partial-attention work", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "18:00";
+    state.tasks = [
+      {
+        id: "task_cook",
+        title: "Cook dinner",
+        type: "atomic",
+        domainId: "domain_house",
+        status: "active",
+        repeatPolicy: { type: "none" },
+        completionBehavior: "exhaust_once",
+        completionMode: "simple_done",
+        plannerFields: { intentType: "maintenance", pressureLevel: "scheduled", location: "home", setupCost: "medium" },
+        priority: 4,
+        importance: 4,
+        urgency: 4,
+        scheduledDate: "2026-06-01",
+        effortMinutes: 45,
+        energy: "medium",
+        strictness: "normal",
+        scheduling: { mode: "concurrent", attentionLoad: "partial", canOverlap: true, overlapKinds: ["cooking", "audio"] }
+      },
+      {
+        id: "task_ai_report",
+        title: "Run AI report draft",
+        type: "atomic",
+        domainId: "domain_work",
+        status: "active",
+        repeatPolicy: { type: "none" },
+        completionBehavior: "exhaust_once",
+        completionMode: "progress_accumulating",
+        plannerFields: { intentType: "progress", pressureLevel: "scheduled", location: "computer", setupCost: "low" },
+        priority: 3,
+        importance: 4,
+        urgency: 2,
+        scheduledDate: "2026-06-01",
+        effortMinutes: 45,
+        energy: "low",
+        strictness: "flexible",
+        scheduling: { mode: "background", attentionLoad: "passive", canOverlap: true, overlapKinds: ["ai_running", "passive_waiting"] }
+      }
+    ];
+    state.projects = [];
+    state.routines = [];
+
+    const plan = buildDayPlan(state);
+    const cook = plan.items.find((item) => item.title === "Cook dinner");
+    const ai = plan.items.find((item) => item.title === "Run AI report draft");
+
+    expect(cook?.startTime).toBe("18:00");
+    expect(ai?.startTime).toBe("18:00");
+    expect(ai?.blockingMinutes).toBe(0);
+    expect(plan.estimatedTotalMinutes).toBe(20);
+  });
 });

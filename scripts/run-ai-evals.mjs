@@ -162,6 +162,19 @@ function staticScenarios() {
         routineExists(/message will/i),
         routineHasWeeklyDay(/message will/i, 5)
       ]
+    },
+    {
+      phase: "static",
+      name: "background AI side-work preserves overlap semantics",
+      steps: [
+        setTime("2026-06-01", "18:00"),
+        inbox("AI can run the report while I cook dinner tonight")
+      ],
+      expects: [
+        taskNestedField("Cook dinner", ["scheduling", "mode"], "concurrent"),
+        taskNestedField("Run AI report draft", ["scheduling", "mode"], "background"),
+        taskNestedField("Run AI report draft", ["scheduling", "attentionLoad"], "passive")
+      ]
     }
   ];
 }
@@ -450,6 +463,7 @@ function summarize(debug) {
       scheduledDate: task.scheduledDate,
       scheduledTime: task.scheduledTime,
       dateIntent: task.dateIntent,
+      scheduling: task.scheduling,
       completionMode: task.completionMode,
       completionBehavior: task.completionBehavior
     })),

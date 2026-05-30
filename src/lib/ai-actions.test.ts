@@ -175,4 +175,32 @@ describe("interpretInboxInput", () => {
       dateIntent: { kind: "specific_date", scheduledDate: "2026-06-02" }
     });
   });
+
+  it("infers phased and concurrent scheduling semantics from natural wording", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+
+    const laundry = await interpretInboxInput("I need to do laundry today with the washer running in the background", state, fixtureInterpreter);
+    expect(laundry.actions[0].payload).toMatchObject({
+      title: "Do laundry",
+      scheduling: {
+        mode: "phased",
+        attentionLoad: "partial",
+        canOverlap: true
+      }
+    });
+    expect((laundry.actions[0].payload.scheduling as { phases: unknown[] }).phases.length).toBeGreaterThanOrEqual(3);
+
+    const overlap = await interpretInboxInput("AI can run the report while I cook dinner tonight", state, fixtureInterpreter);
+    const dinner = overlap.actions.find((action) => action.payload.title === "Cook dinner");
+    const report = overlap.actions.find((action) => action.payload.title === "Run AI report draft");
+
+    expect(dinner?.payload).toMatchObject({
+      scheduling: { mode: "concurrent", attentionLoad: "partial", canOverlap: true }
+    });
+    expect(report?.payload).toMatchObject({
+      scheduling: { mode: "background", attentionLoad: "passive", canOverlap: true }
+    });
+  });
 });
