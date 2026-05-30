@@ -24,7 +24,8 @@ test("realistic full-week execution loop with time changes", async ({ page, requ
   await page.getByTestId("plan-item-Back rehab").getByRole("button", { name: "Undo complete Back rehab" }).click();
   await expect(page.getByTestId("plan-item-Back rehab")).not.toHaveClass(/completed/);
   await page.getByTestId("plan-item-Back rehab").getByRole("button", { name: "Complete Back rehab" }).click();
-  await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Defer" }).click();
+  await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Not done" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("plan-item-Diet App")).toHaveClass(/deferred/);
 
   await page.getByRole("button", { name: "Next day" }).click();
@@ -34,13 +35,15 @@ test("realistic full-week execution loop with time changes", async ({ page, requ
   await page.getByRole("button", { name: "Next day" }).click();
   await expect(page.getByRole("heading", { name: /tuesday/i })).toBeVisible();
   await page.getByTestId("plan-item-Back rehab").getByRole("button", { name: "Complete Back rehab" }).click();
-  await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Defer" }).click();
+  await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Not done" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("plan-item-Diet App")).toHaveClass(/deferred/);
 
   await page.getByRole("button", { name: "Next day" }).click();
   await expect(page.getByRole("heading", { name: /wednesday/i })).toBeVisible();
   await page.getByTestId("plan-item-Back rehab").getByRole("button", { name: "Complete Back rehab" }).click();
-  await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Defer" }).click();
+  await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Not done" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("plan-item-Diet App")).toHaveClass(/deferred/);
 
   await page.getByRole("button", { name: "Next day" }).click();

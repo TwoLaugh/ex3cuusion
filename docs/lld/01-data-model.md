@@ -8,6 +8,48 @@ V1 is web-first. Android-specific launcher/app-use data belongs to V2.
 
 ## Core Tables
 
+## Candidate Direction: Tasks, Containers, And Repetition
+
+This model is under active design. See `docs/product/task-project-structuring-todo.md`.
+
+Current direction:
+
+- The task is the executable unit.
+- A project block on Today is a presentation/planning object, not the primary completion object.
+- The user should usually complete individual selected tasks inside a block.
+- `projects` may become a more general `containers` concept that can represent projects, areas, people, lists, maintenance buckets, and idea pools.
+- Routines may become tasks with a `repeat_policy` instead of a separate user-facing concept.
+- Some tasks should be repeatable or reusable suggestions, where completion creates an event but does not exhaust the underlying item.
+
+Likely task additions before Postgres:
+
+- `repeat_policy jsonb`
+- `completion_behavior text check in ('exhaust_once','repeatable','keep_as_suggestion','regenerate_after_completion')`
+- `completion_mode text check in ('simple_done','outcome_done','timebox','repeatable_checkoff','progress_accumulating','suggestion_used')`
+- `definition_of_done text`
+- `min_minutes int`
+- `max_minutes int`
+- `estimate_confidence numeric`
+- `last_completed_at timestamptz`
+- `blocked_json jsonb`
+- `waiting_json jsonb`
+- `delegation_json jsonb`
+
+Likely event-model additions before Postgres:
+
+- general `execution_events` replacing or wrapping narrow completion/deferral tables
+- event types: completed, worked_on, partially_completed, deferred, blocked, waiting_on, skipped, canceled, marked_not_important
+- optional event payload fields for reason, note, actual minutes, next action, blocked metadata, waiting metadata, and follow-up date
+
+Likely project/container additions before Postgres:
+
+- rename or alias `projects` to `containers`
+- `kind text check in ('project','area','person','list','idea_pool','maintenance')`
+- `default_block_minutes int`
+- `planning_mode text check in ('deadline_driven','maintenance','suggestion_pool','relationship','open_backlog')`
+
+The schema below is the current implementation target, not yet the final settled model.
+
 ### users
 
 - `id uuid pk`

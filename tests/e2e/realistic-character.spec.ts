@@ -74,7 +74,8 @@ test("realistic character day respects anchors, projects, social goals, and AI c
     .getByRole("button", { name: "Complete Clinician Dashboard UX Review" })
     .click();
 
-  await page.getByTestId("plan-item-Illustrated Recipe Zine").getByRole("button", { name: "Defer" }).click();
+  await page.getByTestId("plan-item-Illustrated Recipe Zine").getByRole("button", { name: "Not done" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("plan-item-Illustrated Recipe Zine")).toHaveClass(/deferred/);
 
   await page.getByLabel("Open AI inbox").click();

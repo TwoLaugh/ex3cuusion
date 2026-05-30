@@ -74,3 +74,45 @@ test("AI sleep anchor at half 11 pins the day and prevents flexible work overrun
   });
   expect(overrunningItems).toEqual([]);
 });
+
+test("AI inbox handles realistic clarifying capture sessions", async ({ page, request }) => {
+  await request.post("/api/state");
+  await request.post("/api/time", { data: { date: "2026-06-01", time: "08:30" } });
+  await page.goto("/");
+
+  await page.getByLabel("Open AI inbox").click();
+
+  await page.getByLabel("Inbox input").fill("clean the house this weekend");
+  await page.getByRole("button", { name: /send to ai/i }).click();
+  await expect(page.getByText("What would count as enough cleaning for this task?")).toBeVisible({ timeout: 45_000 });
+  await page.getByRole("button", { name: "Kitchen and bathroom" }).click();
+  await expect(page.getByText(/Apply answer: Clean house/)).toBeVisible();
+
+  await page.getByLabel("Inbox input").fill("work on diet app for two hours");
+  await page.getByRole("button", { name: /send to ai/i }).click();
+  await expect(page.getByText("A Diet App timebox was added.")).toBeVisible({ timeout: 45_000 });
+
+  await page.getByLabel("Inbox input").fill("ideas for things to do with Emma");
+  await page.getByRole("button", { name: /send to ai/i }).click();
+  await expect(page.getByText("Should I keep this as a reusable Emma suggestion list?")).toBeVisible({ timeout: 45_000 });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/capture-sessions/") && response.url().includes("/answer")),
+    page.getByRole("button", { name: "Reusable suggestion" }).click()
+  ]);
+
+  const debug = await (await request.get("/api/debug")).json();
+  const cleanHouse = debug.tasks.find((task: { title: string; definitionOfDone?: string }) => task.title === "Clean house");
+  const dietTimebox = debug.tasks.find((task: { title: string; completionMode?: string }) => task.title === "Work on Diet App");
+  const emmaIdea = debug.tasks.find((task: { title: string; completionBehavior?: string; projectId?: string }) =>
+    task.title === "Ideas for things to do with Emma"
+  );
+
+  expect(cleanHouse?.definitionOfDone).toBe("Kitchen and bathroom");
+  expect(dietTimebox?.completionMode).toBe("timebox");
+  expect(emmaIdea?.completionBehavior).toBe("keep_as_suggestion");
+  expect(emmaIdea?.projectId).toBe("container_emma");
+  expect(debug.captureSessions.filter((session: { questions: unknown[] }) => session.questions.length > 0).length).toBeGreaterThanOrEqual(2);
+
+  await page.getByLabel("Close AI inbox").click();
+  await expect(page.getByTestId("plan-item-Clean house")).toBeVisible();
+});

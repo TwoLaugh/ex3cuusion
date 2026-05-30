@@ -50,20 +50,28 @@ describe("buildDayPlan", () => {
       {
         id: "task_chores",
         title: "Tidy the garage",
+        type: "atomic",
         domainId: "domain_house",
         status: "active",
+        repeatPolicy: { type: "none" },
+        completionBehavior: "exhaust_once",
+        plannerFields: { intentType: "maintenance", pressureLevel: "soft" },
         priority: 4,
         importance: 4,
         urgency: 4,
         effortMinutes: 90,
         energy: "medium",
-        strictness: "soft"
+        strictness: "flexible"
       },
       {
         id: "task_sleep",
         title: "Sleep",
+        type: "atomic",
         domainId: "domain_health",
         status: "active",
+        repeatPolicy: { type: "none" },
+        completionBehavior: "exhaust_once",
+        plannerFields: { intentType: "recovery", pressureLevel: "fixed" },
         priority: 10,
         importance: 10,
         urgency: 10,
@@ -84,5 +92,48 @@ describe("buildDayPlan", () => {
     expect(sleep?.startTime).toBe("23:30");
     expect(chores?.status).toBe("unscheduled");
     expect(chores?.reason).toContain("Does not fit before Sleep at 23:30");
+  });
+
+  it("treats relationship suggestion containers as soft invitations, not project blocks", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-03";
+    state.currentTime = "08:30";
+
+    const plan = buildDayPlan(state);
+    const emmaBlock = plan.items.find((item) => item.title === "Emma");
+    const readTogether = plan.items.find((item) => item.title === "Read together");
+
+    expect(emmaBlock).toBeUndefined();
+    expect(readTogether?.section).toBe("soft_invitations");
+    expect(readTogether?.reason).toContain("Reusable suggestion");
+  });
+
+  it("shows repeating tasks as routine-like Today items", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-02";
+    state.currentTime = "08:30";
+    state.routines = [];
+    state.tasks.push({
+      id: "task_walk",
+      title: "Walk",
+      type: "atomic",
+      domainId: "domain_health",
+      status: "active",
+      repeatPolicy: { type: "daily", carryover: "skip" },
+      completionBehavior: "repeatable",
+      plannerFields: { intentType: "health", pressureLevel: "scheduled", location: "outside", setupCost: "low" },
+      priority: 4,
+      importance: 4,
+      urgency: 2,
+      effortMinutes: 30,
+      energy: "low",
+      strictness: "normal"
+    });
+
+    const plan = buildDayPlan(state);
+    const walk = plan.items.find((item) => item.title === "Walk");
+
+    expect(walk?.type).toBe("routine");
+    expect(walk?.section).toBe("routines");
   });
 });

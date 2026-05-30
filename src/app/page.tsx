@@ -1,20 +1,27 @@
 "use client";
 
-import { Bot, Check, ChevronLeft, ChevronRight, Clock3, Menu, RotateCcw, Send, Undo2, X } from "lucide-react";
+import { Bot, Check, ChevronLeft, ChevronRight, Clock3, Menu, Send, Undo2, X } from "lucide-react";
 import { Dispatch, SetStateAction, useEffect, useMemo, useState } from "react";
-import type { AppState, DayPlan, DeferralReason, PlanItem } from "@/lib/types";
+import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 
 type ApiPayload = { state: AppState; plan: DayPlan };
 type PostFn = (url: string, body?: Record<string, unknown>) => Promise<void>;
+type SecondaryView = "Domains" | "Projects" | "Tasks" | "Routines" | "Planning preferences" | "AI activity";
+const secondaryViews: SecondaryView[] = ["Domains", "Projects", "Tasks", "Routines", "Planning preferences", "AI activity"];
 
 export default function Home() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activeView, setActiveView] = useState<SecondaryView | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PlanItem | null>(null);
+  const [notDoneItem, setNotDoneItem] = useState<PlanItem | null>(null);
+  const [notDoneReason, setNotDoneReason] = useState("no_time");
+  const [notDoneNote, setNotDoneNote] = useState("");
+  const [clarificationDrafts, setClarificationDrafts] = useState<Record<string, string>>({});
   const [todayIndex, setTodayIndex] = useState<number | null>(null);
 
   async function refresh() {
@@ -44,7 +51,9 @@ export default function Home() {
   const state = payload?.state;
   const selectedTasks = useMemo(() => {
     if (!state || !selected?.selectedTaskIds) return [];
-    return state.tasks.filter((task) => selected.selectedTaskIds?.includes(task.id));
+    return selected.selectedTaskIds
+      .map((taskId) => state.tasks.find((task) => task.id === taskId))
+      .filter((task): task is AppState["tasks"][number] => Boolean(task));
   }, [state, selected]);
   const timeline = useMemo(() => (plan ? buildTimeline(plan.items, state?.currentTime) : null), [plan, state?.currentTime]);
 
@@ -66,6 +75,42 @@ export default function Home() {
     }
   }
 
+  async function submitNotDone() {
+    if (!notDoneItem) return;
+    const outcomeByReason: Record<string, string> = {
+      no_energy: "deferred",
+      no_time: "deferred",
+      blocked: "blocked",
+      waiting_on: "waiting_on",
+      too_vague: "partially_completed",
+      did_part: "worked_on",
+      not_important: "marked_not_important",
+      moved_intentionally: "deferred",
+      other: "skipped"
+    };
+    await post("/api/plan/outcome", {
+      planItemId: notDoneItem.id,
+      type: outcomeByReason[notDoneReason] ?? "skipped",
+      reason: notDoneReason === "no_energy" ? "low_energy" : notDoneReason,
+      note: notDoneNote || undefined,
+      blocked: notDoneReason === "blocked" ? { blockedBy: "missing_info", note: notDoneNote || undefined } : undefined,
+      waiting: notDoneReason === "waiting_on" ? { waitingOn: notDoneNote || "someone" } : undefined
+    });
+    setNotDoneItem(null);
+    setNotDoneReason("no_time");
+    setNotDoneNote("");
+  }
+
+  async function answerClarification(sessionId: string, questionId: string, answer: string) {
+    if (!answer.trim()) return;
+    await post(`/api/capture-sessions/${sessionId}/answer`, { questionId, answer: answer.trim() });
+    setClarificationDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[questionId];
+      return next;
+    });
+  }
+
   return (
     <main className="shell">
       <aside className={menuOpen ? "sideNav sideNavOpen" : "sideNav"} aria-label="Secondary pages">
@@ -73,8 +118,15 @@ export default function Home() {
           <X size={19} />
         </button>
         <nav>
-          {["Domains", "Projects", "Tasks", "Routines", "Planning preferences", "AI activity"].map((item) => (
-            <button key={item} className="navItem">
+          {secondaryViews.map((item) => (
+            <button
+              key={item}
+              className={activeView === item ? "navItem activeNavItem" : "navItem"}
+              onClick={() => {
+                setActiveView(item);
+                setMenuOpen(false);
+              }}
+            >
               {item}
               <ChevronRight size={16} />
             </button>
@@ -116,15 +168,7 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="summaryBand">
-        <p>{plan.summary}</p>
-        <div className="summaryActions">
-          <button onClick={() => post("/api/state")} aria-label="Reset week">
-            <RotateCcw size={16} />
-            Reset
-          </button>
-        </div>
-      </section>
+      {activeView && <SecondaryPanel view={activeView} state={state} plan={plan} onClose={() => setActiveView(null)} />}
 
       <section className="calendarTimeline" aria-label="Timed day plan">
         <div className="calendarScroll">
@@ -154,9 +198,9 @@ export default function Home() {
                     <h2>{item.title}</h2>
                     <p>{item.reason}</p>
                     <span>{item.estimatedMinutes}m - {labelForSection(item.section)}</span>
-                    {item.status !== "planned" && <strong className="statusPill">{item.status}</strong>}
+                    {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
                   </div>
-                  <PlanItemActions item={item} post={post} setSelected={setSelected} />
+                  <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} />
                 </div>
               </article>
             ))}
@@ -168,9 +212,9 @@ export default function Home() {
               <h2>{item.title}</h2>
               <p>{item.reason}</p>
               <span>{item.estimatedMinutes}m - {labelForSection(item.section)}</span>
-              {item.status !== "planned" && <strong className="statusPill">{item.status}</strong>}
+              {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
             </div>
-            <PlanItemActions item={item} post={post} setSelected={setSelected} />
+            <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} />
           </article>
         ))}
       </section>
@@ -183,12 +227,24 @@ export default function Home() {
           <p className="eyebrow">Project block</p>
           <h2>{selected.title}</h2>
           <div className="subtasks">
-            {selectedTasks.map((task) => (
-              <div key={task.id}>
-                <strong>{task.title}</strong>
-                <span>{task.effortMinutes}m - {task.energy}</span>
-              </div>
-            ))}
+            {selectedTasks.map((task) => {
+              const completedToday = isTaskCompletedToday(task, state.currentDate);
+              return (
+                <div className={completedToday ? "subtaskRow completedSubtask" : "subtaskRow"} key={task.id}>
+                  <button
+                    className={completedToday ? "subtaskCheck active" : "subtaskCheck"}
+                    onClick={() => post("/api/plan/complete", { planItemId: selected.id, completedTaskIds: [task.id] })}
+                    aria-label={completedToday ? `Undo complete ${task.title}` : `Complete ${task.title}`}
+                  >
+                    {completedToday ? <Undo2 size={15} /> : <Check size={15} />}
+                  </button>
+                  <div>
+                    <strong>{task.title}</strong>
+                    <span>{task.effortMinutes}m - {task.energy}</span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -224,11 +280,49 @@ export default function Home() {
               {state.inbox.map((entry) => (
                 <article key={entry.id}>
                   <p>{entry.summary}</p>
+                  {state.captureSessions
+                    .find((session) => session.id === entry.captureSessionId)
+                    ?.questions.filter((question) => question.status === "pending")
+                    .map((question) => (
+                      <div className="clarificationCard" key={question.id}>
+                        <strong>{question.question}</strong>
+                        {question.options?.length ? (
+                          <div className="clarificationOptions">
+                            {question.options.map((option) => (
+                              <button key={option} onClick={() => answerClarification(entry.captureSessionId!, question.id, option)}>
+                                {option}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        <div className="clarificationAnswer">
+                          <input
+                            value={clarificationDrafts[question.id] ?? ""}
+                            onChange={(event) =>
+                              setClarificationDrafts((drafts) => ({ ...drafts, [question.id]: event.target.value }))
+                            }
+                            placeholder="Answer briefly..."
+                            aria-label={`Answer ${question.question}`}
+                          />
+                          <button onClick={() => answerClarification(entry.captureSessionId!, question.id, clarificationDrafts[question.id] ?? "")}>
+                            Answer
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   {entry.actions.map((action) => (
                     <span key={action.id}>
                       {action.label} - {action.type} - {action.safety} - {action.status}
                       {action.appliedEntityId ? ` - ${action.appliedEntityId}` : ""}
                       {action.skippedReason ? ` - ${action.skippedReason}` : ""}
+                      {action.status === "proposed" && action.safety === "needs_confirmation" && (
+                        <span className="actionDecision">
+                          <button onClick={() => post(`/api/ai-actions/${action.id}/confirm`)}>Confirm</button>
+                          <button onClick={() => post(`/api/ai-actions/${action.id}/reject`, { reason: "Rejected from inbox." })}>
+                            Reject
+                          </button>
+                        </span>
+                      )}
                     </span>
                   ))}
                 </article>
@@ -237,18 +331,156 @@ export default function Home() {
           </section>
         </div>
       )}
+
+      {notDoneItem && (
+        <div className="overlay" role="dialog" aria-label={`Not done ${notDoneItem.title}`}>
+          <section className="notDonePanel">
+            <button className="iconButton closeButton" onClick={() => setNotDoneItem(null)} aria-label="Close not done">
+              <X size={18} />
+            </button>
+            <p className="eyebrow">Not done</p>
+            <h2>{notDoneItem.title}</h2>
+            <select value={notDoneReason} onChange={(event) => setNotDoneReason(event.target.value)} aria-label="Reason">
+              <option value="no_time">No time</option>
+              <option value="no_energy">No energy</option>
+              <option value="blocked">Blocked</option>
+              <option value="waiting_on">Waiting on someone</option>
+              <option value="too_vague">Too vague</option>
+              <option value="did_part">Did part</option>
+              <option value="not_important">Not important</option>
+              <option value="moved_intentionally">Moved intentionally</option>
+              <option value="other">Other</option>
+            </select>
+            <textarea
+              value={notDoneNote}
+              onChange={(event) => setNotDoneNote(event.target.value)}
+              placeholder="Optional note, blocker, or next action..."
+              aria-label="Not done note"
+            />
+            <button className="sendButton" onClick={submitNotDone}>
+              Save
+            </button>
+          </section>
+        </div>
+      )}
     </main>
+  );
+}
+
+function SecondaryPanel({
+  view,
+  state,
+  plan,
+  onClose
+}: {
+  view: SecondaryView;
+  state: AppState;
+  plan: DayPlan;
+  onClose: () => void;
+}) {
+  return (
+    <section className="secondaryPanel" aria-label={view}>
+      <button className="iconButton closeButton" onClick={onClose} aria-label={`Close ${view}`}>
+        <X size={18} />
+      </button>
+      <p className="eyebrow">{view}</p>
+      {view === "Domains" && (
+        <div className="panelGrid">
+          {state.domains.map((domain) => (
+            <article key={domain.id}>
+              <h2>{domain.name}</h2>
+              <span>Weight {domain.weight}</span>
+            </article>
+          ))}
+        </div>
+      )}
+      {view === "Projects" && (
+        <div className="panelGrid">
+          {state.projects.map((project) => (
+            <article key={project.id}>
+              <h2>{project.name}</h2>
+              <p>{project.contextNote || project.planningMode}</p>
+              <span>
+                {project.kind} - {project.planningMode} - {project.defaultBlockMinutes}m
+              </span>
+            </article>
+          ))}
+        </div>
+      )}
+      {view === "Tasks" && (
+        <div className="panelList">
+          {state.tasks.map((task) => (
+            <article key={task.id}>
+              <div>
+                <h2>{task.title}</h2>
+                <p>{task.definitionOfDone || task.notes || task.plannerFields.intentType}</p>
+              </div>
+              <span>
+                {task.status} - {task.effortMinutes}m - {task.completionMode ?? task.completionBehavior}
+              </span>
+            </article>
+          ))}
+        </div>
+      )}
+      {view === "Routines" && (
+        <div className="panelGrid">
+          {state.routines.map((routine) => (
+            <article key={routine.id}>
+              <h2>{routine.title}</h2>
+              <p>{routine.recurrence.type === "daily" ? "Daily" : `Weekly: ${routine.recurrence.days.join(", ")}`}</p>
+              <span>
+                {routine.defaultEffortMinutes}m - {routine.energy} - {routine.strictness}
+              </span>
+            </article>
+          ))}
+        </div>
+      )}
+      {view === "Planning preferences" && (
+        <div className="panelGrid">
+          <article>
+            <h2>Capacity</h2>
+            <p>{plan.summary}</p>
+            <span>
+              {plan.loadLevel} - {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
+            </span>
+          </article>
+          <article>
+            <h2>Time Model</h2>
+            <p>Week/date intent, background phases, and concurrent work are tracked as upcoming model work.</p>
+            <span>{state.currentDate} - {state.currentTime}</span>
+          </article>
+        </div>
+      )}
+      {view === "AI activity" && (
+        <div className="panelList">
+          {state.captureSessions.length === 0 && <p className="emptyPanel">No AI activity yet.</p>}
+          {state.captureSessions.map((session) => (
+            <article key={session.id}>
+              <div>
+                <h2>{session.summary}</h2>
+                <p>{session.questions[0]?.question ?? session.messages[0]?.content ?? "No open questions."}</p>
+              </div>
+              <span>
+                {session.status} - {session.actionIds.length} action{session.actionIds.length === 1 ? "" : "s"}
+              </span>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
 function PlanItemActions({
   item,
   post,
-  setSelected
+  setSelected,
+  setNotDoneItem
 }: {
   item: PlanItem;
   post: PostFn;
   setSelected: Dispatch<SetStateAction<PlanItem | null>>;
+  setNotDoneItem: Dispatch<SetStateAction<PlanItem | null>>;
 }) {
   return (
     <div className="itemActions">
@@ -261,9 +493,9 @@ function PlanItemActions({
       </button>
       <button
         className={item.status === "deferred" ? "deferButton active" : "deferButton"}
-        onClick={() => post("/api/plan/defer", { planItemId: item.id, reason: "overplanned" satisfies DeferralReason })}
+        onClick={() => setNotDoneItem(item)}
       >
-        {item.status === "deferred" ? "Deferred" : "Defer"}
+        {item.status === "deferred" ? "Deferred" : "Not done"}
       </button>
       {item.type === "project_block" && <button onClick={() => setSelected(item)}>Open</button>}
     </div>
@@ -383,4 +615,13 @@ function labelForSection(section: PlanItem["section"]): string {
     soft_invitations: "soft invitation",
     later: "later"
   }[section];
+}
+
+function statusLabel(status: PlanItem["status"]): string {
+  if (status === "deferred") return "not done";
+  return status;
+}
+
+function isTaskCompletedToday(task: AppState["tasks"][number], date: string): boolean {
+  return task.completedAt?.slice(0, 10) === date || task.lastCompletedAt?.slice(0, 10) === date;
 }

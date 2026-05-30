@@ -9,8 +9,10 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "test:all": "vitest run && playwright test"
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "test:all": "npm run test && npm run test:e2e",
+    "eval:ai": "node scripts/run-ai-evals.mjs",
+    "eval:ai:live": "node scripts/run-ai-evals.mjs --live"
   },
   "dependencies": {
     "@types/node": "^22.15.29",

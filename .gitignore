@@ -6,4 +6,5 @@ test-results/
 playwright-report/
 .env
 .env.local
+.data/
 *.log

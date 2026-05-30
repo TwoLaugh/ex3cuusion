@@ -1,9 +1,32 @@
 export type Energy = "low" | "medium" | "high";
-export type Strictness = "soft" | "normal" | "strict";
-export type TaskStatus = "active" | "completed" | "deferred" | "archived";
+export type Strictness = "flexible" | "normal" | "strict";
+export type TaskStatus = "active" | "scheduled" | "completed" | "deferred" | "blocked" | "waiting" | "archived";
 export type PlanItemType = "routine" | "atomic_task" | "project_block" | "soft_invitation";
 export type PlanItemStatus = "planned" | "completed" | "deferred" | "unscheduled";
 export type LoadLevel = "light" | "normal" | "heavy" | "overloaded";
+export type ContainerKind = "project" | "area" | "person" | "list" | "idea_pool" | "maintenance";
+export type PlanningMode = "deadline_driven" | "maintenance" | "suggestion_pool" | "relationship" | "open_backlog";
+export type CompletionBehavior = "exhaust_once" | "repeatable" | "keep_as_suggestion" | "regenerate_after_completion";
+export type CompletionMode =
+  | "simple_done"
+  | "outcome_done"
+  | "timebox"
+  | "repeatable_checkoff"
+  | "progress_accumulating"
+  | "suggestion_used";
+export type IntentType = "obligation" | "maintenance" | "progress" | "relationship" | "idea" | "admin" | "health" | "recovery";
+export type PressureLevel = "fixed" | "due" | "scheduled" | "soft" | "someday";
+export type ExecutionEventType =
+  | "completed"
+  | "worked_on"
+  | "partially_completed"
+  | "deferred"
+  | "blocked"
+  | "waiting_on"
+  | "skipped"
+  | "canceled"
+  | "marked_not_important";
+export type BlockedBy = "person" | "decision" | "missing_info" | "materials" | "money" | "date" | "external_event" | "emotional_resistance";
 export type DeferralReason =
   | "no_time"
   | "low_energy"
@@ -14,6 +37,17 @@ export type DeferralReason =
   | "not_important"
   | "moved_intentionally"
   | "other";
+export type CaptureSessionStatus = "open" | "waiting_for_user" | "applied" | "dismissed";
+export type CaptureSource = "inbox" | "not_done" | "daily_review";
+export type ClarificationKind =
+  | "definition_of_done"
+  | "completion_behavior"
+  | "container_kind"
+  | "repeat_policy"
+  | "date"
+  | "split"
+  | "next_action";
+export type ClarificationMode = "blocking" | "optional" | "batch" | "refinement";
 
 export interface Domain {
   id: string;
@@ -21,23 +55,86 @@ export interface Domain {
   weight: number;
 }
 
+export type Area = Domain;
+
 export interface Project {
   id: string;
   domainId: string;
   name: string;
+  kind: ContainerKind;
+  planningMode: PlanningMode;
   status: "active" | "paused" | "completed";
   priorityWeight: number;
   defaultBlockMinutes: number;
   contextNote: string;
 }
 
+export type Container = Project;
+
+export type RepeatPolicy =
+  | { type: "none" }
+  | {
+      type: "daily" | "weekly";
+      days?: number[];
+      preferredWindow?: "morning" | "afternoon" | "evening";
+      carryover: "skip" | "reschedule" | "stack";
+      cooldownDays?: number;
+    };
+
+export interface PlannerFields {
+  intentType: IntentType;
+  pressureLevel: PressureLevel;
+  location?: "home" | "work" | "outside" | "phone" | "computer" | "anywhere";
+  setupCost?: "low" | "medium" | "high";
+}
+
+export interface PlannerSignals {
+  avoidanceRisk?: number;
+  momentumValue?: number;
+  relationshipValue?: number;
+  deadlineRisk?: number;
+  recoveryValue?: number;
+  cognitiveLoad?: number;
+}
+
+export interface BlockedMetadata {
+  blockedBy: BlockedBy;
+  note?: string;
+  unblockAction?: string;
+}
+
+export interface WaitingMetadata {
+  waitingOn: string;
+  requestedAt?: string;
+  followUpDate?: string;
+  context?: string;
+}
+
+export interface DelegationMetadata {
+  outcomeOwner: string;
+  nextActionOwner?: string;
+  checkInDate?: string;
+  note?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
   description?: string;
+  type: "atomic" | "project_task" | "routine_instance" | "soft_invitation";
   domainId: string;
   projectId?: string;
+  parentTaskId?: string;
+  sourceInboxItemId?: string;
   status: TaskStatus;
+  repeatPolicy: RepeatPolicy;
+  completionBehavior: CompletionBehavior;
+  completionMode?: CompletionMode;
+  definitionOfDone?: string;
+  plannerFields: PlannerFields;
+  plannerSignals?: PlannerSignals;
+  tags?: string[];
+  fieldConfidence?: Record<string, number>;
   priority: number;
   importance: number;
   urgency: number;
@@ -45,8 +142,18 @@ export interface Task {
   scheduledDate?: string;
   scheduledTime?: string;
   effortMinutes: number;
+  minMinutes?: number;
+  maxMinutes?: number;
+  estimateConfidence?: number;
   energy: Energy;
   strictness: Strictness;
+  notes?: string;
+  blockedReason?: string;
+  blocked?: BlockedMetadata;
+  waiting?: WaitingMetadata;
+  delegation?: DelegationMetadata;
+  completedAt?: string;
+  lastCompletedAt?: string;
   source?: string;
 }
 
@@ -100,18 +207,62 @@ export interface CompletionEvent {
   id: string;
   date: string;
   planItemId: string;
+  taskIds?: string[];
   actualMinutes?: number;
+}
+
+export interface ExecutionEvent {
+  id: string;
+  date: string;
+  createdAt: string;
+  type: ExecutionEventType;
+  taskId?: string;
+  taskIds?: string[];
+  planItemId?: string;
+  reason?: DeferralReason | "did_part" | "waiting_on" | "skipped" | "canceled";
+  note?: string;
+  actualMinutes?: number;
+  nextAction?: string;
+  blocked?: BlockedMetadata;
+  waiting?: WaitingMetadata;
+  delegation?: DelegationMetadata;
 }
 
 export interface AiAction {
   id: string;
-  type: "create_task" | "create_routine" | "create_project" | "schedule_block" | "ask_clarification";
+  type:
+    | "create_task"
+    | "create_routine"
+    | "create_project"
+    | "schedule_block"
+    | "add_project_note"
+    | "assign_task_to_project"
+    | "assign_task_to_domain"
+    | "schedule_task"
+    | "archive_task"
+    | "archive_project"
+    | "move_deadline"
+    | "change_routine_recurrence"
+    | "mark_task_done"
+    | "replace_today_plan"
+    | "bulk_update_tasks"
+    | "lower_priority_or_prune"
+    | "ask_clarification"
+    | "propose_task_split"
+    | "summarize_today"
+    | "interpret_review";
   label: string;
   payload: Record<string, unknown>;
   safety: "auto_apply" | "needs_confirmation";
-  status: "proposed" | "applied";
+  status: "proposed" | "applied" | "rejected" | "failed";
   appliedEntityId?: string;
   skippedReason?: string;
+  validationErrors?: string[];
+  model?: string;
+  createdAt?: string;
+  captureSessionId?: string;
+  sourceMessageId?: string;
+  pendingQuestionId?: string;
 }
 
 export interface InboxEntry {
@@ -119,6 +270,40 @@ export interface InboxEntry {
   createdAt: string;
   input: string;
   actions: AiAction[];
+  summary: string;
+  captureSessionId?: string;
+}
+
+export interface CaptureMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+export interface ClarificationQuestion {
+  id: string;
+  actionId: string;
+  question: string;
+  kind: ClarificationKind;
+  mode: ClarificationMode;
+  status: "pending" | "answered" | "dismissed";
+  options?: string[];
+  answer?: string;
+  createdAt: string;
+  answeredAt?: string;
+}
+
+export interface CaptureSession {
+  id: string;
+  status: CaptureSessionStatus;
+  source: CaptureSource;
+  createdAt: string;
+  updatedAt: string;
+  messages: CaptureMessage[];
+  questions: ClarificationQuestion[];
+  actionIds: string[];
+  unresolvedFields: string[];
   summary: string;
 }
 
@@ -132,5 +317,7 @@ export interface AppState {
   routines: RoutineTemplate[];
   deferrals: DeferralLog[];
   completions: CompletionEvent[];
+  executionEvents: ExecutionEvent[];
   inbox: InboxEntry[];
+  captureSessions: CaptureSession[];
 }

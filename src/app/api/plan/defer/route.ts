@@ -16,11 +16,12 @@ const deferSchema = z.object({
     "moved_intentionally",
     "other"
   ]),
-  note: z.string().optional()
+  note: z.string().optional(),
+  deferredTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
 });
 
 export async function POST(request: NextRequest) {
   const input = deferSchema.parse(await request.json());
-  const state = deferPlanItem(input.planItemId, input.reason, input.note);
+  const state = deferPlanItem(input.planItemId, input.reason, input.note, input.deferredTo);
   return NextResponse.json({ state, plan: buildDayPlan(state) });
 }

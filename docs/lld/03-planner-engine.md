@@ -71,15 +71,27 @@ The exact weights can be tuned behind a planner version string.
 
 ## Project Block Generation
 
+Project/container blocks are Today presentation objects. They should not be treated as the thing that was truly completed unless the user explicitly says they only want to log time against the block.
+
+Primary completion should happen at the selected child-task level.
+
 1. Find active, unblocked project tasks.
 2. Drop vague tasks unless the block is explicitly "clarify/split project".
 3. Score subtasks with the candidate scoring function.
 4. Select subtasks that fit `project.default_block_minutes`.
 5. Prefer 1-4 subtasks per block.
-6. Generate block title: `{project.name} - {minutes}m`.
-7. Ask AI for a short focus line only after deterministic subtask selection.
+6. Order selected subtasks for execution.
+7. Generate block title: `{project.name} - {minutes}m`.
+8. Ask AI for a short focus line only after deterministic subtask selection.
 
 If a project has no clear next action, create a soft invitation or AI proposal to split the project rather than putting vague work on Today.
+
+Open block-status rules:
+
+- If all selected child tasks are completed, the block can display as complete.
+- If some selected child tasks are completed, the block should display partial progress.
+- If no child tasks are completed but time was spent, the block may be logged as worked-on without completing the selected tasks.
+- Deferring a block should not automatically defer all child tasks unless the user chooses that.
 
 ## Overload And Pruning
 

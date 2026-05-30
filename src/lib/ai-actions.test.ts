@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { interpretInboxInput } from "./ai-actions";
+import { fixtureInterpreter, interpretInboxInput } from "./ai-actions";
 import { createSeedState } from "./seed";
 
 describe("interpretInboxInput", () => {
@@ -9,7 +9,8 @@ describe("interpretInboxInput", () => {
     state.currentTime = "08:30";
     const entry = await interpretInboxInput(
       "Need back rehab daily, clean garage this weekend, finish diet app auth bug before Friday, and message Will.",
-      state
+      state,
+      fixtureInterpreter
     );
 
     expect(entry.actions.length).toBeGreaterThanOrEqual(3);
@@ -22,8 +23,122 @@ describe("interpretInboxInput", () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";
     state.currentTime = "08:30";
-    const entry = await interpretInboxInput("Stuff about the thing maybe later", state);
+    const entry = await interpretInboxInput("Stuff about the thing maybe later", state, fixtureInterpreter);
 
     expect(entry.actions.some((action) => action.type === "ask_clarification")).toBe(true);
+    expect(entry.actions.some((action) => action.safety === "needs_confirmation")).toBe(true);
+  });
+
+  it("captures rich task semantics for realistic messy inputs", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+
+    const timebox = await interpretInboxInput("work on diet app for two hours", state, fixtureInterpreter);
+    expect(timebox.actions[0].payload).toMatchObject({
+      title: "Work on Diet App",
+      completionMode: "timebox",
+      effortMinutes: 120,
+      projectId: "project_diet_app"
+    });
+
+    const recurring = await interpretInboxInput("message Will every Friday", state, fixtureInterpreter);
+    expect(recurring.actions[0].payload).toMatchObject({
+      title: "Message Will",
+      recurrence: { type: "weekly", days: [5] }
+    });
+
+    const vague = await interpretInboxInput("clean the house this weekend", state, fixtureInterpreter);
+    expect(vague.actions[0].payload).toMatchObject({
+      questionKind: "definition_of_done"
+    });
+  });
+
+  it("normalizes live-model drift for broad cleaning clarification", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+
+    const entry = await interpretInboxInput(
+      "clean the house this weekend",
+      state,
+      async () => ({
+        model: "drift-fixture",
+        summary: "Need clarification.",
+        actions: [
+          {
+            type: "create_task",
+            label: "Clean the House",
+            title: "What should clean the house this weekend include?",
+            domainName: "House Work",
+            projectName: null,
+            dueDate: "2026-06-01",
+            scheduledDate: null,
+            scheduledTime: ":null",
+            effortMinutes: 90,
+            energy: "medium",
+            strictness: "flexible",
+            priority: 3,
+            importance: 4,
+            urgency: 2,
+            recurrenceDays: null,
+            completionBehavior: null,
+            completionMode: null,
+            definitionOfDone: "What should clean the house include?",
+            tags: null,
+            question: null,
+            clarificationKind: null,
+            clarificationOptions: null
+          }
+        ]
+      })
+    );
+
+    expect(entry.actions[0]).toMatchObject({
+      type: "ask_clarification",
+      label: "Clarify clean house"
+    });
+    expect(entry.actions[0].payload).toMatchObject({
+      draftAction: { title: "Clean house" }
+    });
+
+    const clarificationEntry = await interpretInboxInput(
+      "clean the house this weekend",
+      state,
+      async () => ({
+        model: "drift-fixture",
+        summary: "Need clarification.",
+        actions: [
+          {
+            type: "ask_clarification",
+            label: "Clarify what clean the house should include",
+            title: "Clean the house this weekend",
+            domainName: "House Work",
+            projectName: null,
+            dueDate: "2026-06-01",
+            scheduledDate: null,
+            scheduledTime: null,
+            effortMinutes: 90,
+            energy: "medium",
+            strictness: "flexible",
+            priority: 3,
+            importance: 4,
+            urgency: 2,
+            recurrenceDays: null,
+            completionBehavior: null,
+            completionMode: "timebox",
+            definitionOfDone: null,
+            tags: null,
+            question: "What should clean the house include?",
+            clarificationKind: "definition_of_done",
+            clarificationOptions: null
+          }
+        ]
+      })
+    );
+
+    expect(clarificationEntry.actions[0].payload).toMatchObject({
+      draftAction: { title: "Clean house", completionMode: "progress_accumulating", scheduledTime: undefined }
+    });
   });
 });

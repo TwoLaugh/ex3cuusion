@@ -35,7 +35,8 @@ body {
 }
 
 button,
-textarea {
+textarea,
+input {
   font: inherit;
 }
 
@@ -174,30 +175,6 @@ h1 {
   text-transform: capitalize;
 }
 
-.summaryBand {
-  align-items: center;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: flex;
-  gap: 18px;
-  justify-content: space-between;
-  margin: 28px auto;
-  max-width: 1180px;
-  padding: 14px 16px;
-}
-
-.summaryBand p {
-  color: var(--muted);
-  margin: 0;
-}
-
-.summaryActions {
-  display: flex;
-  gap: 8px;
-}
-
-.summaryActions button,
 .sendButton,
 .itemActions button {
   align-items: center;
@@ -212,14 +189,8 @@ h1 {
   padding: 0 13px;
 }
 
-.summaryActions button {
-  background: transparent;
-  border: 1px solid var(--line-strong);
-  color: var(--ink);
-}
-
 .calendarTimeline {
-  margin: 0 auto;
+  margin: 28px auto 0;
   max-width: 1180px;
 }
 
@@ -390,7 +361,21 @@ h1 {
 }
 
 .timelineBlock.completed .blockContent {
-  opacity: 0.58;
+  border-color: rgba(107, 214, 184, 0.46);
+  opacity: 0.68;
+}
+
+.timelineBlock.completed .blockContent h2,
+.unscheduledItem.completed h2,
+.completedSubtask strong {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  text-decoration-color: rgba(159, 240, 216, 0.72);
+}
+
+.timelineBlock.completed .blockContent::before,
+.unscheduledItem.completed::before {
+  background: var(--accent);
 }
 
 .timelineBlock.deferred .blockContent,
@@ -563,6 +548,7 @@ h1 {
 }
 
 .inboxPanel,
+.notDonePanel,
 .drawer {
   background: var(--panel);
   border: 1px solid var(--line-strong);
@@ -578,9 +564,96 @@ h1 {
   width: min(560px, 100%);
 }
 
+.activeNavItem {
+  color: var(--accent-strong);
+}
+
+.secondaryPanel {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 28px auto 0;
+  max-width: 1180px;
+  padding: 18px;
+}
+
+.secondaryPanel .closeButton {
+  height: 34px;
+  width: 34px;
+}
+
+.panelGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  margin-top: 14px;
+}
+
+.panelGrid article,
+.panelList article {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.panelGrid h2,
+.panelList h2 {
+  font-size: 0.98rem;
+  margin-bottom: 6px;
+}
+
+.panelGrid p,
+.panelList p,
+.emptyPanel {
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.panelGrid span,
+.panelList span {
+  color: var(--blue);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.panelList {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.panelList article {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.notDonePanel {
+  max-width: 440px;
+  width: min(440px, 100%);
+}
+
 .inboxPanel h2,
+.notDonePanel h2,
 .drawer h2 {
   font-size: 1.45rem;
+}
+
+.notDonePanel select {
+  background: var(--bg-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  min-height: 40px;
+  padding: 0 10px;
+  width: 100%;
+}
+
+.notDonePanel textarea {
+  margin-top: 12px;
 }
 
 textarea {
@@ -632,6 +705,61 @@ textarea {
   font-size: 0.86rem;
 }
 
+.actionDecision {
+  display: inline-flex !important;
+  gap: 8px;
+  margin-left: 8px;
+}
+
+.actionDecision button {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  min-height: 26px;
+  padding: 0 10px;
+}
+
+.clarificationCard {
+  background: rgba(139, 184, 255, 0.08);
+  border: 1px solid rgba(139, 184, 255, 0.2);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.clarificationCard strong {
+  font-size: 0.94rem;
+}
+
+.clarificationOptions,
+.clarificationAnswer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.clarificationOptions button,
+.clarificationAnswer button {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.clarificationAnswer input {
+  background: var(--bg-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  flex: 1 1 180px;
+  min-height: 32px;
+  min-width: 0;
+  padding: 0 12px;
+}
+
 .drawer {
   bottom: 24px;
   max-width: 420px;
@@ -643,13 +771,48 @@ textarea {
 
 .subtasks {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   margin-top: 18px;
 }
 
-.subtasks div {
+.subtaskRow {
+  align-items: center;
   border-top: 1px solid var(--line);
-  padding-top: 12px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  padding-top: 10px;
+}
+
+.completedSubtask {
+  opacity: 0.68;
+}
+
+.subtaskCheck {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  display: inline-flex;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  width: 30px;
+}
+
+.subtaskCheck.active {
+  background: var(--accent);
+  color: #07100d;
+}
+
+.drawerAction {
+  background: var(--accent);
+  border: 0;
+  color: #151410;
+  margin-top: 16px;
+  min-height: 36px;
+  padding: 0 14px;
 }
 
 @media (max-width: 760px) {
@@ -682,13 +845,13 @@ textarea {
     justify-self: start;
   }
 
-  .summaryBand {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .calendarScroll {
     grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .panelList article {
+    align-items: start;
+    grid-template-columns: 1fr;
   }
 
   .unscheduledItem {

@@ -14,6 +14,9 @@
 
 Build:
 
+- task/project/category structuring
+- rich task metadata
+- minimal UI for rich internal structure
 - domains
 - projects
 - tasks
@@ -31,6 +34,8 @@ No AI required yet.
 
 Build:
 
+- capture sessions
+- clarifying questions
 - inbox command chat
 - structured action schemas
 - validation layer
@@ -90,6 +95,9 @@ Build:
 
 Build:
 
+- proactive AI structure hygiene
+- daily/weekly AI-generated maintenance questions
+- stale task and container probes
 - exact alarms if justified
 - weather/location signals
 - app-use review
