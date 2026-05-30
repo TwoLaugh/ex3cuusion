@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("AI-created simple task is logged, applied, and visible in Today", async ({ page, request }) => {
+test("AI-created simple task is logged, applied, and patchable from chat", async ({ page, request }) => {
   await request.post("/api/state");
   await request.post("/api/time", { data: { date: "2026-06-01", time: "08:30" } });
   await page.goto("/");
@@ -11,19 +11,20 @@ test("AI-created simple task is logged, applied, and visible in Today", async ({
 
   await expect(page.getByText(/applied/i).first()).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText(/Task: Water plants/i).first()).toBeVisible();
+  await page.getByPlaceholder("Correct or add context...").fill("actually make that next week and put it under Diet App");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByText(/Updated Water plants/)).toBeVisible({ timeout: 45_000 });
 
   const debug = await (await request.get("/api/debug")).json();
   const createdTask = debug.tasks.find((task: { title: string }) => /water plants/i.test(task.title));
   expect(createdTask).toBeTruthy();
+  expect(createdTask.projectId).toBe("project_diet_app");
+  expect(createdTask.dateIntent.kind).toBe("week_window");
   expect(debug.inbox[0].actions.some((action: { type: string; status: string; appliedEntityId?: string }) =>
     action.type === "create_task" && action.status === "applied" && Boolean(action.appliedEntityId)
   )).toBe(true);
-  expect(debug.planItems.some((item: { title: string; taskId?: string }) =>
-    /water plants/i.test(item.title) || item.taskId === createdTask.id
-  )).toBe(true);
-
   await page.getByLabel("Close AI inbox").click();
-  await expect(page.getByTestId(`plan-item-${createdTask.title}`)).toBeVisible();
+  await expect(page.getByTestId(`plan-item-${createdTask.title}`)).toHaveCount(0);
 });
 
 test("vague AI capture is logged as needing confirmation instead of silently failing", async ({ page, request }) => {

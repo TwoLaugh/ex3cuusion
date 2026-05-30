@@ -23,6 +23,7 @@ export default function Home() {
   const [notDoneReason, setNotDoneReason] = useState("no_time");
   const [notDoneNote, setNotDoneNote] = useState("");
   const [clarificationDrafts, setClarificationDrafts] = useState<Record<string, string>>({});
+  const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [todayIndex, setTodayIndex] = useState<number | null>(null);
 
   async function refresh() {
@@ -108,6 +109,17 @@ export default function Home() {
     setClarificationDrafts((drafts) => {
       const next = { ...drafts };
       delete next[questionId];
+      return next;
+    });
+  }
+
+  async function sendFollowUp(sessionId: string) {
+    const message = followUpDrafts[sessionId]?.trim();
+    if (!message) return;
+    await post(`/api/capture-sessions/${sessionId}/message`, { message });
+    setFollowUpDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[sessionId];
       return next;
     });
   }
@@ -287,7 +299,10 @@ export default function Home() {
                   session={state.captureSessions.find((session) => session.id === entry.captureSessionId)}
                   clarificationDrafts={clarificationDrafts}
                   setClarificationDrafts={setClarificationDrafts}
+                  followUpDrafts={followUpDrafts}
+                  setFollowUpDrafts={setFollowUpDrafts}
                   answerClarification={answerClarification}
+                  sendFollowUp={sendFollowUp}
                   post={post}
                 />
               ))}
@@ -336,17 +351,26 @@ function InboxSession({
   session,
   clarificationDrafts,
   setClarificationDrafts,
+  followUpDrafts,
+  setFollowUpDrafts,
   answerClarification,
+  sendFollowUp,
   post
 }: {
   entry: AppState["inbox"][number];
   session?: AppState["captureSessions"][number];
   clarificationDrafts: Record<string, string>;
   setClarificationDrafts: Dispatch<SetStateAction<Record<string, string>>>;
+  followUpDrafts: Record<string, string>;
+  setFollowUpDrafts: Dispatch<SetStateAction<Record<string, string>>>;
   answerClarification: (sessionId: string, questionId: string, answer: string) => Promise<void>;
+  sendFollowUp: (sessionId: string) => Promise<void>;
   post: PostFn;
 }) {
   const pendingQuestions = session?.questions.filter((question) => question.status === "pending") ?? [];
+  const pendingQuestionText = new Set(pendingQuestions.map((question) => question.question));
+  const visibleMessages =
+    session?.messages.slice(1).filter((message) => !(message.role === "assistant" && pendingQuestionText.has(message.content))) ?? [];
   const appliedActions = entry.actions.filter((action) => action.status === "applied" && action.type !== "ask_clarification");
   const proposedActions = entry.actions.filter(
     (action) => action.status === "proposed" && action.safety === "needs_confirmation" && action.type !== "ask_clarification"
@@ -362,6 +386,16 @@ function InboxSession({
         <div className="chatMessage assistantMessage">
           <span>AI</span>
           <p>{entry.summary}</p>
+        </div>
+      )}
+      {visibleMessages.length > 0 && (
+        <div className="sessionMessages">
+          {visibleMessages.map((message) => (
+            <div className={message.role === "user" ? "chatMessage userMessage" : "chatMessage assistantMessage"} key={message.id}>
+              <span>{message.role === "user" ? "You" : "AI"}</span>
+              <p>{message.content}</p>
+            </div>
+          ))}
         </div>
       )}
       {pendingQuestions.map((question) => (
@@ -407,6 +441,17 @@ function InboxSession({
           <button onClick={() => post(`/api/ai-actions/${action.id}/reject`, { reason: "Rejected from inbox." })}>Reject</button>
         </div>
       ))}
+      {session && (
+        <div className="followUpBox">
+          <input
+            value={followUpDrafts[session.id] ?? ""}
+            onChange={(event) => setFollowUpDrafts((drafts) => ({ ...drafts, [session.id]: event.target.value }))}
+            placeholder="Correct or add context..."
+            aria-label={`Follow up on ${entry.input}`}
+          />
+          <button onClick={() => sendFollowUp(session.id)}>Send</button>
+        </div>
+      )}
     </article>
   );
 }

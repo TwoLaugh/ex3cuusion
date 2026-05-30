@@ -917,6 +917,13 @@ textarea {
   margin: 0;
 }
 
+.sessionMessages {
+  border-left: 2px solid var(--line);
+  display: grid;
+  gap: 9px;
+  padding-left: 10px;
+}
+
 .userMessage p {
   color: var(--muted);
 }
@@ -1010,6 +1017,30 @@ textarea {
   flex: 1 1 180px;
   min-height: 32px;
   min-width: 0;
+  padding: 0 12px;
+}
+
+.followUpBox {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.followUpBox input {
+  background: var(--bg-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  min-height: 34px;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.followUpBox button {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  min-height: 34px;
   padding: 0 12px;
 }
 

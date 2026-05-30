@@ -1,6 +1,6 @@
 # T049: AI Inbox Chat Sessions
 
-Status: in progress.
+Status: implemented in V1 foundation.
 
 ## Goal
 

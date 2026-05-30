@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { fixtureInterpreter } from "./ai-actions";
 import { buildDayPlan } from "./planner";
 import {
+  addCaptureSessionMessage,
   advanceDay,
   answerCaptureQuestion,
   completePlanItem,
@@ -214,6 +215,23 @@ describe("state integration", () => {
     expect(idea?.projectId).toBe("container_emma");
     expect(idea?.completionBehavior).toBe("keep_as_suggestion");
     expect(idea?.completionMode).toBe("suggestion_used");
+  });
+
+  it("applies follow-up messages to the existing capture task without duplicating it", async () => {
+    const afterCapture = await submitInbox("Add a task called Water plants today for 10 minutes.", fixtureInterpreter);
+    const session = afterCapture.captureSessions[0];
+    const task = afterCapture.tasks.find((candidate) => candidate.title === "Water plants");
+
+    expect(task).toBeDefined();
+
+    const afterFollowUp = addCaptureSessionMessage(session.id, "actually make that next week and put it under Diet App");
+    const updated = afterFollowUp.tasks.find((candidate) => candidate.id === task!.id);
+
+    expect(afterFollowUp.tasks.filter((candidate) => candidate.title === "Water plants")).toHaveLength(1);
+    expect(updated?.projectId).toBe("project_diet_app");
+    expect(updated?.dateIntent?.kind).toBe("week_window");
+    expect(updated?.scheduledDate).toBeUndefined();
+    expect(afterFollowUp.captureSessions[0].messages.some((message) => /Updated Water plants/.test(message.content))).toBe(true);
   });
 
   it("advances dates for full-week simulations", () => {

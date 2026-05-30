@@ -1,5 +1,5 @@
 import { interpretInboxInput, type AiInterpreter } from "./ai-actions";
-import { addDays } from "./dates";
+import { addDays, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
 import { buildDayPlan } from "./planner";
 import { getRepository } from "./repository";
@@ -287,6 +287,58 @@ export function answerCaptureQuestion(sessionId: string, questionId: string, ans
   return getState();
 }
 
+export function addCaptureSessionMessage(sessionId: string, message: string): AppState {
+  const state = currentState();
+  const session = state.captureSessions.find((candidate) => candidate.id === sessionId);
+  const trimmed = message.trim();
+  if (!session || !trimmed || session.status === "dismissed") return getState();
+
+  session.messages.push({
+    id: nextId("message"),
+    role: "user",
+    content: trimmed,
+    createdAt: timestampForState(state)
+  });
+
+  const pendingQuestion = session.questions.find((question) => question.status === "pending");
+  if (pendingQuestion && !looksLikeRevision(trimmed)) {
+    const action = findAction(state, pendingQuestion.actionId);
+    if (action?.type === "ask_clarification") {
+      pendingQuestion.status = "answered";
+      pendingQuestion.answer = trimmed;
+      pendingQuestion.answeredAt = timestampForState(state);
+      const draftAction = buildActionFromClarification(state, session, action, pendingQuestion, trimmed);
+      action.status = "applied";
+      action.skippedReason = `Answered: ${trimmed}`;
+      appendActionToInboxEntry(state, action.sourceMessageId, draftAction);
+      session.actionIds.push(draftAction.id);
+      session.unresolvedFields = session.unresolvedFields.filter((field) => field !== pendingQuestion.kind);
+      applyAutoAction(state, draftAction);
+      session.status = session.questions.some((candidate) => candidate.status === "pending") ? "waiting_for_user" : "applied";
+      addAssistantSessionMessage(state, session, `Applied that answer to ${String(draftAction.payload.title ?? "the draft")}.`);
+      session.updatedAt = timestampForState(state);
+      return getState();
+    }
+  }
+
+  const target = findSessionTaskTarget(state, session);
+  if (!target) {
+    addAssistantSessionMessage(state, session, "I kept that note with the capture, but there is no task draft to update yet.");
+    session.updatedAt = timestampForState(state);
+    return getState();
+  }
+
+  const changes = applyFollowUpToTask(state, target.task, trimmed);
+  if (target.action) target.action.payload = { ...target.action.payload, ...taskActionPatch(target.task) };
+  addAssistantSessionMessage(
+    state,
+    session,
+    changes.length ? `Updated ${target.task.title}: ${changes.join(", ")}.` : `Kept that note on ${target.task.title}.`
+  );
+  session.updatedAt = timestampForState(state);
+  return getState();
+}
+
 export function dismissCaptureSession(sessionId: string): AppState {
   const state = currentState();
   const session = state.captureSessions.find((candidate) => candidate.id === sessionId);
@@ -546,6 +598,103 @@ function appendActionToInboxEntry(state: AppState, inboxItemId: string | undefin
   if (entry) {
     entry.actions.push(action);
   }
+}
+
+function addAssistantSessionMessage(state: AppState, session: CaptureSession, content: string) {
+  session.messages.push({
+    id: nextId("message"),
+    role: "assistant",
+    content,
+    createdAt: timestampForState(state)
+  });
+}
+
+function looksLikeRevision(message: string): boolean {
+  return /\b(actually|instead|make it|move it|put (it|that)|under|project|category|next week|this week|tomorrow|today|not)\b/i.test(message);
+}
+
+function findSessionTaskTarget(state: AppState, session: CaptureSession): { task: Task; action?: AiAction } | undefined {
+  for (const actionId of [...session.actionIds].reverse()) {
+    const action = findAction(state, actionId);
+    if (!action || action.type === "ask_clarification") continue;
+    if (action.appliedEntityId) {
+      const task = state.tasks.find((candidate) => candidate.id === action.appliedEntityId);
+      if (task) return { task, action };
+    }
+    if (action.type === "create_task") {
+      const title = String(action.payload.title ?? "");
+      const task = state.tasks.find((candidate) => candidate.title.toLowerCase() === title.toLowerCase());
+      if (task) return { task, action };
+    }
+  }
+  return undefined;
+}
+
+function applyFollowUpToTask(state: AppState, task: Task, message: string): string[] {
+  const changes: string[] = [];
+  const lower = message.toLowerCase();
+
+  if (/\bnext week\b/.test(lower)) {
+    const range = nextWeekRange(state.currentDate);
+    task.scheduledDate = undefined;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "week_window", originalText: message, ...range, confidence: 0.8 };
+    task.plannerFields.pressureLevel = "soft";
+    changes.push("moved to next week");
+  } else if (/\bthis week\b/.test(lower)) {
+    const range = weekRange(state.currentDate);
+    task.scheduledDate = undefined;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "week_window", originalText: message, ...range, confidence: 0.75 };
+    task.plannerFields.pressureLevel = "soft";
+    changes.push("kept in this week");
+  } else if (/\btomorrow\b/.test(lower)) {
+    const scheduledDate = addDays(state.currentDate, 1);
+    task.scheduledDate = scheduledDate;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "tomorrow", originalText: message, scheduledDate, confidence: 0.85 };
+    task.plannerFields.pressureLevel = "scheduled";
+    changes.push("scheduled for tomorrow");
+  } else if (/\b(today|tonight)\b/.test(lower)) {
+    task.scheduledDate = state.currentDate;
+    task.dueDate = undefined;
+    task.dateIntent = { kind: "today", originalText: message, scheduledDate: state.currentDate, confidence: 0.85 };
+    task.plannerFields.pressureLevel = "scheduled";
+    changes.push("scheduled for today");
+  }
+
+  const project = findProjectMention(state, message);
+  if (project) {
+    task.projectId = project.id;
+    task.domainId = project.domainId;
+    task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
+    task.plannerFields.intentType = project.kind === "person" ? "relationship" : "progress";
+    changes.push(`moved under ${project.name}`);
+  }
+
+  if (!changes.length) {
+    task.notes = [task.notes, `Follow-up: ${message}`].filter(Boolean).join("\n");
+  }
+
+  return changes;
+}
+
+function findProjectMention(state: AppState, message: string): AppState["projects"][number] | undefined {
+  const lower = message.toLowerCase();
+  return state.projects.find((project) => lower.includes(project.name.toLowerCase()));
+}
+
+function taskActionPatch(task: Task): Record<string, unknown> {
+  return {
+    projectId: task.projectId,
+    domainId: task.domainId,
+    scheduledDate: task.scheduledDate,
+    dueDate: task.dueDate,
+    dateIntent: task.dateIntent,
+    plannerFields: task.plannerFields,
+    notes: task.notes,
+    type: task.type
+  };
 }
 
 function timestampForState(state: AppState): string {
