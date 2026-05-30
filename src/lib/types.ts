@@ -359,6 +359,8 @@ export interface ClarificationQuestion {
   mode: ClarificationMode;
   status: "pending" | "answered" | "dismissed";
   options?: string[];
+  materiality?: "low" | "medium" | "high";
+  rationale?: string;
   answer?: string;
   createdAt: string;
   answeredAt?: string;

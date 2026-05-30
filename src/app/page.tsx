@@ -281,54 +281,15 @@ export default function Home() {
             )}
             <div className="inboxLog">
               {state.inbox.map((entry) => (
-                <article key={entry.id}>
-                  <p>{entry.summary}</p>
-                  {state.captureSessions
-                    .find((session) => session.id === entry.captureSessionId)
-                    ?.questions.filter((question) => question.status === "pending")
-                    .map((question) => (
-                      <div className="clarificationCard" key={question.id}>
-                        <strong>{question.question}</strong>
-                        {question.options?.length ? (
-                          <div className="clarificationOptions">
-                            {question.options.map((option) => (
-                              <button key={option} onClick={() => answerClarification(entry.captureSessionId!, question.id, option)}>
-                                {option}
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-                        <div className="clarificationAnswer">
-                          <input
-                            value={clarificationDrafts[question.id] ?? ""}
-                            onChange={(event) =>
-                              setClarificationDrafts((drafts) => ({ ...drafts, [question.id]: event.target.value }))
-                            }
-                            placeholder="Answer briefly..."
-                            aria-label={`Answer ${question.question}`}
-                          />
-                          <button onClick={() => answerClarification(entry.captureSessionId!, question.id, clarificationDrafts[question.id] ?? "")}>
-                            Answer
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  {entry.actions.map((action) => (
-                    <span key={action.id}>
-                      {action.label} - {action.type} - {action.safety} - {action.status}
-                      {action.appliedEntityId ? ` - ${action.appliedEntityId}` : ""}
-                      {action.skippedReason ? ` - ${action.skippedReason}` : ""}
-                      {action.status === "proposed" && action.safety === "needs_confirmation" && (
-                        <span className="actionDecision">
-                          <button onClick={() => post(`/api/ai-actions/${action.id}/confirm`)}>Confirm</button>
-                          <button onClick={() => post(`/api/ai-actions/${action.id}/reject`, { reason: "Rejected from inbox." })}>
-                            Reject
-                          </button>
-                        </span>
-                      )}
-                    </span>
-                  ))}
-                </article>
+                <InboxSession
+                  key={entry.id}
+                  entry={entry}
+                  session={state.captureSessions.find((session) => session.id === entry.captureSessionId)}
+                  clarificationDrafts={clarificationDrafts}
+                  setClarificationDrafts={setClarificationDrafts}
+                  answerClarification={answerClarification}
+                  post={post}
+                />
               ))}
             </div>
           </section>
@@ -368,6 +329,93 @@ export default function Home() {
       )}
     </main>
   );
+}
+
+function InboxSession({
+  entry,
+  session,
+  clarificationDrafts,
+  setClarificationDrafts,
+  answerClarification,
+  post
+}: {
+  entry: AppState["inbox"][number];
+  session?: AppState["captureSessions"][number];
+  clarificationDrafts: Record<string, string>;
+  setClarificationDrafts: Dispatch<SetStateAction<Record<string, string>>>;
+  answerClarification: (sessionId: string, questionId: string, answer: string) => Promise<void>;
+  post: PostFn;
+}) {
+  const pendingQuestions = session?.questions.filter((question) => question.status === "pending") ?? [];
+  const appliedActions = entry.actions.filter((action) => action.status === "applied" && action.type !== "ask_clarification");
+  const proposedActions = entry.actions.filter(
+    (action) => action.status === "proposed" && action.safety === "needs_confirmation" && action.type !== "ask_clarification"
+  );
+
+  return (
+    <article className={pendingQuestions.length ? "inboxSession needsAnswer" : "inboxSession"}>
+      <div className="chatMessage userMessage">
+        <span>You</span>
+        <p>{entry.input}</p>
+      </div>
+      {pendingQuestions.length === 0 && (
+        <div className="chatMessage assistantMessage">
+          <span>AI</span>
+          <p>{entry.summary}</p>
+        </div>
+      )}
+      {pendingQuestions.map((question) => (
+        <div className="clarificationCard" key={question.id}>
+          <div className="chatMessage assistantMessage">
+            <span>AI</span>
+            <strong>{question.question}</strong>
+            {question.rationale && <small>{question.rationale}</small>}
+          </div>
+          {question.options?.length ? (
+            <div className="clarificationOptions">
+              {question.options.map((option) => (
+                <button key={option} onClick={() => answerClarification(session!.id, question.id, option)}>
+                  {option}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="clarificationAnswer">
+            <input
+              value={clarificationDrafts[question.id] ?? ""}
+              onChange={(event) => setClarificationDrafts((drafts) => ({ ...drafts, [question.id]: event.target.value }))}
+              placeholder="Answer briefly..."
+              aria-label={`Answer ${question.question}`}
+            />
+            <button onClick={() => answerClarification(session!.id, question.id, clarificationDrafts[question.id] ?? "")}>Answer</button>
+          </div>
+        </div>
+      ))}
+      {appliedActions.length > 0 && (
+        <div className="actionSummary">
+          <strong>Applied</strong>
+          {appliedActions.map((action) => (
+            <span key={action.id}>{actionSummary(action)}</span>
+          ))}
+        </div>
+      )}
+      {proposedActions.map((action) => (
+        <div className="actionDecision" key={action.id}>
+          <strong>Needs confirmation</strong>
+          <span>{action.label}</span>
+          <button onClick={() => post(`/api/ai-actions/${action.id}/confirm`)}>Confirm</button>
+          <button onClick={() => post(`/api/ai-actions/${action.id}/reject`, { reason: "Rejected from inbox." })}>Reject</button>
+        </div>
+      ))}
+    </article>
+  );
+}
+
+function actionSummary(action: AppState["inbox"][number]["actions"][number]): string {
+  if (action.type === "create_task") return `Task: ${String(action.payload.title ?? action.label)}`;
+  if (action.type === "create_routine") return `Routine: ${String(action.payload.title ?? action.label)}`;
+  if (action.type === "create_project") return `Project: ${String(action.payload.name ?? action.payload.title ?? action.label)}`;
+  return action.label;
 }
 
 async function responseError(response: Response): Promise<string> {

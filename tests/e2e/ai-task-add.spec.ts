@@ -10,7 +10,7 @@ test("AI-created simple task is logged, applied, and visible in Today", async ({
   await page.getByRole("button", { name: /send to ai/i }).click();
 
   await expect(page.getByText(/applied/i).first()).toBeVisible({ timeout: 45_000 });
-  await expect(page.getByText(/create_task/i).first()).toBeVisible();
+  await expect(page.getByText(/Task: Water plants/i).first()).toBeVisible();
 
   const debug = await (await request.get("/api/debug")).json();
   const createdTask = debug.tasks.find((task: { title: string }) => /water plants/i.test(task.title));
@@ -35,8 +35,7 @@ test("vague AI capture is logged as needing confirmation instead of silently fai
   await page.getByLabel("Inbox input").fill("Maybe deal with the vague house thing sometime.");
   await page.getByRole("button", { name: /send to ai/i }).click();
 
-  await expect(page.getByText(/needs_confirmation/i).first()).toBeVisible({ timeout: 45_000 });
-  await expect(page.getByText(/Needs confirmation before applying/i).first()).toBeVisible();
+  await expect(page.getByText(/What is the next concrete action/i).first()).toBeVisible({ timeout: 45_000 });
 
   const debug = await (await request.get("/api/debug")).json();
   expect(debug.inbox[0].actions.some((action: { safety: string; skippedReason?: string }) =>
@@ -86,7 +85,7 @@ test("AI inbox handles realistic clarifying capture sessions", async ({ page, re
   await page.getByRole("button", { name: /send to ai/i }).click();
   await expect(page.getByText("What would count as enough cleaning for this task?")).toBeVisible({ timeout: 45_000 });
   await page.getByRole("button", { name: "Kitchen and bathroom" }).click();
-  await expect(page.getByText(/Apply answer: Clean house/)).toBeVisible();
+  await expect(page.getByText("Task: Clean house")).toBeVisible();
 
   await page.getByLabel("Inbox input").fill("work on diet app for two hours");
   await page.getByRole("button", { name: /send to ai/i }).click();

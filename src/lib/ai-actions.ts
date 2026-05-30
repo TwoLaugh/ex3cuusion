@@ -97,6 +97,8 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
     instructions:
       "You turn messy personal execution input into structured JSON actions for an execution planner. " +
       "The durable unit is a task; chat exists only to clarify ambiguity before creating good task state. " +
+      "Think through the task silently first. Ask a follow-up only when the answer materially changes storage, recurrence, scheduling, completion behavior, project placement, splitting, or definition of done. " +
+      "Do not ask low-value questions for obvious simple tasks; infer reasonable defaults and create the task. " +
       "For explicit requests to add or create an ordinary obvious task, return create_task. " +
       "For broad work where done-state is unclear, return ask_clarification, not create_task. Examples: clean the house, sort backend, fix the app, organize life admin. " +
       "For ask_clarification actions: title must be the canonical future task title, not the question text. question must contain the user-facing question. definitionOfDone must be null. " +
@@ -598,7 +600,7 @@ function supplementMissingSourceActions(actions: AiAction[], sourceText: string,
 }
 
 function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction {
-  const action = normalizeParsedAction(rawAction, state, sourceText);
+  const action = applyClarificationPolicy(normalizeParsedAction(rawAction, state, sourceText), sourceText);
   const validationErrors = validateStructuredAction(action, state);
   const safety = classifyRisk(action, validationErrors);
   const domainId = findDomainId(state, action.domainName, "domain_work");
@@ -650,10 +652,74 @@ function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: st
                   question: action.question ?? "What should this become?",
                   questionKind: action.clarificationKind ?? "next_action",
                   options: action.clarificationOptions ?? [],
+                  rationale: clarificationRationale(action, sourceText),
+                  materiality: clarificationMateriality(action, sourceText),
                   draftActionType: "create_task",
                   draftAction: taskPayload(state, { ...action, type: "create_task" }, inboxItemId, projectId, sourceText)
                 }
   };
+}
+
+function applyClarificationPolicy(action: ParsedAiAction, sourceText: string): ParsedAiAction {
+  if (action.type !== "ask_clarification") return action;
+  if (isWorthAsking(action, sourceText)) return action;
+  const normalized = {
+    ...action,
+    type: "create_task" as const,
+    label: action.label.replace(/^Clarify/i, "Add") || `Add ${action.title}`,
+    question: null,
+    clarificationKind: null,
+    clarificationOptions: null,
+    completionBehavior: action.completionBehavior ?? "exhaust_once",
+    completionMode: action.completionMode ?? "simple_done",
+    definitionOfDone: action.definitionOfDone && !/\?|what counts|what should|include/i.test(action.definitionOfDone) ? action.definitionOfDone : null
+  };
+  if (/cut (my )?nails?|water plants|take bins out|buy milk|text|message|call/i.test(sourceText)) {
+    normalized.effortMinutes = Math.min(normalized.effortMinutes, 20);
+    normalized.energy = "low";
+    normalized.strictness = normalized.strictness === "flexible" ? "normal" : normalized.strictness;
+  }
+  return normalized;
+}
+
+function isWorthAsking(action: ParsedAiAction, sourceText: string): boolean {
+  const kind = action.clarificationKind ?? "next_action";
+  const text = `${sourceText} ${action.title} ${action.label}`.toLowerCase();
+  if (isObviousSimpleTask(text)) return false;
+  if (kind === "definition_of_done") return isBroadOutcomeWork(text);
+  if (kind === "completion_behavior") return /ideas?|suggestions?|things to do|activities|again|reusable|list/.test(text);
+  if (kind === "container_kind") return /category|project|area|list|bucket|for\s+\w+/.test(text);
+  if (kind === "repeat_policy") return /regular|routine|habit|every|daily|weekly|repeat/.test(text);
+  if (kind === "date") return /soon|later|sometime|whenever|this week|next week/.test(text) && /by|before|deadline|due|urgent/.test(text);
+  if (kind === "split") return isBroadOutcomeWork(text) || action.effortMinutes >= 90;
+  if (kind === "next_action") return /stuff|thing|sort|fix|organize|work on|deal with|life admin|backend|product/.test(text);
+  return false;
+}
+
+function clarificationMateriality(action: ParsedAiAction, sourceText: string): "low" | "medium" | "high" {
+  const text = `${sourceText} ${action.title}`.toLowerCase();
+  if (isBroadOutcomeWork(text) || action.effortMinutes >= 90) return "high";
+  if (/(ideas?|suggestions?|reusable|routine|every|daily|weekly)/.test(text)) return "medium";
+  return "low";
+}
+
+function clarificationRationale(action: ParsedAiAction, sourceText: string): string {
+  const kind = action.clarificationKind ?? "next_action";
+  if (kind === "definition_of_done") return "The answer changes what completion means.";
+  if (kind === "completion_behavior") return "The answer changes whether this is one-off, repeatable, or a reusable suggestion.";
+  if (kind === "container_kind") return "The answer changes where this belongs.";
+  if (kind === "repeat_policy") return "The answer changes recurrence.";
+  if (kind === "split") return "The answer changes whether this should become several tasks.";
+  if (kind === "date") return "The answer changes scheduling or deadline pressure.";
+  return "The answer changes the next concrete action.";
+}
+
+function isObviousSimpleTask(text: string): boolean {
+  return /cut (my )?nails?|water plants|take bins out|buy milk|wash cup|text \w+|message \w+|call \w+/.test(text) && !isBroadOutcomeWork(text);
+}
+
+function isBroadOutcomeWork(text: string): boolean {
+  return /clean (the )?(house|home)|sort|organize|fix|build|redesign|refactor|life admin|backend|product|garage|paperwork/.test(text);
 }
 
 function shouldSplitConcurrentCookingAi(action: ParsedAiAction, sourceText: string): boolean {

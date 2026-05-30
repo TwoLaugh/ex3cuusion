@@ -142,6 +142,106 @@ describe("interpretInboxInput", () => {
     });
   });
 
+  it("suppresses low-value follow-up questions for obvious simple tasks", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+
+    const entry = await interpretInboxInput(
+      "I need to cut my nails",
+      state,
+      async () => ({
+        model: "over-questioning-fixture",
+        summary: "Asking a question.",
+        actions: [
+          {
+            type: "ask_clarification",
+            label: "Clarify cut nails",
+            title: "Cut nails",
+            domainName: "House Work",
+            projectName: null,
+            dueDate: null,
+            scheduledDate: null,
+            scheduledTime: null,
+            effortMinutes: 15,
+            energy: "low",
+            strictness: "flexible",
+            priority: 2,
+            importance: 2,
+            urgency: 2,
+            recurrenceDays: null,
+            completionBehavior: null,
+            completionMode: null,
+            definitionOfDone: null,
+            tags: null,
+            question: "What would count as cutting your nails?",
+            clarificationKind: "definition_of_done",
+            clarificationOptions: ["Trim them", "File them"]
+          }
+        ]
+      })
+    );
+
+    expect(entry.actions[0]).toMatchObject({
+      type: "create_task",
+      safety: "auto_apply"
+    });
+    expect(entry.actions[0].payload).toMatchObject({
+      title: "Cut nails",
+      completionMode: "simple_done"
+    });
+  });
+
+  it("keeps high-value clarification questions with materiality metadata", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+
+    const entry = await interpretInboxInput(
+      "clean the house this weekend",
+      state,
+      async () => ({
+        model: "question-fixture",
+        summary: "Need one detail.",
+        actions: [
+          {
+            type: "ask_clarification",
+            label: "Clarify clean house",
+            title: "Clean house",
+            domainName: "House Work",
+            projectName: null,
+            dueDate: null,
+            scheduledDate: null,
+            scheduledTime: null,
+            effortMinutes: 90,
+            energy: "medium",
+            strictness: "flexible",
+            priority: 3,
+            importance: 4,
+            urgency: 2,
+            recurrenceDays: null,
+            completionBehavior: "exhaust_once",
+            completionMode: "progress_accumulating",
+            definitionOfDone: null,
+            tags: ["home"],
+            question: "What would count as enough cleaning for this task?",
+            clarificationKind: "definition_of_done",
+            clarificationOptions: ["Kitchen and bathroom", "One focused pass"]
+          }
+        ]
+      })
+    );
+
+    expect(entry.actions[0]).toMatchObject({
+      type: "ask_clarification",
+      safety: "needs_confirmation"
+    });
+    expect(entry.actions[0].payload).toMatchObject({
+      materiality: "high",
+      rationale: "The answer changes what completion means."
+    });
+  });
+
   it("keeps day, deadline, and week-window intent separate inside messy input", async () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";

@@ -179,6 +179,8 @@ describe("state integration", () => {
 
     expect(session.status).toBe("waiting_for_user");
     expect(question.kind).toBe("definition_of_done");
+    expect(question.materiality).toBe("high");
+    expect(session.messages.some((message) => message.role === "assistant" && message.content === question.question)).toBe(true);
     expect(afterCapture.inbox[0].actions[0].type).toBe("ask_clarification");
 
     const afterAnswer = answerCaptureQuestion(session.id, question.id, "Kitchen and bathroom are clean enough.");

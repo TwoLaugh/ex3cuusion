@@ -883,18 +883,44 @@ textarea {
 
 .inboxLog {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   margin-top: 18px;
 }
 
-.inboxLog article {
+.inboxSession {
   border-top: 1px solid var(--line);
   display: grid;
-  gap: 8px;
+  gap: 10px;
   padding-top: 12px;
 }
 
-.inboxLog span,
+.inboxSession.needsAnswer {
+  border-color: rgba(139, 184, 255, 0.36);
+}
+
+.chatMessage {
+  display: grid;
+  gap: 4px;
+}
+
+.chatMessage span {
+  color: var(--blue);
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chatMessage p {
+  color: var(--ink);
+  margin: 0;
+}
+
+.userMessage p {
+  color: var(--muted);
+}
+
 .subtasks span {
   color: var(--muted);
   display: block;
@@ -902,9 +928,10 @@ textarea {
 }
 
 .actionDecision {
-  display: inline-flex !important;
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-left: 8px;
 }
 
 .actionDecision button {
@@ -926,6 +953,36 @@ textarea {
 
 .clarificationCard strong {
   font-size: 0.94rem;
+}
+
+.clarificationCard small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.actionSummary {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.actionSummary strong,
+.actionDecision strong {
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+}
+
+.actionSummary span {
+  background: rgba(107, 214, 184, 0.1);
+  border: 1px solid rgba(107, 214, 184, 0.22);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 5px 9px;
 }
 
 .clarificationOptions,

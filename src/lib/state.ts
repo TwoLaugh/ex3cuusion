@@ -233,6 +233,12 @@ export async function submitInbox(input: string, interpreter?: AiInterpreter): P
       action.pendingQuestionId = question.id;
       session.questions.push(question);
       session.unresolvedFields.push(question.kind);
+      session.messages.push({
+        id: nextId("message"),
+        role: "assistant",
+        content: question.question,
+        createdAt: timestampForState(state)
+      });
     }
     session.actionIds.push(action.id);
   }
@@ -442,6 +448,8 @@ function buildClarificationQuestion(state: AppState, action: AiAction): Clarific
     question?: string;
     questionKind?: ClarificationKind;
     options?: string[];
+    materiality?: "low" | "medium" | "high";
+    rationale?: string;
   };
   return {
     id: nextId("question"),
@@ -451,6 +459,8 @@ function buildClarificationQuestion(state: AppState, action: AiAction): Clarific
     mode: "blocking",
     status: "pending",
     options: payload.options,
+    materiality: payload.materiality,
+    rationale: payload.rationale,
     createdAt: timestampForState(state)
   };
 }
