@@ -141,4 +141,38 @@ describe("interpretInboxInput", () => {
       draftAction: { title: "Clean house", completionMode: "progress_accumulating", scheduledTime: undefined }
     });
   });
+
+  it("keeps day, deadline, and week-window intent separate inside messy input", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+
+    const mixed = await interpretInboxInput("message Will today and book dentist sometime next week", state, fixtureInterpreter);
+    const message = mixed.actions.find((action) => action.payload.title === "Message Will");
+    const dentist = mixed.actions.find((action) => action.payload.title === "Book dentist");
+
+    expect(message?.payload).toMatchObject({
+      dateIntent: { kind: "today" }
+    });
+    expect(dentist?.payload).toMatchObject({
+      scheduledDate: undefined,
+      dueDate: undefined,
+      dateIntent: { kind: "week_window", startDate: "2026-06-08", endDate: "2026-06-14" }
+    });
+
+    const deadline = await interpretInboxInput("finish auth bug by Tuesday", state, fixtureInterpreter);
+    expect(deadline.actions[0].payload).toMatchObject({
+      title: "Finish auth bug",
+      dueDate: "2026-06-02",
+      scheduledDate: undefined,
+      dateIntent: { kind: "deadline", dueDate: "2026-06-02" }
+    });
+
+    const exactDay = await interpretInboxInput("call dentist on Tuesday", state, fixtureInterpreter);
+    expect(exactDay.actions[0].payload).toMatchObject({
+      title: "Call dentist",
+      scheduledDate: "2026-06-02",
+      dateIntent: { kind: "specific_date", scheduledDate: "2026-06-02" }
+    });
+  });
 });

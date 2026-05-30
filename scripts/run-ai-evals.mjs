@@ -204,7 +204,8 @@ function weekDateIntentScenarios() {
       ],
       expects: [
         taskExists("Water plants"),
-        planItemVisible("Water plants")
+        planItemVisible("Water plants"),
+        taskNestedField("Water plants", ["dateIntent", "kind"], "today")
       ]
     },
     {
@@ -224,11 +225,12 @@ function weekDateIntentScenarios() {
       name: "mixed today and future wording should split or ask",
       steps: [
         setTime("2026-06-02", "08:30"),
-        inbox("message Will today and book dentist sometime next week")
+        inbox("text Alex today and book dentist sometime next week")
       ],
       expects: [
-        taskExists("Message Will"),
-        either([pendingQuestion(), taskExistsMatching(/dentist/i)])
+        taskExists("Text Alex"),
+        taskNestedField("Text Alex", ["dateIntent", "kind"], "today"),
+        taskNestedField(/dentist/i, ["dateIntent", "kind"], "week_window")
       ]
     }
   ];
@@ -303,6 +305,17 @@ function taskField(title, field, value) {
     const task = findTask(debug, title);
     if (!task) return [`Expected task ${matcherLabel(title)} to exist for ${field}.`];
     return task[field] === value ? [] : [`Expected ${matcherLabel(title)} ${field}=${JSON.stringify(value)}, got ${JSON.stringify(task[field])}.`];
+  };
+}
+
+function taskNestedField(title, path, value) {
+  return (debug) => {
+    const task = findTask(debug, title);
+    if (!task) return [`Expected task ${matcherLabel(title)} to exist for ${path.join(".")}.`];
+    const observed = path.reduce((current, key) => current?.[key], task);
+    return observed === value
+      ? []
+      : [`Expected ${matcherLabel(title)} ${path.join(".")}=${JSON.stringify(value)}, got ${JSON.stringify(observed)}.`];
   };
 }
 
@@ -410,6 +423,7 @@ function summarize(debug) {
       dueDate: task.dueDate,
       scheduledDate: task.scheduledDate,
       scheduledTime: task.scheduledTime,
+      dateIntent: task.dateIntent,
       completionMode: task.completionMode,
       completionBehavior: task.completionBehavior
     })),

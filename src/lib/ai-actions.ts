@@ -1,8 +1,9 @@
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
+import { addDays, nextDayOfWeek, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
-import type { AiAction, AppState, ClarificationKind, CompletionBehavior, CompletionMode, InboxEntry, Task } from "./types";
+import type { AiAction, AppState, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, Task } from "./types";
 
 const aiActionSchema = z.object({
   summary: z.string(),
@@ -58,7 +59,7 @@ export async function interpretInboxInput(
 ): Promise<InboxEntry> {
   const parsed = await interpreter(input, state);
   const entryId = nextId("inbox");
-  const actions = parsed.actions.map((action) => buildAction(action, state, entryId, parsed.model));
+  const actions = parsed.actions.map((action) => buildAction(action, state, entryId, parsed.model, input));
 
   return {
     id: entryId,
@@ -93,6 +94,8 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
       "For reusable relationship ideas like 'ideas for things to do with Emma', use ask_clarification with title 'Ideas for things to do with Emma', completionBehavior keep_as_suggestion, completionMode suggestion_used, and ask whether to keep it as a reusable suggestion list. " +
       "For timeboxed work like 'work on Diet App for two hours', return create_task with completionBehavior repeatable, completionMode timebox, effortMinutes 120, and the matching existing project. " +
       "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
+      "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; keep those as week-level intent unless the user names a specific day or deadline. " +
+      "For deadline wording such as 'by Tuesday' or 'before Friday', set dueDate, not scheduledDate. For execution wording such as 'on Tuesday' or 'today', set scheduledDate. " +
       "Interpret sleep/bed at 'half 11' as 23:30 unless the user clearly means morning. " +
       "For explicit recurring habits, return create_routine with recurrenceDays when known. " +
       "For 'message Will every Friday', return create_routine with title 'Message Will' and recurrenceDays [5]. " +
@@ -330,6 +333,26 @@ export async function fixtureInterpreter(input: string, state: AppState): Promis
     };
   }
 
+  if (/call dentist/.test(lower)) {
+    return {
+      model: "fixture",
+      summary: "Call dentist was added.",
+      actions: [
+        baseAction("create_task", "Add Call dentist", "Call dentist", state, {
+          domainName: findDomainName(state, /health/i),
+          effortMinutes: 15,
+          energy: "low",
+          strictness: "normal",
+          priority: 3,
+          importance: 4,
+          urgency: 3,
+          completionBehavior: "exhaust_once",
+          completionMode: "simple_done"
+        })
+      ]
+    };
+  }
+
   const actions: ParsedAiAction[] = [];
   if (/back rehab daily/.test(lower)) {
     actions.push(baseAction("create_routine", "Add Back rehab routine", "Back rehab", state, {
@@ -379,8 +402,21 @@ export async function fixtureInterpreter(input: string, state: AppState): Promis
       urgency: 4
     }));
   }
+  if (/text alex|message alex/.test(lower)) {
+    actions.push(baseAction("create_task", "Add Text Alex", "Text Alex", state, {
+      domainName: findDomainName(state, /social/i),
+      effortMinutes: 10,
+      energy: "low",
+      strictness: "normal",
+      priority: 3,
+      importance: 3,
+      urgency: 4,
+      completionBehavior: "exhaust_once",
+      completionMode: "simple_done"
+    }));
+  }
   if (/book dentist|dentist/.test(lower) && /next week|sometime/.test(lower)) {
-    actions.push(baseAction("ask_clarification", "Clarify dentist timing", "Book dentist", state, {
+    actions.push(baseAction("create_task", "Add Book dentist", "Book dentist", state, {
       domainName: findDomainName(state, /health/i),
       effortMinutes: 15,
       energy: "low",
@@ -388,9 +424,9 @@ export async function fixtureInterpreter(input: string, state: AppState): Promis
       priority: 3,
       importance: 4,
       urgency: 2,
-      question: "When next week should this be planned or followed up?",
-      clarificationKind: "date",
-      clarificationOptions: ["Monday", "Tuesday", "Any weekday", "Just keep it in next week backlog"]
+      completionBehavior: "exhaust_once",
+      completionMode: "simple_done",
+      tags: ["health", "next-week"]
     }));
   }
 
@@ -435,8 +471,8 @@ function baseAction(
   };
 }
 
-function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string): AiAction {
-  const action = normalizeParsedAction(rawAction, state);
+function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction {
+  const action = normalizeParsedAction(rawAction, state, sourceText);
   const validationErrors = validateStructuredAction(action, state);
   const safety = classifyRisk(action, validationErrors);
   const domainId = findDomainId(state, action.domainName, "domain_work");
@@ -475,7 +511,7 @@ function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: st
               contextNote: ""
             }
           : normalizedType === "create_task"
-            ? taskPayload(state, action, inboxItemId, projectId)
+            ? taskPayload(state, action, inboxItemId, projectId, sourceText)
             : normalizedType === "schedule_block"
               ? {
                   projectId,
@@ -489,12 +525,12 @@ function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: st
                   questionKind: action.clarificationKind ?? "next_action",
                   options: action.clarificationOptions ?? [],
                   draftActionType: "create_task",
-                  draftAction: taskPayload(state, { ...action, type: "create_task" }, inboxItemId, projectId)
+                  draftAction: taskPayload(state, { ...action, type: "create_task" }, inboxItemId, projectId, sourceText)
                 }
   };
 }
 
-function normalizeParsedAction(action: ParsedAiAction, state: AppState): ParsedAiAction {
+function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceText = ""): ParsedAiAction {
   const normalized = { ...action };
   normalized.projectName = cleanNullableString(normalized.projectName);
   normalized.dueDate = cleanNullableString(normalized.dueDate);
@@ -505,12 +541,15 @@ function normalizeParsedAction(action: ParsedAiAction, state: AppState): ParsedA
   if (normalized.projectName && !findProjectId(state, normalized.projectName)) normalized.projectName = null;
   if (normalized.dueDate && !normalizeDate(normalized.dueDate, state.currentDate)) normalized.dueDate = null;
   if (normalized.scheduledDate && !normalizeDate(normalized.scheduledDate, state.currentDate)) normalized.scheduledDate = null;
-  const combined = `${normalized.title} ${normalized.label} ${normalized.question ?? ""}`.toLowerCase();
+  const actionSource = relevantSourceText(normalized, sourceText);
+  const combined = `${normalized.title} ${normalized.label} ${normalized.question ?? ""} ${actionSource}`.toLowerCase();
   const definitionLooksLikeQuestion = Boolean(normalized.definitionOfDone && /\\?|what counts|what should|include/i.test(normalized.definitionOfDone));
 
   if (normalized.scheduledTime && !/^\d{2}:\d{2}$/.test(normalized.scheduledTime)) {
     normalized.scheduledTime = null;
   }
+
+  applyRelativeDateHints(normalized, state, actionSource);
 
   if (normalized.type === "schedule_block" && /work on|diet app|product/.test(combined)) {
     normalized.type = "create_task";
@@ -582,6 +621,99 @@ function normalizeParsedAction(action: ParsedAiAction, state: AppState): ParsedA
   return normalized;
 }
 
+function applyRelativeDateHints(action: ParsedAiAction, state: AppState, sourceText: string): void {
+  const text = sourceText.toLowerCase();
+  const deadlineDay = findNamedDay(text, /\b(?:by|before|due)\s+(?:next\s+|this\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if (deadlineDay !== undefined) {
+    action.dueDate = nextDayOfWeek(state.currentDate, deadlineDay, true);
+  }
+
+  const exactDay = findNamedDay(text, /\b(?:on|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if (exactDay !== undefined && deadlineDay === undefined) {
+    action.scheduledDate = nextDayOfWeek(state.currentDate, exactDay, true);
+  }
+
+  const nextExactDay = findNamedDay(text, /\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if (nextExactDay !== undefined && deadlineDay === undefined) {
+    action.scheduledDate = nextDayOfWeek(state.currentDate, nextExactDay, false);
+  }
+
+  if (/\btomorrow\b/.test(text) && !action.scheduledDate && !action.dueDate) {
+    action.scheduledDate = addDays(state.currentDate, 1);
+  }
+
+  if (/\b(today|tonight)\b/.test(text) && !action.scheduledDate && !action.dueDate) {
+    action.scheduledDate = state.currentDate;
+  }
+}
+
+function deriveDateIntent(action: ParsedAiAction, state: AppState, sourceText: string): DateIntent {
+  const text = sourceText.toLowerCase();
+  const scheduledDate = normalizeDate(action.scheduledDate ?? undefined, state.currentDate);
+  const dueDate = normalizeDate(action.dueDate ?? undefined, state.currentDate);
+
+  if (action.type === "create_routine" || action.recurrenceDays?.length) {
+    return { kind: "recurring", originalText: sourceText || undefined, confidence: 0.8 };
+  }
+  if (scheduledDate === state.currentDate && /\b(today|tonight)\b/.test(text)) {
+    return { kind: "today", originalText: sourceText || undefined, scheduledDate, confidence: 0.85 };
+  }
+  if (dueDate === state.currentDate && /\b(today|tonight)\b/.test(text)) {
+    return { kind: "today", originalText: sourceText || undefined, dueDate, confidence: 0.75 };
+  }
+  if (scheduledDate === addDays(state.currentDate, 1) && /\btomorrow\b/.test(text)) {
+    return { kind: "tomorrow", originalText: sourceText || undefined, scheduledDate, confidence: 0.85 };
+  }
+  if (scheduledDate) {
+    return { kind: "specific_date", originalText: sourceText || undefined, scheduledDate, confidence: 0.75 };
+  }
+  if (dueDate) {
+    return { kind: "deadline", originalText: sourceText || undefined, dueDate, confidence: 0.75 };
+  }
+  if (/\bnext week\b/.test(text)) {
+    return { kind: "week_window", originalText: sourceText || undefined, ...nextWeekRange(state.currentDate), confidence: 0.75 };
+  }
+  if (/\b(this week|weekend)\b/.test(text)) {
+    return { kind: "week_window", originalText: sourceText || undefined, ...weekRange(state.currentDate), confidence: 0.65 };
+  }
+  if (/\b(someday|eventually|one day|not urgent|no rush|maybe later)\b/.test(text)) {
+    return { kind: "someday", originalText: sourceText || undefined, confidence: 0.65 };
+  }
+  return { kind: "none", originalText: sourceText || undefined, confidence: 0.35 };
+}
+
+function relevantSourceText(action: ParsedAiAction, sourceText: string): string {
+  if (!sourceText.trim()) return "";
+  const titleWords = significantWords(action.title);
+  if (!titleWords.length) return sourceText;
+  const chunks = sourceText
+    .split(/\b(?:and|then|also)\b|[,;]\s*/i)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+  const direct = chunks.find((chunk) => {
+    const lower = chunk.toLowerCase();
+    return titleWords.some((word) => lower.includes(word));
+  });
+  return direct ?? sourceText;
+}
+
+function significantWords(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 3 && !["task", "add", "the", "and", "with"].includes(word));
+}
+
+function findNamedDay(text: string, pattern: RegExp): number | undefined {
+  const match = text.match(pattern);
+  if (!match) return undefined;
+  return dayNameToIndex(match[1]);
+}
+
+function dayNameToIndex(day: string): number {
+  return ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"].indexOf(day.toLowerCase());
+}
+
 function cleanNullableString(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
@@ -629,13 +761,15 @@ function taskPayload(
   state: AppState,
   action: ParsedAiAction,
   inboxItemId: string,
-  projectId?: string
+  projectId?: string,
+  sourceText = ""
 ): Omit<Task, "id"> {
   const completionBehavior = inferCompletionBehavior(action);
   const completionMode = inferCompletionMode(action, projectId, completionBehavior);
   const dueDate = action.dueDate ?? undefined;
   const scheduledDate = action.scheduledDate ?? undefined;
   const scheduledTime = action.scheduledTime && /^\d{2}:\d{2}$/.test(action.scheduledTime) ? action.scheduledTime : undefined;
+  const dateIntent = deriveDateIntent(action, state, relevantSourceText(action, sourceText));
   return {
     title: action.title,
     type: projectId ? "project_task" : completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "atomic",
@@ -667,6 +801,7 @@ function taskPayload(
     dueDate: normalizeDate(dueDate, state.currentDate),
     scheduledDate: normalizeDate(scheduledDate, state.currentDate) ?? (scheduledTime ? state.currentDate : undefined),
     scheduledTime,
+    dateIntent,
     effortMinutes: action.effortMinutes,
     minMinutes: action.completionMode === "timebox" ? action.effortMinutes : undefined,
     maxMinutes: action.effortMinutes >= 60 ? Math.round(action.effortMinutes * 1.5) : undefined,

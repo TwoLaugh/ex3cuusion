@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { buildDayPlan } from "@/lib/planner";
 import { getState } from "@/lib/state";
+import { buildWeekPlan } from "@/lib/week-plan";
 
 export async function GET() {
   const state = getState();
@@ -43,6 +44,7 @@ export async function GET() {
       dueDate: task.dueDate,
       scheduledDate: task.scheduledDate,
       scheduledTime: task.scheduledTime,
+      dateIntent: task.dateIntent,
       effortMinutes: task.effortMinutes
     })),
     planItems: buildDayPlan(state).items.map((item) => ({
@@ -55,6 +57,7 @@ export async function GET() {
       taskId: item.taskId,
       selectedTaskIds: item.selectedTaskIds
     })),
-    executionEvents: state.executionEvents
+    executionEvents: state.executionEvents,
+    week: buildWeekPlan(state)
   });
 }

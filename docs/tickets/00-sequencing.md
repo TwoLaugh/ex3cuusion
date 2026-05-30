@@ -20,20 +20,23 @@ Build the execution engine in this order:
 14. Static live AI capture evals
 15. Simulated day AI evals
 16. Week and date-intent AI evals
-17. Blind scenario generation
-18. AI eval reporting and regression thresholds
-19. Background, phased, and concurrent work
-20. Minimal UI for rich internal structure
-21. Database schema and migrations
-22. Manual CRUD/admin resources
-23. Today page with manual plan generation
-24. Completion and deferral loop
-25. AI inbox structured actions
-26. Planner scoring and project blocks
-27. Daily review calibration
-28. Mobile web polish
-29. Android V1 wrapper/native decision
-30. V2 proactive structure hygiene
+17. Date intent task model
+18. Week planning read model
+19. Week-aware AI capture
+20. Blind scenario generation
+21. AI eval reporting and regression thresholds
+22. Background, phased, and concurrent work
+23. Minimal UI for rich internal structure
+24. Database schema and migrations
+25. Manual CRUD/admin resources
+26. Today page with manual plan generation
+27. Completion and deferral loop
+28. AI inbox structured actions
+29. Planner scoring and project blocks
+30. Daily review calibration
+31. Mobile web polish
+32. Android V1 wrapper/native decision
+33. V2 proactive structure hygiene
 
 V1 is web-first. Do not begin Android implementation until Today, AI inbox, planner, and review flows are usable on web.
 
@@ -47,7 +50,7 @@ Outcome: user can manually maintain work and execute Today without AI.
 
 ### M2: AI Capture And Clarification
 
-Tickets: T018, T026, T027, T028, T029, T030, T031, T032, T033, T034, T035, T036, T037, T005, T006, T007.
+Tickets: T018, T026, T027, T028, T029, T030, T031, T032, T033, T034, T038, T039, T040, T035, T036, T037, T005, T006, T007.
 
 Outcome: messy input becomes validated tasks/routines/projects/proposals, with clarifying chat and eval coverage for static, day-context, and week/date-intent behavior.
 

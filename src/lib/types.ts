@@ -16,6 +16,7 @@ export type CompletionMode =
   | "suggestion_used";
 export type IntentType = "obligation" | "maintenance" | "progress" | "relationship" | "idea" | "admin" | "health" | "recovery";
 export type PressureLevel = "fixed" | "due" | "scheduled" | "soft" | "someday";
+export type DateIntentKind = "none" | "today" | "tomorrow" | "specific_date" | "deadline" | "week_window" | "someday" | "recurring";
 export type ExecutionEventType =
   | "completed"
   | "worked_on"
@@ -117,6 +118,16 @@ export interface DelegationMetadata {
   note?: string;
 }
 
+export interface DateIntent {
+  kind: DateIntentKind;
+  originalText?: string;
+  startDate?: string;
+  endDate?: string;
+  dueDate?: string;
+  scheduledDate?: string;
+  confidence: number;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -141,6 +152,7 @@ export interface Task {
   dueDate?: string;
   scheduledDate?: string;
   scheduledTime?: string;
+  dateIntent?: DateIntent;
   effortMinutes: number;
   minMinutes?: number;
   maxMinutes?: number;
@@ -209,6 +221,31 @@ export interface CompletionEvent {
   planItemId: string;
   taskIds?: string[];
   actualMinutes?: number;
+}
+
+export interface WeekPlanDay {
+  date: string;
+  plan: DayPlan;
+}
+
+export interface WeekBacklogItem {
+  taskId: string;
+  title: string;
+  dateIntent: DateIntent;
+  dueDate?: string;
+  scheduledDate?: string;
+  projectId?: string;
+  domainId: string;
+  effortMinutes: number;
+}
+
+export interface WeekPlan {
+  startDate: string;
+  endDate: string;
+  days: WeekPlanDay[];
+  thisWeekBacklog: WeekBacklogItem[];
+  nextWeekBacklog: WeekBacklogItem[];
+  someday: WeekBacklogItem[];
 }
 
 export interface ExecutionEvent {
