@@ -99,6 +99,7 @@ function unquoteEnvValue(value) {
 function scenarios() {
   return [
     ...staticScenarios(),
+    ...clarificationPolicyScenarios(),
     ...simulatedDayScenarios(),
     ...weekDateIntentScenarios()
   ];
@@ -179,6 +180,80 @@ function staticScenarios() {
         taskNestedField("Cook dinner", ["scheduling", "mode"], "concurrent"),
         taskNestedField("Run AI report draft", ["scheduling", "mode"], "background"),
         taskNestedField("Run AI report draft", ["scheduling", "attentionLoad"], "passive")
+      ]
+    }
+  ];
+}
+
+function clarificationPolicyScenarios() {
+  return [
+    {
+      phase: "clarification-policy",
+      name: "obvious chore suppresses clarification",
+      steps: [
+        setTime("2026-06-01", "20:30"),
+        inbox("I need to cut my nails tonight")
+      ],
+      expects: [
+        taskExists(/cut.*nails/i),
+        noPendingQuestion(),
+        clarificationDecision("suppressed")
+      ]
+    },
+    {
+      phase: "clarification-policy",
+      name: "messy split errands infer without asking",
+      steps: [
+        setTime("2026-06-02", "08:30"),
+        inbox("text Alex today and book dentist sometime next week")
+      ],
+      expects: [
+        taskExists("Text Alex"),
+        taskNestedField("Text Alex", ["dateIntent", "kind"], "today"),
+        taskNestedField(/dentist/i, ["dateIntent", "kind"], "week_window"),
+        noPendingQuestion(),
+        clarificationDecision("suppressed")
+      ]
+    },
+    {
+      phase: "clarification-policy",
+      name: "follow-up correction revises without asking",
+      steps: [
+        setTime("2026-06-02", "08:30"),
+        inbox("Add a task called Water plants today for 10 minutes."),
+        followUpLatestSession("actually tomorrow is better")
+      ],
+      expects: [
+        taskExists("Water plants"),
+        taskNestedField("Water plants", ["dateIntent", "kind"], "tomorrow"),
+        noPendingQuestion(),
+        clarificationDecision("suppressed")
+      ]
+    },
+    {
+      phase: "clarification-policy",
+      name: "broad outcome work asks blocking question",
+      steps: [
+        setTime("2026-06-01", "08:30"),
+        inbox("clean the house this weekend")
+      ],
+      expects: [
+        pendingQuestionKind("definition_of_done"),
+        questionMateriality("high"),
+        clarificationDecision("blocking")
+      ]
+    },
+    {
+      phase: "clarification-policy",
+      name: "reusable suggestions ask optional storage question",
+      steps: [
+        setTime("2026-06-01", "08:30"),
+        inbox("ideas for things to do with Emma")
+      ],
+      expects: [
+        pendingQuestionKind("completion_behavior"),
+        questionMateriality("medium"),
+        clarificationDecision("optional")
       ]
     }
   ];
@@ -409,6 +484,22 @@ function noPendingQuestion() {
   return (debug) => (debug.captureSessions.some((session) => session.questions.some((question) => question.status === "pending")) ? ["Expected no pending clarification question."] : []);
 }
 
+function questionMateriality(materiality) {
+  return (debug) => {
+    const question = latestQuestion(debug);
+    return question?.materiality === materiality
+      ? []
+      : [`Expected latest question materiality "${materiality}", got ${question?.materiality ?? "none"}.`];
+  };
+}
+
+function clarificationDecision(decision) {
+  return (debug) => {
+    const observed = classifyClarification(debug).decision;
+    return observed === decision ? [] : [`Expected clarification decision "${decision}", got "${observed}".`];
+  };
+}
+
 function latestDraftTitle(title) {
   return (debug) => {
     const action = debug.inbox[0]?.actions[0];
@@ -449,6 +540,17 @@ function latestQuestion(debug) {
   return debug.captureSessions[0]?.questions[0];
 }
 
+function classifyClarification(debug) {
+  const question = latestQuestion(debug);
+  if (!question || question.status !== "pending") {
+    return { decision: "suppressed" };
+  }
+  if (question.materiality === "high") {
+    return { decision: "blocking", kind: question.kind, materiality: question.materiality };
+  }
+  return { decision: "optional", kind: question.kind, materiality: question.materiality ?? "medium" };
+}
+
 function findTask(debug, title) {
   return debug.tasks.find((task) => matches(task.title, title));
 }
@@ -467,6 +569,7 @@ function matcherLabel(matcher) {
 
 function summarize(debug) {
   return {
+    clarification: classifyClarification(debug),
     latestInbox: debug.inbox[0]
       ? {
           summary: debug.inbox[0].summary,
@@ -486,7 +589,9 @@ function summarize(debug) {
           questions: debug.captureSessions[0].questions.map((question) => ({
             kind: question.kind,
             status: question.status,
-            question: question.question
+            question: question.question,
+            materiality: question.materiality,
+            rationale: question.rationale
           }))
         }
       : null,
@@ -519,7 +624,8 @@ function printReport(results) {
     const passed = phaseResults.filter((result) => result.ok).length;
     console.log(`\n${phase}: ${passed}/${phaseResults.length} passed`);
     for (const result of phaseResults) {
-      console.log(`  ${result.ok ? "PASS" : "FAIL"} ${result.name}`);
+      const clarification = result.observed.clarification?.decision ? ` [clarification: ${result.observed.clarification.decision}]` : "";
+      console.log(`  ${result.ok ? "PASS" : "FAIL"} ${result.name}${clarification}`);
       for (const failure of result.failures) {
         console.log(`    - ${failure}`);
       }

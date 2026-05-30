@@ -360,7 +360,7 @@ export async function addCaptureSessionMessage(sessionId: string, message: strin
   const before = taskSnapshot(target.task);
   try {
     const revision = await interpretCaptureRevision(trimmed, state, session, target.task, interpreter);
-    changes = applyRevisionToTask(state, target.task, revision);
+    changes = applyRevisionToTask(state, target.task, revision, trimmed);
     summary = revision.summary;
     revisionMeta = { model: revision.model, confidence: revision.confidence };
   } catch (error) {
@@ -783,14 +783,14 @@ function applyFollowUpToTask(state: AppState, task: Task, message: string): stri
   return changes;
 }
 
-function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevision): string[] {
+function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevision, message: string): string[] {
   if (!revision.shouldApply || revision.confidence < 0.4) {
     task.notes = [task.notes, revision.note || revision.summary].filter(Boolean).join("\n");
     return [];
   }
 
   const changes: string[] = [];
-  if (revision.title?.trim() && revision.title.trim() !== task.title) {
+  if (shouldApplyRevisionTitle(task, revision, message)) {
     task.title = revision.title.trim();
     changes.push("renamed");
   }
@@ -840,6 +840,14 @@ function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevis
   }
 
   return uniqueChanges(changes.length ? changes : revision.changes);
+}
+
+function shouldApplyRevisionTitle(task: Task, revision: CaptureRevision, message: string): revision is CaptureRevision & { title: string } {
+  const title = revision.title?.trim();
+  if (!title || title === task.title) return false;
+  if (!/\b(rename|retitle|call it|called|name it|named|change (the )?title)\b/i.test(message)) return false;
+  if (title.length < 3 || !/[A-Za-z0-9]/.test(title) || /[{}/*\\<>]/.test(title)) return false;
+  return true;
 }
 
 function applyRevisionDate(state: AppState, task: Task, revision: CaptureRevision): string | undefined {

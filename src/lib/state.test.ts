@@ -296,6 +296,39 @@ describe("state integration", () => {
     });
   });
 
+  it("ignores model-generated revision titles unless the user explicitly renames the task", async () => {
+    const afterCapture = await submitInbox("Add a task called Water plants today for 10 minutes.", fixtureInterpreter);
+    const session = afterCapture.captureSessions[0];
+    const task = afterCapture.tasks.find((candidate) => candidate.title === "Water plants");
+
+    const afterFollowUp = await addCaptureSessionMessage(session.id, "actually tomorrow is better", async () => ({
+      model: "revision-fixture",
+      summary: "Scheduled it for tomorrow.",
+      shouldApply: true,
+      confidence: 0.9,
+      title: "/**/",
+      projectName: null,
+      domainName: null,
+      dateIntent: "tomorrow",
+      scheduledDate: "2026-06-02",
+      dueDate: null,
+      effortMinutes: null,
+      priority: null,
+      importance: null,
+      urgency: null,
+      definitionOfDone: null,
+      completionBehavior: null,
+      completionMode: null,
+      note: null,
+      changes: ["scheduled for tomorrow"]
+    }));
+    const updated = afterFollowUp.tasks.find((candidate) => candidate.id === task!.id);
+
+    expect(updated?.title).toBe("Water plants");
+    expect(updated?.dateIntent?.kind).toBe("tomorrow");
+    expect(afterFollowUp.tasks.some((candidate) => candidate.title === "/**/")).toBe(false);
+  });
+
   it("advances dates for full-week simulations", () => {
     expect(getState().currentDate).toBe("2026-06-01");
     advanceDay();

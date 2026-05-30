@@ -209,6 +209,7 @@ async function defaultRevisionInterpreter({
     instructions:
       "You revise one existing task inside a personal execution planner from a short follow-up message. " +
       "Return only fields the user is clearly correcting or adding. Do not create a new task. " +
+      "Set title to null unless the follow-up explicitly asks to rename, retitle, call, or name the task. " +
       "Use projectName only when it exactly matches an existing project/person/container. " +
       "For broad date windows like 'next week' set dateIntent to next_week and leave scheduledDate/dueDate null. " +
       "For deadline wording like 'by Friday' use dueDate. For execution wording like 'tomorrow' or 'today' use scheduledDate/dateIntent. " +

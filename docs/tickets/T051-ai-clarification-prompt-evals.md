@@ -1,6 +1,6 @@
 # T051: AI Clarification Prompt Evals
 
-Status: planned.
+Status: implemented in V1 foundation.
 
 ## Goal
 
