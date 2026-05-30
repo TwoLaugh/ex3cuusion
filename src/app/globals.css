@@ -715,6 +715,118 @@ h1 {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.taskSections {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.taskSection {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.sectionHeader {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 10px;
+}
+
+.sectionHeader h2 {
+  font-size: 1rem;
+  margin-bottom: 4px;
+}
+
+.sectionHeader p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.sectionHeader > span {
+  align-items: center;
+  background: rgba(107, 214, 184, 0.1);
+  border: 1px solid rgba(107, 214, 184, 0.22);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  justify-content: center;
+  min-width: 30px;
+  padding: 5px 9px;
+}
+
+.taskCards {
+  display: grid;
+  gap: 8px;
+}
+
+.taskCard {
+  align-items: start;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+  padding: 12px;
+}
+
+.taskCard h3 {
+  font-size: 0.98rem;
+  margin: 0 0 5px;
+}
+
+.taskCard p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.badgeRow {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+}
+
+.taskBadge {
+  background: rgba(139, 184, 255, 0.1);
+  border: 1px solid rgba(139, 184, 255, 0.18);
+  border-radius: 999px;
+  color: #b8d0ff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 3px 7px;
+  text-transform: capitalize;
+}
+
+.highlightBadge {
+  background: rgba(107, 214, 184, 0.1);
+  border-color: rgba(107, 214, 184, 0.22);
+  color: var(--accent-strong);
+}
+
+.projectCard {
+  display: grid;
+  gap: 10px;
+}
+
+.projectTaskList {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  padding-top: 9px;
+}
+
+.projectTaskList small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .notDonePanel {
   max-width: 440px;
   width: min(440px, 100%);
@@ -936,6 +1048,14 @@ textarea {
   .panelList article {
     align-items: start;
     grid-template-columns: 1fr;
+  }
+
+  .taskCard {
+    grid-template-columns: 1fr;
+  }
+
+  .badgeRow {
+    justify-content: flex-start;
   }
 
   .unscheduledItem {

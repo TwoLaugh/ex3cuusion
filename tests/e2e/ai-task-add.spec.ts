@@ -143,3 +143,24 @@ test("background and concurrent AI work is visible as intentional overlap", asyn
   expect(dinner?.scheduling).toMatchObject({ mode: "concurrent", attentionLoad: "partial", canOverlap: true });
   expect(report?.scheduling).toMatchObject({ mode: "background", attentionLoad: "passive", canOverlap: true });
 });
+
+test("burger task panel exposes next-week backlog without a calendar grid", async ({ page, request }) => {
+  await request.post("/api/state");
+  await request.post("/api/time", { data: { date: "2026-06-02", time: "08:30" } });
+  await request.post("/api/inbox", { data: { input: "book dentist sometime next week" } });
+  await page.goto("/");
+
+  await page.getByLabel("Open menu").click();
+  await page.getByRole("button", { name: "Tasks" }).click();
+
+  const nextWeek = page.getByLabel("Next week backlog");
+  await expect(nextWeek.getByRole("heading", { name: "Next week backlog" })).toBeVisible();
+  await expect(nextWeek.getByText("Book dentist")).toBeVisible();
+  await expect(nextWeek.getByText("08.06.26-14.06.26")).toBeVisible();
+  await expect(page.getByTestId("plan-item-Book dentist")).toHaveCount(0);
+
+  await page.getByLabel("Close Tasks").click();
+  await page.getByLabel("Open menu").click();
+  await page.getByRole("button", { name: "Planning preferences" }).click();
+  await expect(page.getByText(/1 next week/)).toBeVisible();
+});

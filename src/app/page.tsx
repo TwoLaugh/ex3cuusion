@@ -2,6 +2,7 @@
 
 import { Bot, Check, ChevronLeft, ChevronRight, Clock3, Layers3, Menu, Send, Undo2, X } from "lucide-react";
 import { Dispatch, SetStateAction, useEffect, useMemo, useState } from "react";
+import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 
 type ApiPayload = { state: AppState; plan: DayPlan };
@@ -380,6 +381,10 @@ function SecondaryPanel({
   plan: DayPlan;
   onClose: () => void;
 }) {
+  const taskGroups = buildTaskGroups(state, plan);
+  const projectSummaries = buildProjectSummaries(state);
+  const backlogSummary = buildBacklogSummary(state, plan);
+
   return (
     <section className="secondaryPanel" aria-label={view}>
       <button className="iconButton closeButton" onClick={onClose} aria-label={`Close ${view}`}>
@@ -398,27 +403,59 @@ function SecondaryPanel({
       )}
       {view === "Projects" && (
         <div className="panelGrid">
-          {state.projects.map((project) => (
-            <article key={project.id}>
+          {projectSummaries.map(({ project, activeTasks, nextTasks }) => (
+            <article key={project.id} className="projectCard">
               <h2>{project.name}</h2>
               <p>{project.contextNote || project.planningMode}</p>
               <span>
-                {project.kind} - {project.planningMode} - {project.defaultBlockMinutes}m
+                {project.kind} - {project.planningMode} - {activeTasks.length} active - {project.defaultBlockMinutes}m
               </span>
+              <div className="projectTaskList">
+                {nextTasks.length === 0 && <small>No active child tasks.</small>}
+                {nextTasks.map((task) => (
+                  <small key={task.id}>
+                    {task.title} · {task.effortMinutes}m · {dateIntentLabel(task)}
+                  </small>
+                ))}
+              </div>
             </article>
           ))}
         </div>
       )}
       {view === "Tasks" && (
-        <div className="panelList">
-          {state.tasks.map((task) => (
-            <article key={task.id}>
-              <div>
-                <h2>{task.title}</h2>
-                <p>{task.definitionOfDone || task.notes || task.plannerFields.intentType}</p>
+        <div className="taskSections">
+          {taskGroups.map((group) => (
+            <section className="taskSection" aria-label={group.title} key={group.title}>
+              <div className="sectionHeader">
+                <div>
+                  <h2>{group.title}</h2>
+                  <p>{group.description}</p>
+                </div>
+                <span>{group.tasks.length}</span>
               </div>
-              <span>{taskSummary(task)}</span>
-            </article>
+              <div className="taskCards">
+                {group.tasks.length === 0 && <p className="emptyPanel">Nothing here.</p>}
+                {group.tasks.map((task) => (
+                  <article className="taskCard" key={`${group.title}_${task.id}`}>
+                    <div>
+                      <h3>{task.title}</h3>
+                      <p>{task.definitionOfDone || task.notes || task.plannerFields.intentType}</p>
+                    </div>
+                    <div className="badgeRow">
+                      <span className="taskBadge">{task.status}</span>
+                      <span className="taskBadge">{dateIntentLabel(task)}</span>
+                      <span className="taskBadge">{task.effortMinutes}m</span>
+                      {task.projectId && <span className="taskBadge">{projectName(state, task.projectId)}</span>}
+                      {task.scheduling?.mode && task.scheduling.mode !== "exclusive" && (
+                        <span className="taskBadge highlightBadge">
+                          {task.scheduling.mode}/{task.scheduling.attentionLoad}
+                        </span>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}
@@ -448,6 +485,13 @@ function SecondaryPanel({
             <h2>Time Model</h2>
             <p>{schedulingSummary(state)}</p>
             <span>{state.currentDate} - {state.currentTime}</span>
+          </article>
+          <article>
+            <h2>Backlog</h2>
+            <p>{backlogSummary.text}</p>
+            <span>
+              {backlogSummary.thisWeek} this week - {backlogSummary.nextWeek} next week - {backlogSummary.someday} someday
+            </span>
           </article>
         </div>
       )}
@@ -484,6 +528,117 @@ function PlanItemMeta({ item }: { item: PlanItem }) {
       {item.attentionLoad && item.attentionLoad !== "full" && <span className="loadPill">{item.attentionLoad}</span>}
     </div>
   );
+}
+
+type Task = AppState["tasks"][number];
+
+function buildTaskGroups(state: AppState, plan: DayPlan): { title: string; description: string; tasks: Task[] }[] {
+  const plannedTaskIds = new Set(plan.items.flatMap((item) => [...(item.taskId ? [item.taskId] : []), ...(item.selectedTaskIds ?? [])]));
+  const openTasks = state.tasks.filter((task) => !["completed", "archived"].includes(task.status));
+  const plannedToday = openTasks.filter((task) => plannedTaskIds.has(task.id));
+  const blockedWaiting = openTasks.filter((task) => ["blocked", "waiting"].includes(task.status));
+  const background = openTasks.filter((task) => task.scheduling && task.scheduling.mode !== "exclusive");
+  const nextWeek = openTasks.filter((task) => !plannedTaskIds.has(task.id) && isTaskInNamedWeek(task, state.currentDate, "next"));
+  const thisWeek = openTasks.filter(
+    (task) =>
+      !plannedTaskIds.has(task.id) &&
+      !nextWeek.some((candidate) => candidate.id === task.id) &&
+      isTaskInNamedWeek(task, state.currentDate, "this")
+  );
+  const someday = openTasks.filter(
+    (task) =>
+      !plannedTaskIds.has(task.id) &&
+      !nextWeek.some((candidate) => candidate.id === task.id) &&
+      !thisWeek.some((candidate) => candidate.id === task.id) &&
+      isSomedayTask(task)
+  );
+  const loose = openTasks.filter(
+    (task) =>
+      !plannedTaskIds.has(task.id) &&
+      !nextWeek.some((candidate) => candidate.id === task.id) &&
+      !thisWeek.some((candidate) => candidate.id === task.id) &&
+      !someday.some((candidate) => candidate.id === task.id) &&
+      !blockedWaiting.some((candidate) => candidate.id === task.id)
+  );
+
+  return [
+    { title: "Planned today", description: "Visible in the current day timeline or project block.", tasks: sortTasks(plannedToday) },
+    { title: "This week backlog", description: "Due, scheduled, or windowed inside the current week but not on this day.", tasks: sortTasks(thisWeek) },
+    { title: "Next week backlog", description: "Captured for next week without needing a full calendar view.", tasks: sortTasks(nextWeek) },
+    { title: "Someday / suggestions", description: "Soft ideas and reusable suggestions that should not compete with urgent work.", tasks: sortTasks(someday) },
+    { title: "Blocked / waiting", description: "Items that need an unblock action, person, or external event.", tasks: sortTasks(blockedWaiting) },
+    { title: "Background / phased", description: "Work that can overlap, run passively, or return in phases.", tasks: sortTasks(background) },
+    { title: "Loose backlog", description: "Active tasks without a strong date intent yet.", tasks: sortTasks(loose) }
+  ];
+}
+
+function buildProjectSummaries(state: AppState) {
+  return state.projects.map((project) => {
+    const activeTasks = state.tasks.filter((task) => task.projectId === project.id && !["completed", "archived"].includes(task.status));
+    return {
+      project,
+      activeTasks,
+      nextTasks: sortTasks(activeTasks).slice(0, 3)
+    };
+  });
+}
+
+function buildBacklogSummary(state: AppState, plan: DayPlan) {
+  const groups = buildTaskGroups(state, plan);
+  const count = (title: string) => groups.find((group) => group.title === title)?.tasks.length ?? 0;
+  const thisWeek = count("This week backlog");
+  const nextWeek = count("Next week backlog");
+  const someday = count("Someday / suggestions");
+  const blocked = count("Blocked / waiting");
+  return {
+    thisWeek,
+    nextWeek,
+    someday,
+    text: `${thisWeek + nextWeek} dated backlog tasks outside this day, ${someday} soft items, ${blocked} blocked or waiting.`
+  };
+}
+
+function sortTasks(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => b.priority + b.importance + b.urgency - (a.priority + a.importance + a.urgency));
+}
+
+function isTaskInNamedWeek(task: Task, currentDate: string, target: "this" | "next"): boolean {
+  const range = target === "this" ? weekRange(currentDate) : nextWeekRange(currentDate);
+  if (isDateInRange(task.scheduledDate, range.startDate, range.endDate)) return true;
+  if (isDateInRange(task.dueDate, range.startDate, range.endDate)) return true;
+  if (task.dateIntent?.kind === "week_window") {
+    return Boolean(task.dateIntent.startDate && task.dateIntent.endDate && task.dateIntent.startDate <= range.endDate && task.dateIntent.endDate >= range.startDate);
+  }
+  if (task.dateIntent?.kind === "deadline") return isDateInRange(task.dateIntent.dueDate, range.startDate, range.endDate);
+  if (task.dateIntent?.kind === "specific_date" || task.dateIntent?.kind === "today" || task.dateIntent?.kind === "tomorrow") {
+    return isDateInRange(task.dateIntent.scheduledDate, range.startDate, range.endDate);
+  }
+  return false;
+}
+
+function isSomedayTask(task: Task): boolean {
+  return (
+    task.dateIntent?.kind === "someday" ||
+    task.completionBehavior === "keep_as_suggestion" ||
+    task.plannerFields.pressureLevel === "someday" ||
+    task.plannerFields.pressureLevel === "soft"
+  );
+}
+
+function dateIntentLabel(task: Task): string {
+  if (task.dateIntent?.kind === "week_window" && task.dateIntent.startDate && task.dateIntent.endDate) {
+    return `${formatShortDate(task.dateIntent.startDate)}-${formatShortDate(task.dateIntent.endDate)}`;
+  }
+  if (task.dateIntent?.kind === "deadline" && task.dateIntent.dueDate) return `due ${formatShortDate(task.dateIntent.dueDate)}`;
+  if (task.dateIntent?.kind === "specific_date" && task.dateIntent.scheduledDate) return formatShortDate(task.dateIntent.scheduledDate);
+  if (task.dateIntent?.kind && task.dateIntent.kind !== "none") return task.dateIntent.kind.replace("_", " ");
+  if (task.scheduledDate) return formatShortDate(task.scheduledDate);
+  if (task.dueDate) return `due ${formatShortDate(task.dueDate)}`;
+  return task.plannerFields.pressureLevel;
+}
+
+function projectName(state: AppState, projectId: string): string {
+  return state.projects.find((project) => project.id === projectId)?.name ?? "Project";
 }
 
 function PlanItemActions({

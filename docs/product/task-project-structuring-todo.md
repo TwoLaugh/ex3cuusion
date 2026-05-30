@@ -343,14 +343,16 @@ Done in the current V1 foundation:
 26. Added planner support for passive and partial-attention overlap.
 27. Added AI capture inference for laundry, cooking, travel, and AI side-work style inputs.
 28. Added visible timeline/task panel UX for overlapped work.
+29. Added burger-bar task backlog sections for this week, next week, someday, blocked/waiting, and scheduling semantics.
+30. Added project/container task rollups.
+31. Kept the day navigator as the week inspection flow rather than adding a dense calendar grid.
 
 Still open for V1:
 
 1. Decide whether to rename `Project` to `Container` internally, or keep `Project` as the storage name with `kind`.
 2. Collapse routine templates into repeating-task semantics, or document exactly why they stay separate.
-3. Add a UI surface for the week read model.
-4. Add durable Postgres storage after the task/week model settles.
-5. Expand live-model evals around phased/background edge cases.
+3. Add durable Postgres storage after the task/week model settles.
+4. Expand live-model evals around phased/background edge cases.
 
 ## V2: Proactive AI Structure Hygiene
 

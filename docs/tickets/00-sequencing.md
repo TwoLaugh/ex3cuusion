@@ -30,17 +30,20 @@ Build the execution engine in this order:
 24. Planner overlap and phases
 25. AI background work capture
 26. Overlap UX pass
-27. Minimal UI for rich internal structure
-28. Database schema and migrations
-29. Manual CRUD/admin resources
-30. Today page with manual plan generation
-31. Completion and deferral loop
-32. AI inbox structured actions
-33. Planner scoring and project blocks
-34. Daily review calibration
-35. Mobile web polish
-36. Android V1 wrapper/native decision
-37. V2 proactive structure hygiene
+27. Burger task backlog sections
+28. Project panel task rollups
+29. Day navigator as week UX
+30. Minimal UI for rich internal structure
+31. Database schema and migrations
+32. Manual CRUD/admin resources
+33. Today page with manual plan generation
+34. Completion and deferral loop
+35. AI inbox structured actions
+36. Planner scoring and project blocks
+37. Daily review calibration
+38. Mobile web polish
+39. Android V1 wrapper/native decision
+40. V2 proactive structure hygiene
 
 V1 is web-first. Do not begin Android implementation until Today, AI inbox, planner, and review flows are usable on web.
 
@@ -54,7 +57,7 @@ Outcome: user can manually maintain work and execute Today without AI.
 
 ### M2: AI Capture And Clarification
 
-Tickets: T018, T026, T027, T028, T029, T030, T031, T032, T033, T034, T038, T039, T040, T035, T036, T037, T041, T042, T043, T044, T005, T006, T007.
+Tickets: T018, T026, T027, T028, T029, T030, T031, T032, T033, T034, T038, T039, T040, T035, T036, T037, T041, T042, T043, T044, T045, T046, T047, T005, T006, T007.
 
 Outcome: messy input becomes validated tasks/routines/projects/proposals, with clarifying chat and eval coverage for static, day-context, and week/date-intent behavior.
 

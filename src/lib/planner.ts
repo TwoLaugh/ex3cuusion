@@ -1,4 +1,4 @@
-import { addMinutes, dayOfWeek, daysUntil, maxTime, timeToMinutes } from "./dates";
+import { addMinutes, dayOfWeek, daysUntil, isDateInRange, maxTime, timeToMinutes } from "./dates";
 import type { AppState, DayPlan, LoadLevel, PlanItem, PlanItemStatus, Task } from "./types";
 
 type PlanCandidate = Omit<PlanItem, "startTime" | "endTime"> & {
@@ -34,6 +34,7 @@ function isTaskPlannable(task: Task, date: string): boolean {
     (["repeatable", "keep_as_suggestion", "regenerate_after_completion"].includes(task.completionBehavior) && task.status === "completed");
   if (!statusAllowsPlanning) return false;
   if (task.scheduledDate && task.scheduledDate !== date) return false;
+  if (task.dateIntent?.kind === "week_window" && !isDateInRange(date, task.dateIntent.startDate ?? "", task.dateIntent.endDate ?? "")) return false;
   if (!isRepeatPolicyDue(task, date)) return false;
   if (isInCompletionCooldown(task, date)) return false;
   return true;
