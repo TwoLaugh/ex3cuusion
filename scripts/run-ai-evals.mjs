@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { acquireDevServerLock } from "./dev-server-lock.mjs";
 
 const port = Number(process.env.EX3CUUSION_EVAL_PORT ?? 3021);
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -8,6 +9,7 @@ const jsonReport = process.argv.includes("--json");
 const isWindows = process.platform === "win32";
 const runner = isWindows ? "cmd.exe" : "npx";
 const requestTimeoutMs = Number(process.env.EX3CUUSION_EVAL_REQUEST_TIMEOUT_MS ?? (live ? 70_000 : 20_000));
+const slowRequestMs = Number(process.env.EX3CUUSION_EVAL_SLOW_MS ?? (live ? 10_000 : 2_000));
 
 loadLocalEnv();
 
@@ -23,6 +25,7 @@ const serverEnv = {
 if (!live) serverEnv.EX3CUUSION_AI_MODE = "fixture";
 if (live) delete serverEnv.EX3CUUSION_AI_MODE;
 
+const releaseDevServerLock = await acquireDevServerLock("AI eval");
 const serverArgs = isWindows
   ? ["/c", "npx", "next", "dev", "--hostname", "127.0.0.1", "--port", String(port)]
   : ["next", "dev", "--hostname", "127.0.0.1", "--port", String(port)];
@@ -58,6 +61,7 @@ try {
   process.exitCode = 1;
 } finally {
   stopServer();
+  releaseDevServerLock();
 }
 
 function stopServer() {
@@ -524,7 +528,7 @@ async function post(path, body) {
     body: JSON.stringify(body)
   });
   if (!response.ok) {
-    throw new Error(`${path} failed with ${response.status}: ${await response.text()}`);
+    throw new Error(`${path} failed with ${response.status}: ${await responseError(response)}`);
   }
   return response.json();
 }
@@ -544,18 +548,34 @@ async function getDebug() {
 async function fetchWithTimeout(path, options = {}, timeoutMs = requestTimeoutMs) {
   const controller = new AbortController();
   let timedOut = false;
+  const started = Date.now();
   const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, timeoutMs);
 
   try {
-    return await fetch(`${baseUrl}${path}`, { ...options, signal: controller.signal });
+    const response = await fetch(`${baseUrl}${path}`, { ...options, signal: controller.signal });
+    const elapsedMs = Date.now() - started;
+    if (elapsedMs >= slowRequestMs) {
+      console.warn(`[eval] slow request ${path} ${response.status} in ${elapsedMs}ms`);
+    }
+    return response;
   } catch (error) {
     if (timedOut) throw new Error(`${path} timed out after ${timeoutMs}ms`);
     throw error;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function responseError(response) {
+  const text = await response.text();
+  try {
+    const parsed = JSON.parse(text);
+    return parsed.error ?? text;
+  } catch {
+    return text;
   }
 }
 

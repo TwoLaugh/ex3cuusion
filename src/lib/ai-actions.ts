@@ -104,7 +104,7 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
       "For reusable relationship ideas like 'ideas for things to do with Emma', use ask_clarification with title 'Ideas for things to do with Emma', completionBehavior keep_as_suggestion, completionMode suggestion_used, and ask whether to keep it as a reusable suggestion list. " +
       "For timeboxed work like 'work on Diet App for two hours', return create_task with completionBehavior repeatable, completionMode timebox, effortMinutes 120, and the matching existing project. " +
       "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
-      "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; keep those as week-level intent unless the user names a specific day or deadline. " +
+      "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; set scheduledDate and dueDate to null for those and keep the date intent as a week-level window unless the user names a specific day or deadline. " +
       "For deadline wording such as 'by Tuesday' or 'before Friday', set dueDate, not scheduledDate. For execution wording such as 'on Tuesday' or 'today', set scheduledDate. " +
       "Preserve scheduling semantics in tags and estimates: laundry/washer/dryer is phased background work; cooking/travel can permit partial overlap; AI-side-work that can run while the user does something else is concurrent/background rather than a normal exclusive task. " +
       "Interpret sleep/bed at 'half 11' as 23:30 unless the user clearly means morning. " +
@@ -682,6 +682,7 @@ function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceTe
   }
 
   applyRelativeDateHints(normalized, state, actionSource);
+  clearInventedDateForBroadWeekWindow(normalized, actionSource);
 
   if (normalized.type === "schedule_block" && /work on|diet app|product/.test(combined)) {
     normalized.type = "create_task";
@@ -777,6 +778,23 @@ function applyRelativeDateHints(action: ParsedAiAction, state: AppState, sourceT
   if (/\b(today|tonight)\b/.test(text) && !action.scheduledDate && !action.dueDate) {
     action.scheduledDate = state.currentDate;
   }
+}
+
+function clearInventedDateForBroadWeekWindow(action: ParsedAiAction, sourceText: string): void {
+  const text = sourceText.toLowerCase();
+  const hasBroadWeekWindow = /\b(?:sometime|some time|at some point|this week|next week|weekend)\b/.test(text);
+  if (!hasBroadWeekWindow || hasSpecificDateCue(text)) return;
+  action.scheduledDate = null;
+  action.dueDate = null;
+}
+
+function hasSpecificDateCue(text: string): boolean {
+  return (
+    /\b(?:today|tonight|tomorrow)\b/.test(text) ||
+    /\b(?:on|by|before|due)\s+(?:next\s+|this\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(text) ||
+    /\b\d{4}-\d{2}-\d{2}\b/.test(text) ||
+    /\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/.test(text)
+  );
 }
 
 function deriveDateIntent(action: ParsedAiAction, state: AppState, sourceText: string): DateIntent {

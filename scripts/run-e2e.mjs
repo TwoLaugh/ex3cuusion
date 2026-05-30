@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { acquireDevServerLock } from "./dev-server-lock.mjs";
 
 const isWindows = process.platform === "win32";
 const runner = isWindows ? "cmd.exe" : "npx";
@@ -78,16 +79,21 @@ function runPlaywright() {
   });
 }
 
+let releaseDevServerLock = () => {};
+let exitCode = 1;
+
 try {
+  releaseDevServerLock = await acquireDevServerLock("E2E");
   if (!(await isServerReady())) {
     startServer();
     await waitForServer();
   }
-  const code = await runPlaywright();
-  stopServer();
-  process.exit(code);
+  exitCode = await runPlaywright();
 } catch (error) {
-  stopServer();
   console.error(error);
-  process.exit(1);
+} finally {
+  stopServer();
+  releaseDevServerLock();
 }
+
+process.exit(exitCode);

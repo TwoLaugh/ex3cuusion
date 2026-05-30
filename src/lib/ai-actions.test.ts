@@ -176,6 +176,78 @@ describe("interpretInboxInput", () => {
     });
   });
 
+  it("removes invented exact dates for broad week-window wording", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-02";
+    state.currentTime = "08:30";
+
+    const entry = await interpretInboxInput(
+      "text Alex today and book dentist sometime next week",
+      state,
+      async () => ({
+        model: "drift-fixture",
+        summary: "Two tasks captured.",
+        actions: [
+          {
+            type: "create_task",
+            label: "text Alex today",
+            title: "Text Alex",
+            domainName: "Social",
+            projectName: null,
+            dueDate: null,
+            scheduledDate: "2026-06-02",
+            scheduledTime: null,
+            effortMinutes: 10,
+            energy: "low",
+            strictness: "normal",
+            priority: 3,
+            importance: 3,
+            urgency: 4,
+            recurrenceDays: null,
+            completionBehavior: "exhaust_once",
+            completionMode: "simple_done",
+            definitionOfDone: null,
+            tags: null,
+            question: null,
+            clarificationKind: null,
+            clarificationOptions: null
+          },
+          {
+            type: "create_task",
+            label: "book dentist sometime next week",
+            title: "Book dentist appointment",
+            domainName: "Health",
+            projectName: null,
+            dueDate: null,
+            scheduledDate: "2026-06-09",
+            scheduledTime: null,
+            effortMinutes: 15,
+            energy: "low",
+            strictness: "normal",
+            priority: 3,
+            importance: 4,
+            urgency: 2,
+            recurrenceDays: null,
+            completionBehavior: "exhaust_once",
+            completionMode: "simple_done",
+            definitionOfDone: null,
+            tags: null,
+            question: null,
+            clarificationKind: null,
+            clarificationOptions: null
+          }
+        ]
+      })
+    );
+
+    const dentist = entry.actions.find((action) => /dentist/i.test(String(action.payload.title)));
+    expect(dentist?.payload).toMatchObject({
+      scheduledDate: undefined,
+      dueDate: undefined,
+      dateIntent: { kind: "week_window", startDate: "2026-06-08", endDate: "2026-06-14" }
+    });
+  });
+
   it("infers phased and concurrent scheduling semantics from natural wording", async () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";

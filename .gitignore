@@ -1,5 +1,6 @@
 node_modules/
 .next/
+.ex3cuusion-dev-server.lock/
 out/
 coverage/
 test-results/
@@ -8,3 +9,4 @@ playwright-report/
 .env.local
 .data/
 *.log
+tsconfig.tsbuildinfo

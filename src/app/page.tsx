@@ -37,7 +37,7 @@ export default function Home() {
       body: JSON.stringify(body)
     });
     if (!response.ok) {
-      const message = await response.text();
+      const message = await responseError(response);
       throw new Error(message || `Request failed with ${response.status}`);
     }
     setPayload(await response.json());
@@ -368,6 +368,16 @@ export default function Home() {
       )}
     </main>
   );
+}
+
+async function responseError(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    const parsed = JSON.parse(text) as { error?: string };
+    return parsed.error ?? text;
+  } catch {
+    return text;
+  }
 }
 
 function SecondaryPanel({
