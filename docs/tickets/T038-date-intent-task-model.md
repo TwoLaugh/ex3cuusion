@@ -1,5 +1,7 @@
 # T038: Date Intent Task Model
 
+Status: implemented in V1 foundation.
+
 ## Goal
 
 Represent what the user meant by time wording separately from exact scheduling fields.
@@ -13,8 +15,14 @@ Represent what the user meant by time wording separately from exact scheduling f
 
 ## Acceptance Criteria
 
-- "today" tasks carry today intent.
-- "by Tuesday" tasks carry deadline intent.
-- "on Tuesday" tasks carry specific-date intent.
-- "sometime next week" tasks carry week-window intent without inventing an exact date.
-- Debug output exposes `dateIntent`.
+- Done: "today" tasks carry today intent.
+- Done: "by Tuesday" tasks carry deadline intent.
+- Done: "on Tuesday" tasks carry specific-date intent.
+- Done: "sometime next week" tasks carry week-window intent without inventing an exact date.
+- Done: debug output exposes `dateIntent`.
+
+## Implementation Notes
+
+- `Task.dateIntent` stores the interpreted timing intent separately from exact `dueDate` and `scheduledDate`.
+- AI capture derives intent from model output plus the relevant chunk of source text.
+- Unit and fixture eval coverage lives in `src/lib/ai-actions.test.ts` and `scripts/run-ai-evals.mjs`.

@@ -313,30 +313,41 @@ Candidate completion modes:
 
 ## Near-Term Implementation TODO
 
-1. Decide whether to rename `Project` to `Container` internally.
-2. Add `container.kind`.
-3. Collapse routine templates into repeating-task semantics, or define exactly why they stay separate.
-4. Add task `repeat_policy`.
-5. Add task `completion_behavior`.
-6. Add typed planner fields, planner signals, free tags, and field confidence.
-7. Add capture sessions with clarifying questions.
-8. Change Today project blocks so child tasks are the primary completion controls.
-9. Make block status derived from selected task state where possible.
-10. Add support for repeatable suggestions that survive completion.
-11. Add actual-vs-estimated completion history.
-12. Update AI action schemas to create/refine containers, repeating tasks, one-off tasks, and suggestions.
-13. Update planner tests around blocks, repeatables, suggestions, and time uncertainty.
-14. Add execution outcome events.
-15. Add Not Done reason flow.
-16. Add blocked/waiting/delegated state.
-17. Add optional definition-of-done support.
-18. Add capture session storage.
-19. Add clarification question generation.
-20. Add answer/apply APIs for pending AI actions.
-21. Upgrade AI prompt and response schema for the rich model.
-22. Add compact AI inbox chat UI.
-23. Add realistic AI capture tests for multi-turn, messy user behavior.
-24. Add background/phased/concurrent work semantics.
+Done in the current V1 foundation:
+
+1. Added `container.kind` while keeping the user-facing project language.
+2. Added task `repeatPolicy`.
+3. Added task `completionBehavior`.
+4. Added typed planner fields, planner signals, free tags, and field confidence.
+5. Added capture sessions with clarifying questions.
+6. Changed Today project blocks so child tasks are the primary completion controls.
+7. Made block status derive from selected task completion.
+8. Added support for repeatable suggestions that survive completion.
+9. Added actual-vs-estimated completion history through execution events.
+10. Updated AI action handling for containers, repeating tasks, one-off tasks, timeboxes, and suggestions.
+11. Added planner tests around blocks, repeatables, suggestions, anchors, and time uncertainty.
+12. Added execution outcome events.
+13. Added Not Done reason flow.
+14. Added blocked/waiting/delegated state.
+15. Added optional definition-of-done support.
+16. Added capture session storage.
+17. Added clarification question generation.
+18. Added answer/apply APIs for pending AI actions.
+19. Upgraded AI prompt and response handling for the richer model.
+20. Added compact AI inbox chat behavior through capture sessions.
+21. Added realistic AI capture tests for multi-turn, messy user behavior.
+22. Added date-intent task structure.
+23. Added week-level read model and `/api/week`.
+24. Added week-aware AI capture and eval coverage.
+
+Still open for V1:
+
+1. Decide whether to rename `Project` to `Container` internally, or keep `Project` as the storage name with `kind`.
+2. Collapse routine templates into repeating-task semantics, or document exactly why they stay separate.
+3. Add background/phased/concurrent work semantics.
+4. Add a UI surface for the week read model.
+5. Add durable Postgres storage after the task/week model settles.
+6. Run live-model evals whenever `OPENAI_API_KEY` is present in the local environment.
 
 ## V2: Proactive AI Structure Hygiene
 
