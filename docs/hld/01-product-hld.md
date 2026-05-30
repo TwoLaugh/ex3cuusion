@@ -38,7 +38,17 @@ Capture mess
 
 ## Primary Surfaces
 
-### Inbox / Command Chat
+### Today
+
+Today is the main interface.
+
+The default experience should be a focused execution surface for the current day.
+
+Other product areas should be available from a burger menu, not exposed as competing top-level pages.
+
+The AI inbox overlay should also be available from a persistent circular button in the bottom-right corner, so capture is always one action away.
+
+### AI Inbox / Command Chat
 
 The user enters messy natural language:
 
@@ -59,18 +69,16 @@ The inbox can:
 - ask clarification
 - propose risky changes for confirmation
 
-### Today / Planner
+### Today / Planner Detail
 
-Today is the primary execution surface.
+Today is the primary execution surface and should default to an ordered day plan.
 
 It shows:
 
-- routines due today
-- main project/work blocks
-- quick atomic tasks
-- soft invitations
-- later/deferred section
-- completion/defer controls
+- timed routines, tasks, project blocks, and soft invitations
+- current load and remaining capacity
+- clear completion/defer controls
+- deferred/completed state without removing the item from view
 
 The user should not normally need to browse backlogs.
 
@@ -98,7 +106,7 @@ Required:
 - daily review
 - basic weekly planning/update
 - web app
-- Android app with Today/Inbox, not launcher
+- web-first interface and interaction model
 
 Not required:
 
@@ -107,6 +115,7 @@ Not required:
 - philosophical reflection
 - self-understanding prompts
 - full Android launcher
+- native or wrapped Android app before the web design is settled
 - app blocking
 - complex analytics
 - gamification

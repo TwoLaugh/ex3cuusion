@@ -25,7 +25,10 @@ V1 focuses on:
 - completion and deferral loop
 - daily review for planner calibration
 - web app
-- Android app using the same backend
+
+V1 is web-first. The web app is where the core product, interaction model, and visual design should be worked out before building a native or wrapped Android app.
+
+AI is central to the product. The system should be designed around AI-assisted capture, organization, planning, clarification, and review, with structured validation around anything that changes user data.
 
 V2 adds:
 
