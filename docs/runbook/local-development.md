@@ -80,6 +80,16 @@ npm run test:e2e
 - Postgres state can use a new `EX3CUUSION_LOCAL_USER_ID` UUID for an isolated local state bucket.
 - Stop Postgres with `npm run db:down`.
 
+## Dogfood Logs
+
+Export the current local Postgres state after a dogfood session with:
+
+```bash
+npm run dogfood:log
+```
+
+The command writes a readable Markdown summary and raw JSON into `.data/dogfood-logs/`. That directory is gitignored so personal dogfood data stays local.
+
 ## Current V1 Surfaces
 
 - Today timeline.

@@ -18,7 +18,8 @@
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "node scripts/run-pg-migrations.mjs",
-    "db:state:read": "node scripts/pg-state-repository.mjs read"
+    "db:state:read": "node scripts/pg-state-repository.mjs read",
+    "dogfood:log": "node scripts/export-dogfood-log.mjs"
   },
   "dependencies": {
     "@types/node": "^22.15.29",
