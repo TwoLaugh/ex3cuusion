@@ -52,7 +52,7 @@ Out of scope for V1:
 
 ## Local Postgres
 
-The app still defaults to the in-memory repository while the Postgres repository is being wired in, but the V1 schema can already be run locally.
+The app defaults to the in-memory repository for fast local development. The durable V1 path is Postgres.
 
 ```bash
 npm run db:up
@@ -67,17 +67,59 @@ postgres://ex3cuusion:ex3cuusion@127.0.0.1:54329/ex3cuusion
 
 Add that as `DATABASE_URL` in `.env.local` if it is not already present.
 
-To run the current app state through Postgres instead of memory/file storage:
+To run app state through Postgres instead of memory/file storage:
 
 ```text
 EX3CUUSION_STATE_REPOSITORY=postgres
+EX3CUUSION_STATE_SNAPSHOT_ID=local
 ```
 
-This uses a snapshot bridge while the normalized table mappers are being introduced.
+This uses the normalized Postgres projection/readback plus a snapshot bridge while V1 stays single-user/local.
 
 Stop the database with:
 
 ```bash
 npm run db:down
+```
+
+## Local Development
+
+See `docs/runbook/local-development.md` for the full runbook.
+
+Common loop:
+
+```bash
+npm install
+copy .env.example .env.local
+npm run db:up
+npm run db:migrate
+npm run dev
+```
+
+## Release Gate
+
+The V1 release gate is documented in `docs/release/v1-release-gate.md`.
+
+Fixture release checks:
+
+```bash
+npm run check:env
+npx tsc --noEmit
+npm run test
+npm run eval:ai
+npm run test:e2e
+npm run build
+```
+
+Or run the combined command:
+
+```bash
+npm run release:check
+```
+
+Live model evals are explicit because they use API credit:
+
+```bash
+npm run eval:ai:live
 ```
 

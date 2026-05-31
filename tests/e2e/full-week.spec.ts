@@ -35,6 +35,7 @@ test("realistic full-week execution loop with time changes", async ({ page, requ
   await page.getByLabel("Review plan fit").selectOption("overplanned");
   await page.getByLabel("Review note").fill("Too much hard-focus product work today.");
   await page.getByRole("button", { name: "Save review" }).click();
+  await expect(page.getByRole("dialog", { name: "Daily review" })).toBeHidden();
   let debug = await (await request.get("/api/debug")).json();
   expect(debug.dailyReviews[0]).toMatchObject({ energy: "low", planFit: "overplanned" });
 

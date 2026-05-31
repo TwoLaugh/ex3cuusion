@@ -11,6 +11,8 @@
     "test:watch": "vitest",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:all": "npm run test && npm run test:e2e",
+    "check:env": "node scripts/validate-release-env.mjs",
+    "release:check": "npm run check:env && npx tsc --noEmit && npm run test && npm run eval:ai && npm run test:e2e && npm run build",
     "eval:ai": "node scripts/run-ai-evals.mjs",
     "eval:ai:live": "node scripts/run-ai-evals.mjs --live",
     "db:up": "docker compose up -d postgres",
