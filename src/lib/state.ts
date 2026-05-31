@@ -698,6 +698,28 @@ export async function addCaptureSessionMessage(sessionId: string, message: strin
     return getState();
   }
 
+  const duplicatePrune = archiveDuplicateTasksForFollowUp(state, target.task, trimmed);
+  if (duplicatePrune.length) {
+    if (target.action) target.action.payload = { ...target.action.payload, ...taskActionPatch(target.task) };
+    recordRevisionEvent(state, session, {
+      source: "follow_up",
+      actionId: target.action?.id,
+      taskId: target.task.id,
+      model: "deterministic",
+      confidence: 0.9,
+      summary: `Removed ${duplicatePrune.length} duplicate task${duplicatePrune.length === 1 ? "" : "s"}.`,
+      changes: duplicatePrune.map((task) => `archived duplicate ${task.title}`),
+      after: taskSnapshot(target.task)
+    });
+    addAssistantSessionMessage(
+      state,
+      session,
+      `Kept ${target.task.title} and removed duplicate${duplicatePrune.length === 1 ? "" : "s"}: ${duplicatePrune.map((task) => task.title).join(", ")}.`
+    );
+    session.updatedAt = timestampForState(state);
+    return getState();
+  }
+
   let changes: string[];
   let summary: string | undefined;
   let revisionMeta: Partial<Pick<CaptureRevision, "model" | "confidence">> = {};
@@ -1755,6 +1777,29 @@ function removeTaskCompletion(state: AppState, planItemId: string, taskId: strin
     );
   }
   return removed;
+}
+
+function archiveDuplicateTasksForFollowUp(state: AppState, target: Task, message: string): Task[] {
+  if (!/\b(duplicate|duplicates|same thing|only be one|just one|old|original|older|get rid of|remove|delete|archive)\b/i.test(message)) return [];
+  const duplicateCandidates = state.tasks.filter((task) => task.id !== target.id && task.status !== "archived" && tasksLookRelated(task, target, message));
+  if (!duplicateCandidates.length) return [];
+  for (const task of duplicateCandidates) {
+    task.status = "archived";
+    task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
+  }
+  return duplicateCandidates;
+}
+
+function tasksLookRelated(candidate: Task, target: Task, message: string): boolean {
+  const messageTokens = new Set(tokensForMatch(message));
+  const targetTokens = new Set(tokensForMatch(target.title));
+  const candidateTokens = tokensForMatch(candidate.title);
+  return candidateTokens.some((token) => targetTokens.has(token) || messageTokens.has(token));
+}
+
+function tokensForMatch(value: string): string[] {
+  return (value.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((token) => token.length > 2 && !["the", "and", "with", "task"].includes(token));
 }
 
 function findAction(state: AppState, actionId: string): AiAction | undefined {

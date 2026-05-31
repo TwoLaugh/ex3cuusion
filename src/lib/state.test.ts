@@ -424,6 +424,72 @@ describe("state integration", () => {
     });
   });
 
+  it("archives duplicate tasks when the inbox asks to keep only one matching task", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Make dump run", domainId: "domain_house", effortMinutes: 60, priority: 2 } });
+    applyStructureMutation({
+      entity: "task",
+      action: "create",
+      patch: { title: "Go to the dump", domainId: "domain_house", effortMinutes: 60, priority: 5, scheduledDate: "2026-06-01", scheduledTime: "17:00" }
+    });
+    const before = getState();
+    const oldTask = before.tasks.find((task) => task.title === "Make dump run");
+    const keepTask = before.tasks.find((task) => task.title === "Go to the dump");
+
+    const after = await submitInbox("there is a duplicate dump item, should only be one dump thing", fixtureInterpreter);
+
+    expect(after.tasks.find((task) => task.id === keepTask!.id)?.status).toBe("active");
+    expect(after.tasks.find((task) => task.id === oldTask!.id)?.status).toBe("archived");
+    expect(after.inbox[0].actions).toHaveLength(1);
+    expect(after.inbox[0].actions[0]).toMatchObject({
+      type: "archive_task",
+      status: "applied",
+      appliedEntityId: oldTask!.id
+    });
+  });
+
+  it("archives original duplicate tasks from capture follow-up messages", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dump errand", domainId: "domain_house", effortMinutes: 60, priority: 2 } });
+    const afterCapture = await submitInbox("take recycling to the tip today", async () => ({
+      model: "fixture",
+      summary: "Dump run was added.",
+      actions: [
+        {
+          type: "create_task",
+          label: "Add dump run",
+          title: "Go to the dump",
+          domainName: "House Work",
+          projectName: null,
+          dueDate: "2026-06-01",
+          scheduledDate: "2026-06-01",
+          scheduledTime: "17:00",
+          effortMinutes: 60,
+          energy: "medium",
+          strictness: "normal",
+          priority: 5,
+          importance: 5,
+          urgency: 5,
+          recurrenceDays: null,
+          completionBehavior: "exhaust_once",
+          completionMode: "simple_done",
+          definitionOfDone: "Take the items to the dump.",
+          tags: ["errand"],
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null
+        }
+      ]
+    }));
+    const session = afterCapture.captureSessions[0];
+    const oldTask = afterCapture.tasks.find((task) => task.title === "Dump errand");
+    const keepTask = afterCapture.tasks.find((task) => task.title === "Go to the dump");
+
+    const afterFollowUp = await addCaptureSessionMessage(session.id, "you didnt get rid of the original task");
+
+    expect(afterFollowUp.tasks.find((task) => task.id === keepTask!.id)?.status).toBe("active");
+    expect(afterFollowUp.tasks.find((task) => task.id === oldTask!.id)?.status).toBe("archived");
+    expect(afterFollowUp.captureSessions[0].messages.some((message) => /removed duplicate/i.test(message.content))).toBe(true);
+  });
+
   it("uses structured AI revision output for natural follow-up corrections", async () => {
     const afterCapture = await submitInbox("Add a task called Water plants today for 10 minutes.", fixtureInterpreter);
     const session = afterCapture.captureSessions[0];

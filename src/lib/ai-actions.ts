@@ -810,6 +810,9 @@ function supplementMissingSourceActions(actions: AiAction[], sourceText: string,
 }
 
 function deterministicExistingTaskActions(sourceText: string, state: AppState, inboxItemId: string, model?: string): AiAction[] | undefined {
+  const duplicatePruneActions = deterministicDuplicatePruneActions(sourceText, state, inboxItemId, model);
+  if (duplicatePruneActions) return duplicatePruneActions;
+
   const task = findReferencedActiveTask(state, sourceText);
   if (!task) return undefined;
 
@@ -853,6 +856,30 @@ function deterministicExistingTaskActions(sourceText: string, state: AppState, i
   }
 
   return undefined;
+}
+
+function deterministicDuplicatePruneActions(sourceText: string, state: AppState, inboxItemId: string, model?: string): AiAction[] | undefined {
+  if (!/\b(duplicate|duplicates|same thing|only be one|just one|old|original|older)\b/i.test(sourceText)) return undefined;
+  if (!/\b(remove|delete|archive|cancel|get rid of|drop|should only be|only be one|keep one|just one)\b/i.test(sourceText)) return undefined;
+
+  const matches = findReferencedActiveTasks(state, sourceText);
+  if (matches.length < 2) return undefined;
+
+  const keep = bestTaskToKeep(matches);
+  const toArchive = matches.filter((task) => task.id !== keep.id);
+  if (!toArchive.length) return undefined;
+
+  return toArchive.map((task) => ({
+    id: nextId("action"),
+    type: "archive_task",
+    label: `Archive duplicate ${task.title}`,
+    safety: "auto_apply",
+    status: "proposed",
+    model,
+    createdAt: timestampForState(state),
+    sourceMessageId: inboxItemId,
+    payload: { taskId: task.id, title: task.title, keptTaskId: keep.id, keptTitle: keep.title, reason: "duplicate_prune" }
+  }));
 }
 
 function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction {
@@ -1382,20 +1409,54 @@ function findProjectName(state: AppState, pattern: RegExp): string | null {
 }
 
 function findReferencedActiveTask(state: AppState, sourceText: string): Task | undefined {
+  const matches = findReferencedActiveTasks(state, sourceText);
+  if (matches.length === 1) return matches[0];
+
+  const activeTasks = state.tasks.filter((task) => task.status !== "archived");
+  if (activeTasks.length === 1 && /\b(it|that|this|the task)\b/i.test(sourceText)) return activeTasks[0];
+  return undefined;
+}
+
+function findReferencedActiveTasks(state: AppState, sourceText: string): Task[] {
   const activeTasks = state.tasks.filter((task) => task.status !== "archived");
   const lower = sourceText.toLowerCase();
   const explicitMatches = activeTasks.filter((task) => lower.includes(task.title.toLowerCase()));
-  if (explicitMatches.length === 1) return explicitMatches[0];
+  if (explicitMatches.length) return explicitMatches;
 
+  const sourceTokens = new Set((lower.match(/[a-z0-9]+/g) ?? []).filter((token) => token.length > 2));
   const tokenMatches = activeTasks.filter((task) => {
-    const tokens = task.title.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-    const meaningful = tokens.filter((token) => token.length > 2);
-    return meaningful.length > 0 && meaningful.every((token) => lower.includes(token));
+    const meaningful = task.title
+      .toLowerCase()
+      .match(/[a-z0-9]+/g)
+      ?.filter((token) => token.length > 2) ?? [];
+    if (meaningful.length === 0) return false;
+    const matched = meaningful.filter((token) => sourceTokens.has(token) || taskReferenceAliases(token).some((alias) => sourceTokens.has(alias)));
+    return matched.length >= Math.min(meaningful.length, 2) || (matched.length === 1 && meaningful.length <= 3);
   });
-  if (tokenMatches.length === 1) return tokenMatches[0];
+  return tokenMatches;
+}
 
-  if (activeTasks.length === 1 && /\b(it|that|this|the task)\b/i.test(sourceText)) return activeTasks[0];
-  return undefined;
+function taskReferenceAliases(token: string): string[] {
+  if (token === "dump") return ["tip", "recycling"];
+  if (token === "shower") return ["wash"];
+  if (token === "nails") return ["nail"];
+  return [];
+}
+
+function bestTaskToKeep(tasks: Task[]): Task {
+  return [...tasks].sort((a, b) => taskKeepScore(b) - taskKeepScore(a))[0];
+}
+
+function taskKeepScore(task: Task): number {
+  const idScore = Number(task.id.match(/(\d+)$/)?.[1] ?? 0) / 1000;
+  return (
+    (task.scheduledTime ? 20 : 0) +
+    (task.scheduledDate ? 5 : 0) +
+    task.priority * 3 +
+    task.importance * 2 +
+    task.urgency +
+    idScore
+  );
 }
 
 function findDomainId(state: AppState, name: string, fallback: string): string {
