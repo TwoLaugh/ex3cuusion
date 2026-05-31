@@ -56,8 +56,20 @@ validates regexes, not the model. That is theater. Going forward:
 - Score quality with **rubrics / an LLM judge** ("did it choose the right
   container? ask a question only when the answer changes storage? avoid
   duplicates?"), not exact-string assertions on a memorized phrase.
-- A change to AI behavior is not "done" until it is checked on **held-out inputs
-  the code has never seen**, not just the scenarios in `scripts/run-ai-evals.mjs`.
+- The quality harness is `npm run eval:quality` (`scripts/run-ai-quality.mjs`): it
+  runs each scenario against the live model N times and judges responses against a
+  rubric, reporting a **pass-rate**. This — not the single-shot exact-match suite —
+  is the model-quality signal. Add new behaviors as realistic, varied rubric
+  scenarios in `scripts/quality/dev-scenarios.mjs`.
+- A change to AI behavior is not "done" until `npm run eval:quality:heldout` still
+  passes. `scripts/quality/heldout-scenarios.mjs` is **sacred**: never add prompt
+  examples, code branches, or assertions aimed at passing it, and never edit it to
+  make a run go green. It exists only to detect overfitting.
+- **Do not chase a single failed sample** with a phrase-specific prompt/code hack.
+  The model is non-deterministic; tune toward pass-rate on realistic inputs, not
+  toward greening one elaborate case. Resist "more and more complicated test cases"
+  for model judgment — prefer breadth + sampling + rubric judging. (Deterministic
+  logic, e.g. the planner, is the opposite: add as many exact-match cases as you like.)
 
 ## Architecture rules for the AI inbox
 
