@@ -129,7 +129,7 @@ function staticScenarios() {
       ],
       expects: [
         pendingQuestionKind("definition_of_done"),
-        latestDraftTitle("Clean house")
+        latestDraftTitleMatches(/clean/i)
       ]
     },
     {
@@ -154,7 +154,7 @@ function staticScenarios() {
       ],
       expects: [
         pendingQuestionKind("completion_behavior"),
-        latestDraftTitle("Ideas for things to do with Emma")
+        latestDraftTitleMatches(/emma/i)
       ]
     },
     {
@@ -165,23 +165,14 @@ function staticScenarios() {
         inbox("message Will every Friday")
       ],
       expects: [
-        routineExists(/message will/i),
-        routineHasWeeklyDay(/message will/i, 5)
-      ]
-    },
-    {
-      phase: "static",
-      name: "background AI side-work preserves overlap semantics",
-      steps: [
-        setTime("2026-06-01", "18:00"),
-        inbox("AI can run the report while I cook dinner tonight")
-      ],
-      expects: [
-        taskNestedField("Cook dinner", ["scheduling", "mode"], "concurrent"),
-        taskNestedField("Run AI report draft", ["scheduling", "mode"], "background"),
-        taskNestedField("Run AI report draft", ["scheduling", "attentionLoad"], "passive")
+        routineExists(/will/i),
+        routineHasWeeklyDay(/will/i, 5)
       ]
     }
+    // NOTE: a "background AI side-work preserves overlap semantics" scenario lived here. It
+    // asserted keyword-inferred scheduling.mode (concurrent/background) — overfit to demo
+    // phrases and since deleted. Reintroduce as a model-owned schema field, then re-add a
+    // scenario that exercises it. See docs/release/v1-release-gate.md.
   ];
 }
 
@@ -251,7 +242,10 @@ function clarificationPolicyScenarios() {
         inbox("ideas for things to do with Emma")
       ],
       expects: [
-        pendingQuestionKind("completion_behavior"),
+        // Accept either kind: "keep as a reusable suggestion list" is legitimately framed as
+        // a completion_behavior question OR a container_kind question. The behavior is what
+        // matters (ask, optionally, how to store a reusable idea), not the label.
+        either([pendingQuestionKind("completion_behavior"), pendingQuestionKind("container_kind")]),
         questionMateriality("medium"),
         clarificationDecision("optional")
       ]
@@ -509,6 +503,16 @@ function latestDraftTitle(title) {
     const action = debug.inbox[0]?.actions[0];
     const draftTitle = action?.payload?.draftAction?.title;
     return draftTitle === title ? [] : [`Expected latest draft title "${title}", got ${JSON.stringify(draftTitle)}.`];
+  };
+}
+
+// Behavior-based title check. Assertions should verify the model captured the right thing,
+// not that it phrased the title with an exact string — exact-title asserts were part of the
+// old teaching-to-the-test (they only passed because the prompt dictated the title verbatim).
+function latestDraftTitleMatches(pattern) {
+  return (debug) => {
+    const draftTitle = debug.inbox[0]?.actions[0]?.payload?.draftAction?.title;
+    return draftTitle && pattern.test(draftTitle) ? [] : [`Expected latest draft title to match ${pattern}, got ${JSON.stringify(draftTitle)}.`];
   };
 }
 

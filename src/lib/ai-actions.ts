@@ -147,19 +147,17 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "When the user asks to move or change timing for an existing task, use schedule_task with the exact targetTaskId from context. " +
     "If two tasks overlap nonsensically or a request would create a bad day, either return several edits that fix the day or ask one worthwhile clarification. " +
     "Do not ask low-value questions for obvious simple tasks; infer reasonable defaults and create the task. " +
-    "For explicit requests to add or create an ordinary obvious task, return create_task. " +
-    "For broad work where done-state is unclear, return ask_clarification, not create_task. Examples: clean the house, sort backend, fix the app, organize life admin. " +
+    "For an explicit, ordinary, well-understood task, return create_task with sensible defaults and do not ask a question. " +
+    "For broad outcome work with no clear finish line — a request that names a result or a whole space but no concrete action or stopping point, such as tidying or cleaning an entire space, sorting or organizing a broad area, or open-ended 'sort out' / 'deal with' work — return ask_clarification with clarificationKind 'definition_of_done' before creating, even when you could guess a reasonable scope. Prefer asking once here over silently creating a vague task. " +
     "For ask_clarification actions: title must be the canonical future task title, not the question text. question must contain the user-facing question. definitionOfDone must be null. " +
-    "For 'clean the house', use title 'Clean house', clarificationKind 'definition_of_done', and ask what would count as enough cleaning. " +
-    "For reusable relationship ideas like 'ideas for things to do with Emma', use ask_clarification with title 'Ideas for things to do with Emma', completionBehavior keep_as_suggestion, completionMode suggestion_used, and ask whether to keep it as a reusable suggestion list. " +
-    "For timeboxed work like 'work on Diet App for two hours', return create_task with completionBehavior repeatable, completionMode timebox, effortMinutes 120, and the matching existing project. " +
+    "For a request to collect reusable ideas or suggestions — a list the user would draw from repeatedly rather than complete once — use ask_clarification with completionBehavior keep_as_suggestion and completionMode suggestion_used, asking whether to keep it as a reusable suggestion list. " +
+    "For time-boxed work (wording like 'work on X for N hours/minutes'), return create_task with completionBehavior repeatable, completionMode timebox, the stated effort in minutes, and the matching existing project if one exists. " +
     "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
-    "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; set scheduledDate and dueDate to null for those and keep the date intent as a week-level window unless the user names a specific day or deadline. " +
-    "For deadline wording such as 'by Tuesday' or 'before Friday', set dueDate, not scheduledDate. For execution wording such as 'on Tuesday' or 'today', set scheduledDate. " +
-    "Preserve scheduling semantics in tags and estimates: laundry/washer/dryer is phased background work; cooking/travel can permit partial overlap; AI-side-work that can run while the user does something else is concurrent/background rather than a normal exclusive task. " +
-    "Interpret sleep/bed at 'half 11' as 23:30 unless the user clearly means morning. " +
-    "For explicit recurring habits, return create_routine with recurrenceDays when known. " +
-    "For 'message Will every Friday', return create_routine with title 'Message Will' and recurrenceDays [5]. " +
+    "Interpret colloquial clock times into 24-hour HH:mm (for example an evening 'half past eleven' is 23:30) unless the user clearly means another time. " +
+    "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; set scheduledDate and dueDate to null and keep the date intent as a week-level window unless the user names a specific day or deadline. " +
+    "Do not ask a clarification merely to pin down a vague but acceptable time window such as 'sometime next week' — store it as a week-level window without asking. Only ask about dates when the wording is genuinely contradictory or there is a hard deadline conflict. " +
+    "For deadline wording such as 'by <day>' or 'before <day>', set dueDate, not scheduledDate. For execution wording such as 'on <day>' or 'today', set scheduledDate. " +
+    "For explicit recurring habits, return create_routine with recurrenceDays when known, mapping weekday names to 0-6 with Sunday as 0. " +
     "For sleep or bed time, return create_task titled 'Sleep', not schedule_block. " +
     "Use existing domain/project names and target task IDs when they fit. Return only actions that help choose, schedule, split, defer, prioritize, or prune work. " +
     "projectName must be null unless it exactly refers to an existing project/container from the provided list. " +
