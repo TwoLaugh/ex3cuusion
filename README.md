@@ -50,3 +50,26 @@ Out of scope for V1:
 - full Android launcher
 - hard app blocking
 
+## Local Postgres
+
+The app still defaults to the in-memory repository while the Postgres repository is being wired in, but the V1 schema can already be run locally.
+
+```bash
+npm run db:up
+npm run db:migrate
+```
+
+Default local database:
+
+```text
+postgres://ex3cuusion:ex3cuusion@127.0.0.1:54329/ex3cuusion
+```
+
+Add that as `DATABASE_URL` in `.env.local` if it is not already present.
+
+Stop the database with:
+
+```bash
+npm run db:down
+```
+

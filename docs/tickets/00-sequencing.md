@@ -44,6 +44,12 @@ Build the execution engine in this order:
 38. Mobile web polish
 39. Android V1 wrapper/native decision
 40. V2 proactive structure hygiene
+41. Postgres schema and migrations
+42. Postgres AppState repository
+43. Manual structure CRUD
+44. Project block drawer
+45. Daily review and planner calibration
+46. V1 release gate
 
 V1 is web-first. Do not begin Android implementation until Today, AI inbox, planner, and review flows are usable on web.
 
@@ -84,4 +90,10 @@ Outcome: web interaction model is stable enough to reuse or wrap.
 Tickets: T020.
 
 Outcome: AI periodically probes stale/vague/overloaded structure and proposes small maintenance actions.
+
+### Current V1 Completion Path
+
+Tickets: T053, T054, T055, T056, T057, T058.
+
+Outcome: the web-first V1 has durable storage, manual correction paths, project block execution, planner learning, and release hygiene.
 

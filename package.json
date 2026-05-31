@@ -12,7 +12,10 @@
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:all": "npm run test && npm run test:e2e",
     "eval:ai": "node scripts/run-ai-evals.mjs",
-    "eval:ai:live": "node scripts/run-ai-evals.mjs --live"
+    "eval:ai:live": "node scripts/run-ai-evals.mjs --live",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "node scripts/run-pg-migrations.mjs"
   },
   "dependencies": {
     "@types/node": "^22.15.29",
@@ -21,6 +24,7 @@
     "lucide-react": "^0.511.0",
     "next": "^15.3.2",
     "openai": "^6.39.1",
+    "pg": "^8.21.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.8.3",

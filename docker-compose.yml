@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ex3cuusion-postgres
+    environment:
+      POSTGRES_DB: ex3cuusion
+      POSTGRES_USER: ex3cuusion
+      POSTGRES_PASSWORD: ex3cuusion
+    ports:
+      - "54329:5432"
+    volumes:
+      - ex3cuusion_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ex3cuusion -d ex3cuusion"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ex3cuusion_postgres_data:
+

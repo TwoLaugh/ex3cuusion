@@ -1,0 +1,22 @@
+# T057: Daily Review And Planner Calibration
+
+Status: planned.
+
+## Goal
+
+Close the execution loop so completion, partial completion, deferrals, blockers, and overplanning improve future plans.
+
+## Scope
+
+- Add a daily review surface.
+- Summarize completed, partially completed, deferred, blocked, and skipped work.
+- Capture review notes without turning the product into a journal.
+- Update planner assumptions from recent execution events.
+- Reduce future load after repeated overplanning or low-energy deferrals.
+
+## Acceptance Criteria
+
+- The user can review a day and confirm what should affect future planning.
+- Planner output changes after meaningful deferral/completion patterns.
+- Tests cover capacity reduction, vague-task penalty, blocked-task pruning, and estimate calibration.
+
