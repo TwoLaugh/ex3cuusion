@@ -386,6 +386,7 @@ describe("interpretInboxInput", () => {
       buildParsedActionsFromDayRewrite(
         {
           summary: "Rewrote the day.",
+          changePlan: ["Move Message Will to 17:00.", "Add Clean house at 16:00."],
           question: null,
           archivedTaskIds: [],
           revisedDay: [

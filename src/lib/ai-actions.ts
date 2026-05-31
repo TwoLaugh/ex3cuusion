@@ -47,6 +47,7 @@ export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAi
 
 const dayRewriteSchema = z.object({
   summary: z.string(),
+  changePlan: z.array(z.string()),
   question: z.string().nullable(),
   revisedDay: z.array(
     z.object({
@@ -169,6 +170,8 @@ async function defaultDayRewriteInterpreter(
   const instructions =
     "You rewrite a single day's task schedule for a personal execution planner. " +
     "You will receive only a simple current-day list: task IDs, titles, start times, and effort minutes, plus the user's request. " +
+    "First, silently inspect the request and the current day together. Decide what the user is really asking for, which existing tasks are affected, what should stay unchanged, and what should be added, moved, or removed. " +
+    "Then output the structured JSON. Include a concise changePlan list summarizing the intended edits, but do not include hidden reasoning or long chain-of-thought. " +
     "Return the revised day list in the same simple form. Copy unchanged tasks exactly, including taskId. " +
     "If the user asks to move or correct a time, keep the same taskId and change only startTime. " +
     "If the user asks to remove, delete, cancel, archive, get rid of, or dedupe an existing task, put its taskId in archivedTaskIds and omit it from revisedDay. " +
