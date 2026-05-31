@@ -5,6 +5,7 @@ import {
   addCaptureSessionMessage,
   advanceDay,
   answerCaptureQuestion,
+  applyStructureMutation,
   completePlanItem,
   confirmAiAction,
   deferPlanItem,
@@ -34,6 +35,59 @@ describe("state integration", () => {
     expect(after.inbox[0].actions.every((action) => action.status === "applied")).toBe(true);
     expect(after.inbox[0].actions.some((action) => action.skippedReason === "Task already exists.")).toBe(true);
     expect(plan.items.some((item) => item.title === "Message Will")).toBe(true);
+  });
+
+  it("manually creates, edits, moves, and archives structure", () => {
+    applyStructureMutation({ entity: "domain", action: "create", patch: { name: "Manual Domain", weight: 6 } });
+    let state = getState();
+    const domain = state.domains.find((entry) => entry.name === "Manual Domain");
+    expect(domain).toBeDefined();
+
+    applyStructureMutation({
+      entity: "project",
+      action: "create",
+      patch: { name: "Manual Project", domainId: domain!.id, kind: "project", planningMode: "open_backlog", defaultBlockMinutes: 45 }
+    });
+    state = getState();
+    const project = state.projects.find((entry) => entry.name === "Manual Project");
+    expect(project).toMatchObject({ domainId: domain!.id, status: "active" });
+
+    applyStructureMutation({
+      entity: "task",
+      action: "create",
+      patch: { title: "Manual task", domainId: domain!.id, projectId: project!.id, effortMinutes: 35, dueDate: "2026-06-04" }
+    });
+    state = getState();
+    const task = state.tasks.find((entry) => entry.title === "Manual task");
+    expect(task).toMatchObject({ projectId: project!.id, domainId: domain!.id, type: "project_task", effortMinutes: 35 });
+
+    applyStructureMutation({
+      entity: "task",
+      action: "update",
+      id: task!.id,
+      patch: { title: "Manual task corrected", projectId: "", effortMinutes: 20, completionBehavior: "keep_as_suggestion" }
+    });
+    state = getState();
+    expect(state.tasks.find((entry) => entry.id === task!.id)).toMatchObject({
+      title: "Manual task corrected",
+      projectId: undefined,
+      type: "atomic",
+      effortMinutes: 20,
+      completionBehavior: "keep_as_suggestion"
+    });
+
+    applyStructureMutation({ entity: "routine", action: "create", patch: { title: "Manual routine", domainId: domain!.id, defaultEffortMinutes: 12 } });
+    state = getState();
+    const routine = state.routines.find((entry) => entry.title === "Manual routine");
+    expect(routine).toMatchObject({ active: true, defaultEffortMinutes: 12 });
+
+    applyStructureMutation({ entity: "task", action: "archive", id: task!.id });
+    applyStructureMutation({ entity: "project", action: "archive", id: project!.id });
+    applyStructureMutation({ entity: "routine", action: "archive", id: routine!.id });
+    state = getState();
+    expect(state.tasks.find((entry) => entry.id === task!.id)?.status).toBe("archived");
+    expect(state.projects.find((entry) => entry.id === project!.id)?.status).toBe("paused");
+    expect(state.routines.find((entry) => entry.id === routine!.id)?.active).toBe(false);
   });
 
   it("records completion and deferral events against the active day", () => {

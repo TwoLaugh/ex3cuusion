@@ -10,8 +10,9 @@ describePostgres("postgres snapshot repository", () => {
   it("resets, writes, and reads AppState through Postgres", async () => {
     const previousSnapshotId = process.env.EX3CUUSION_STATE_SNAPSHOT_ID;
     const previousUserId = process.env.EX3CUUSION_LOCAL_USER_ID;
+    const testUserId = randomUUID();
     process.env.EX3CUUSION_STATE_SNAPSHOT_ID = `test_${Date.now()}`;
-    process.env.EX3CUUSION_LOCAL_USER_ID = randomUUID();
+    process.env.EX3CUUSION_LOCAL_USER_ID = testUserId;
     try {
       const repository = createPostgresSnapshotRepositoryForTests();
       const seed = repository.reset();
@@ -116,17 +117,18 @@ describePostgres("postgres snapshot repository", () => {
       const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
       await client.connect();
       try {
-        const projected = await client.query("select title from tasks where external_id = $1", ["task_postgres_roundtrip"]);
+        const projected = await client.query("select title from tasks where user_id = $1 and external_id = $2", [testUserId, "task_postgres_roundtrip"]);
         expect(projected.rows[0]?.title).toBe("Postgres roundtrip task");
 
-        const event = await client.query("select task_external_id, actual_minutes from execution_events where external_id = $1", [
+        const event = await client.query("select task_external_id, actual_minutes from execution_events where user_id = $1 and external_id = $2", [
+          testUserId,
           "event_postgres_roundtrip"
         ]);
         expect(event.rows[0]).toMatchObject({ task_external_id: "task_postgres_roundtrip", actual_minutes: 20 });
 
         const session = await client.query(
-          "select external_id, applied_entity_external_ids from capture_sessions where external_id = $1",
-          ["session_postgres_roundtrip"]
+          "select external_id, applied_entity_external_ids from capture_sessions where user_id = $1 and external_id = $2",
+          [testUserId, "session_postgres_roundtrip"]
         );
         expect(session.rows[0]).toMatchObject({
           external_id: "session_postgres_roundtrip",
@@ -136,11 +138,12 @@ describePostgres("postgres snapshot repository", () => {
         const childCounts = await client.query(
           `
             select
-              (select count(*)::int from ai_actions where external_id = 'action_postgres_roundtrip') as actions,
-              (select count(*)::int from capture_messages where external_id = 'message_postgres_roundtrip') as messages,
-              (select count(*)::int from clarification_questions where external_id = 'question_postgres_roundtrip') as questions,
-              (select count(*)::int from capture_revision_events where external_id = 'revision_postgres_roundtrip') as revisions
-          `
+              (select count(*)::int from ai_actions where user_id = $1 and external_id = 'action_postgres_roundtrip') as actions,
+              (select count(*)::int from capture_messages join capture_sessions on capture_sessions.id = capture_messages.session_id where capture_sessions.user_id = $1 and capture_messages.external_id = 'message_postgres_roundtrip') as messages,
+              (select count(*)::int from clarification_questions join capture_sessions on capture_sessions.id = clarification_questions.session_id where capture_sessions.user_id = $1 and clarification_questions.external_id = 'question_postgres_roundtrip') as questions,
+              (select count(*)::int from capture_revision_events join capture_sessions on capture_sessions.id = capture_revision_events.session_id where capture_sessions.user_id = $1 and capture_revision_events.external_id = 'revision_postgres_roundtrip') as revisions
+          `,
+          [testUserId]
         );
         expect(childCounts.rows[0]).toMatchObject({ actions: 1, messages: 1, questions: 1, revisions: 1 });
 
@@ -175,10 +178,11 @@ describePostgres("postgres snapshot repository", () => {
         const staleChildCounts = await client.query(
           `
             select
-              (select count(*)::int from capture_messages where external_id = 'message_postgres_roundtrip') as messages,
-              (select count(*)::int from clarification_questions where external_id = 'question_postgres_roundtrip') as questions,
-              (select count(*)::int from capture_revision_events where external_id = 'revision_postgres_roundtrip') as revisions
-          `
+              (select count(*)::int from capture_messages join capture_sessions on capture_sessions.id = capture_messages.session_id where capture_sessions.user_id = $1 and capture_messages.external_id = 'message_postgres_roundtrip') as messages,
+              (select count(*)::int from clarification_questions join capture_sessions on capture_sessions.id = clarification_questions.session_id where capture_sessions.user_id = $1 and clarification_questions.external_id = 'question_postgres_roundtrip') as questions,
+              (select count(*)::int from capture_revision_events join capture_sessions on capture_sessions.id = capture_revision_events.session_id where capture_sessions.user_id = $1 and capture_revision_events.external_id = 'revision_postgres_roundtrip') as revisions
+          `,
+          [testUserId]
         );
         expect(staleChildCounts.rows[0]).toMatchObject({ messages: 0, questions: 0, revisions: 0 });
       } finally {

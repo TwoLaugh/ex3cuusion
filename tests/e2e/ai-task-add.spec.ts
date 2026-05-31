@@ -164,3 +164,63 @@ test("burger task panel exposes next-week backlog without a calendar grid", asyn
   await page.getByRole("button", { name: "Planning preferences" }).click();
   await expect(page.getByText(/1 next week/)).toBeVisible();
 });
+
+test("manual structure panels correct tasks, projects, domains, and routines", async ({ page, request }) => {
+  await request.post("/api/state");
+  await request.post("/api/time", { data: { date: "2026-06-02", time: "08:30" } });
+  await page.goto("/");
+
+  await page.getByLabel("Open menu").click();
+  await page.getByRole("button", { name: "Domains" }).click();
+  await page.getByLabel("Create domain").getByLabel("Domain name").fill("Manual Ops");
+  await page.getByLabel("Create domain").getByLabel("Domain weight").fill("6");
+  await page.getByLabel("Create domain").getByRole("button", { name: "Add" }).click();
+  await expect(page.getByLabel("Name Manual Ops")).toBeVisible();
+
+  await page.getByLabel("Close Domains").click();
+  await page.getByLabel("Open menu").click();
+  await page.getByRole("button", { name: "Projects" }).click();
+  await page.getByLabel("Create project").getByLabel("Project name").fill("Manual Project");
+  await page.getByLabel("Create project").getByLabel("Project domain").selectOption({ label: "Manual Ops" });
+  await page.getByLabel("Create project").getByLabel("Default block minutes").fill("50");
+  await page.getByLabel("Create project").getByRole("button", { name: "Add" }).click();
+  await expect(page.getByLabel("Name Manual Project")).toBeVisible();
+
+  await page.getByLabel("Close Projects").click();
+  await page.getByLabel("Open menu").click();
+  await page.getByRole("button", { name: "Tasks" }).click();
+  await page.getByLabel("Create task").getByLabel("Task title").fill("Manual correction task");
+  await page.getByLabel("Create task").getByLabel("Task project").selectOption({ label: "Manual Project" });
+  await page.getByLabel("Create task").getByLabel("Task minutes").fill("35");
+  await page.getByLabel("Create task").getByLabel("Task due date").fill("2026-06-05");
+  await page.getByLabel("Create task").getByRole("button", { name: "Add" }).click();
+  await expect(page.getByText("Manual correction task")).toBeVisible();
+
+  const taskCard = page.locator("article").filter({ hasText: "Manual correction task" });
+  await taskCard.getByText("Edit").click();
+  await taskCard.getByLabel("Title Manual correction task").fill("Manual correction task revised");
+  await taskCard.getByLabel("Minutes Manual correction task").fill("20");
+  await taskCard.getByLabel("Due Manual correction task").fill("2026-06-06");
+  await taskCard.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Manual correction task revised")).toBeVisible();
+
+  await page.getByLabel("Close Tasks").click();
+  await page.getByLabel("Open menu").click();
+  await page.getByRole("button", { name: "Routines" }).click();
+  await page.getByLabel("Create routine").getByLabel("Routine title").fill("Manual routine");
+  await page.getByLabel("Create routine").getByLabel("Routine domain").selectOption({ label: "Manual Ops" });
+  await page.getByLabel("Create routine").getByLabel("Routine minutes").fill("12");
+  await page.getByLabel("Create routine").getByRole("button", { name: "Add" }).click();
+  await expect(page.getByLabel("Title Manual routine")).toBeVisible();
+
+  const debug = await (await request.get("/api/debug")).json();
+  const domain = debug.domains.find((entry: { name: string }) => entry.name === "Manual Ops");
+  const project = debug.projects.find((entry: { name: string }) => entry.name === "Manual Project");
+  const task = debug.tasks.find((entry: { title: string }) => entry.title === "Manual correction task revised");
+  const routine = debug.routines.find((entry: { title: string }) => entry.title === "Manual routine");
+
+  expect(domain).toBeTruthy();
+  expect(project).toMatchObject({ domainId: domain.id, defaultBlockMinutes: 50 });
+  expect(task).toMatchObject({ projectId: project.id, domainId: domain.id, effortMinutes: 20, dueDate: "2026-06-06" });
+  expect(routine).toMatchObject({ domainId: domain.id, defaultEffortMinutes: 12, active: true });
+});

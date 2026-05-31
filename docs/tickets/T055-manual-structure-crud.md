@@ -1,6 +1,6 @@
 # T055: Manual Structure CRUD
 
-Status: planned.
+Status: implemented.
 
 ## Goal
 
@@ -21,3 +21,8 @@ Let the user manually maintain tasks, projects/containers, domains, and routines
 - Manual changes are reflected in Today, backlog panels, AI activity/audit surfaces, and planner output.
 - E2E tests cover realistic manual correction flows.
 
+## Implementation Notes
+
+- Manual controls live in the existing burger panels instead of a separate admin surface.
+- Domains support create/edit; tasks support create/edit/archive; projects support create/edit/pause; routines support create/edit/archive via `active=false`.
+- The structure API writes through the same `AppStateRepository` boundary as AI actions, so file, in-memory, and Postgres-backed runs use the same behavior.

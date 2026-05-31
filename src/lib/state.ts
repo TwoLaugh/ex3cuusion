@@ -18,6 +18,19 @@ import type {
   WaitingMetadata
 } from "./types";
 
+export type StructureMutation =
+  | { entity: "domain"; action: "create"; patch: Partial<AppState["domains"][number]> }
+  | { entity: "domain"; action: "update"; id: string; patch: Partial<AppState["domains"][number]> }
+  | { entity: "project"; action: "create"; patch: Partial<AppState["projects"][number]> }
+  | { entity: "project"; action: "update"; id: string; patch: Partial<AppState["projects"][number]> }
+  | { entity: "project"; action: "archive"; id: string }
+  | { entity: "task"; action: "create"; patch: Partial<Task> }
+  | { entity: "task"; action: "update"; id: string; patch: Partial<Task> }
+  | { entity: "task"; action: "archive"; id: string }
+  | { entity: "routine"; action: "create"; patch: Partial<AppState["routines"][number]> }
+  | { entity: "routine"; action: "update"; id: string; patch: Partial<AppState["routines"][number]> }
+  | { entity: "routine"; action: "archive"; id: string };
+
 function currentState(): AppState {
   return getRepository().read();
 }
@@ -37,6 +50,199 @@ export function resetState(): AppState {
 
 export function loadRealisticCharacterScenario(): AppState {
   replaceState(createRealisticCharacterState());
+  return getState();
+}
+
+export function applyStructureMutation(mutation: StructureMutation): AppState {
+  const state = currentState();
+
+  if (mutation.entity === "domain") {
+    if (mutation.action === "create") {
+      state.domains.push({
+        id: uniqueStateId(state, "domain"),
+        name: cleanText(mutation.patch.name) || "New domain",
+        weight: clampNumber(mutation.patch.weight, 1, 10, 5)
+      });
+      return getState();
+    }
+
+    const domain = state.domains.find((entry) => entry.id === mutation.id);
+    if (!domain) return getState();
+    domain.name = cleanText(mutation.patch.name) || domain.name;
+    domain.weight = clampNumber(mutation.patch.weight, 1, 10, domain.weight);
+    return getState();
+  }
+
+  if (mutation.entity === "project") {
+    if (mutation.action === "create") {
+      const domainId = validDomainId(state, mutation.patch.domainId) ?? state.domains[0]?.id;
+      if (!domainId) return getState();
+      state.projects.push({
+        id: uniqueStateId(state, "project"),
+        domainId,
+        name: cleanText(mutation.patch.name) || "New project",
+        kind: validProjectKind(mutation.patch.kind) ?? "project",
+        planningMode: validPlanningMode(mutation.patch.planningMode) ?? "open_backlog",
+        status: validProjectStatus(mutation.patch.status) ?? "active",
+        priorityWeight: clampNumber(mutation.patch.priorityWeight, 1, 10, 5),
+        defaultBlockMinutes: clampNumber(mutation.patch.defaultBlockMinutes, 5, 480, 60),
+        contextNote: cleanText(mutation.patch.contextNote)
+      });
+      return getState();
+    }
+
+    const project = state.projects.find((entry) => entry.id === mutation.id);
+    if (!project) return getState();
+    if (mutation.action === "archive") {
+      project.status = "paused";
+      for (const task of state.tasks.filter((entry) => entry.projectId === project.id)) {
+        task.projectId = undefined;
+        task.type = task.type === "project_task" ? "atomic" : task.type;
+      }
+      return getState();
+    }
+
+    project.domainId = validDomainId(state, mutation.patch.domainId) ?? project.domainId;
+    project.name = cleanText(mutation.patch.name) || project.name;
+    project.kind = validProjectKind(mutation.patch.kind) ?? project.kind;
+    project.planningMode = validPlanningMode(mutation.patch.planningMode) ?? project.planningMode;
+    project.status = validProjectStatus(mutation.patch.status) ?? project.status;
+    project.priorityWeight = clampNumber(mutation.patch.priorityWeight, 1, 10, project.priorityWeight);
+    project.defaultBlockMinutes = clampNumber(mutation.patch.defaultBlockMinutes, 5, 480, project.defaultBlockMinutes);
+    project.contextNote = cleanText(mutation.patch.contextNote ?? project.contextNote);
+    if (mutation.patch.domainId) {
+      for (const task of state.tasks.filter((entry) => entry.projectId === project.id)) {
+        task.domainId = project.domainId;
+      }
+    }
+    return getState();
+  }
+
+  if (mutation.entity === "task") {
+    if (mutation.action === "create") {
+      const domainId = validDomainId(state, mutation.patch.domainId) ?? state.domains[0]?.id;
+      if (!domainId) return getState();
+      const projectId = validProjectId(state, mutation.patch.projectId);
+      state.tasks.push({
+        id: uniqueStateId(state, "task"),
+        title: cleanText(mutation.patch.title) || "New task",
+        description: cleanText(mutation.patch.description) || undefined,
+        type: projectId ? "project_task" : validTaskType(mutation.patch.type) ?? "atomic",
+        domainId: projectId ? state.projects.find((project) => project.id === projectId)!.domainId : domainId,
+        projectId,
+        status: validTaskStatus(mutation.patch.status) ?? "active",
+        repeatPolicy: normalizeRepeatPolicy(mutation.patch.repeatPolicy),
+        completionBehavior: validCompletionBehavior(mutation.patch.completionBehavior) ?? "exhaust_once",
+        completionMode: validCompletionMode(mutation.patch.completionMode) ?? "simple_done",
+        definitionOfDone: cleanText(mutation.patch.definitionOfDone) || undefined,
+        plannerFields: {
+          intentType: mutation.patch.plannerFields?.intentType ?? "obligation",
+          pressureLevel: mutation.patch.plannerFields?.pressureLevel ?? (mutation.patch.dueDate ? "due" : "soft"),
+          location: mutation.patch.plannerFields?.location,
+          setupCost: mutation.patch.plannerFields?.setupCost
+        },
+        plannerSignals: mutation.patch.plannerSignals,
+        tags: mutation.patch.tags,
+        fieldConfidence: mutation.patch.fieldConfidence,
+        priority: clampNumber(mutation.patch.priority, 1, 10, 3),
+        importance: clampNumber(mutation.patch.importance, 1, 10, 3),
+        urgency: clampNumber(mutation.patch.urgency, 1, 10, 3),
+        dueDate: validDate(mutation.patch.dueDate) ? mutation.patch.dueDate : undefined,
+        scheduledDate: validDate(mutation.patch.scheduledDate) ? mutation.patch.scheduledDate : undefined,
+        scheduledTime: validTime(mutation.patch.scheduledTime) ? mutation.patch.scheduledTime : undefined,
+        dateIntent: mutation.patch.dateIntent,
+        scheduling: mutation.patch.scheduling,
+        effortMinutes: clampNumber(mutation.patch.effortMinutes, 1, 720, 30),
+        minMinutes: mutation.patch.minMinutes,
+        maxMinutes: mutation.patch.maxMinutes,
+        estimateConfidence: mutation.patch.estimateConfidence,
+        energy: validEnergy(mutation.patch.energy) ?? "medium",
+        strictness: validStrictness(mutation.patch.strictness) ?? "normal",
+        notes: cleanText(mutation.patch.notes) || undefined,
+        source: "manual"
+      });
+      return getState();
+    }
+
+    const task = state.tasks.find((entry) => entry.id === mutation.id);
+    if (!task) return getState();
+    if (mutation.action === "archive") {
+      task.status = "archived";
+      return getState();
+    }
+
+    const projectId = mutation.patch.projectId === "" ? undefined : validProjectId(state, mutation.patch.projectId);
+    if (mutation.patch.projectId !== undefined) {
+      task.projectId = projectId;
+      if (projectId) {
+        const project = state.projects.find((entry) => entry.id === projectId)!;
+        task.domainId = project.domainId;
+        task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
+      } else if (task.type === "project_task") {
+        task.type = "atomic";
+      }
+    } else {
+      task.domainId = validDomainId(state, mutation.patch.domainId) ?? task.domainId;
+    }
+    if (!task.projectId) task.domainId = validDomainId(state, mutation.patch.domainId) ?? task.domainId;
+    task.title = cleanText(mutation.patch.title) || task.title;
+    task.description = optionalText(mutation.patch.description, task.description);
+    task.status = validTaskStatus(mutation.patch.status) ?? task.status;
+    task.completionBehavior = validCompletionBehavior(mutation.patch.completionBehavior) ?? task.completionBehavior;
+    task.completionMode = validCompletionMode(mutation.patch.completionMode) ?? task.completionMode;
+    task.definitionOfDone = optionalText(mutation.patch.definitionOfDone, task.definitionOfDone);
+    task.priority = clampNumber(mutation.patch.priority, 1, 10, task.priority);
+    task.importance = clampNumber(mutation.patch.importance, 1, 10, task.importance);
+    task.urgency = clampNumber(mutation.patch.urgency, 1, 10, task.urgency);
+    task.effortMinutes = clampNumber(mutation.patch.effortMinutes, 1, 720, task.effortMinutes);
+    task.dueDate = mutation.patch.dueDate === "" ? undefined : validDate(mutation.patch.dueDate) ? mutation.patch.dueDate : task.dueDate;
+    task.scheduledDate =
+      mutation.patch.scheduledDate === "" ? undefined : validDate(mutation.patch.scheduledDate) ? mutation.patch.scheduledDate : task.scheduledDate;
+    task.scheduledTime =
+      mutation.patch.scheduledTime === "" ? undefined : validTime(mutation.patch.scheduledTime) ? mutation.patch.scheduledTime : task.scheduledTime;
+    task.energy = validEnergy(mutation.patch.energy) ?? task.energy;
+    task.strictness = validStrictness(mutation.patch.strictness) ?? task.strictness;
+    task.notes = optionalText(mutation.patch.notes, task.notes);
+    task.repeatPolicy = mutation.patch.repeatPolicy ? normalizeRepeatPolicy(mutation.patch.repeatPolicy) : task.repeatPolicy;
+    return getState();
+  }
+
+  if (mutation.entity === "routine") {
+    if (mutation.action === "create") {
+      const domainId = validDomainId(state, mutation.patch.domainId) ?? state.domains[0]?.id;
+      if (!domainId) return getState();
+      state.routines.push({
+        id: uniqueStateId(state, "routine"),
+        title: cleanText(mutation.patch.title) || "New routine",
+        domainId,
+        recurrence: normalizeRoutineRecurrence(mutation.patch.recurrence),
+        defaultEffortMinutes: clampNumber(mutation.patch.defaultEffortMinutes, 1, 240, 20),
+        energy: validEnergy(mutation.patch.energy) ?? "low",
+        strictness: validStrictness(mutation.patch.strictness) ?? "normal",
+        preferredWindow: validPreferredWindow(mutation.patch.preferredWindow),
+        active: mutation.patch.active ?? true
+      });
+      return getState();
+    }
+
+    const routine = state.routines.find((entry) => entry.id === mutation.id);
+    if (!routine) return getState();
+    if (mutation.action === "archive") {
+      routine.active = false;
+      return getState();
+    }
+    routine.title = cleanText(mutation.patch.title) || routine.title;
+    routine.domainId = validDomainId(state, mutation.patch.domainId) ?? routine.domainId;
+    routine.recurrence = mutation.patch.recurrence ? normalizeRoutineRecurrence(mutation.patch.recurrence) : routine.recurrence;
+    routine.defaultEffortMinutes = clampNumber(mutation.patch.defaultEffortMinutes, 1, 240, routine.defaultEffortMinutes);
+    routine.energy = validEnergy(mutation.patch.energy) ?? routine.energy;
+    routine.strictness = validStrictness(mutation.patch.strictness) ?? routine.strictness;
+    routine.preferredWindow =
+      cleanText(mutation.patch.preferredWindow) === "" ? undefined : validPreferredWindow(mutation.patch.preferredWindow) ?? routine.preferredWindow;
+    routine.active = mutation.patch.active ?? routine.active;
+    return getState();
+  }
+
   return getState();
 }
 
@@ -934,8 +1140,135 @@ function validDate(value: string | null | undefined): value is string {
   return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
 }
 
+function validTime(value: string | null | undefined): value is string {
+  return Boolean(value && /^\d{2}:\d{2}$/.test(value));
+}
+
 function validDateOr(value: string | null | undefined, fallback: string): string {
   return validDate(value) ? value : fallback;
+}
+
+function cleanText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function optionalText(value: unknown, fallback: string | undefined): string | undefined {
+  if (value === undefined) return fallback;
+  const trimmed = cleanText(value);
+  return trimmed || undefined;
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const numeric = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
+function uniqueStateId(state: AppState, prefix: "domain" | "project" | "task" | "routine"): string {
+  const pools = {
+    domain: state.domains,
+    project: state.projects,
+    task: state.tasks,
+    routine: state.routines
+  };
+  const ids = pools[prefix].map((entry) => entry.id);
+  let index = ids.reduce((max, id) => {
+    const match = id.match(new RegExp(`^${prefix}_(\\d+)$`));
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  let next: string;
+  do {
+    index += 1;
+    next = `${prefix}_${index.toString().padStart(4, "0")}`;
+  } while (ids.includes(next));
+  return next;
+}
+
+function validDomainId(state: AppState, value: unknown): string | undefined {
+  return typeof value === "string" && state.domains.some((domain) => domain.id === value) ? value : undefined;
+}
+
+function validProjectId(state: AppState, value: unknown): string | undefined {
+  return typeof value === "string" && state.projects.some((project) => project.id === value && project.status === "active") ? value : undefined;
+}
+
+function validProjectKind(value: unknown): AppState["projects"][number]["kind"] | undefined {
+  return value === "project" || value === "area" || value === "person" || value === "list" || value === "idea_pool" || value === "maintenance" ? value : undefined;
+}
+
+function validPlanningMode(value: unknown): AppState["projects"][number]["planningMode"] | undefined {
+  return value === "deadline_driven" || value === "maintenance" || value === "suggestion_pool" || value === "relationship" || value === "open_backlog"
+    ? value
+    : undefined;
+}
+
+function validProjectStatus(value: unknown): AppState["projects"][number]["status"] | undefined {
+  return value === "active" || value === "paused" || value === "completed" ? value : undefined;
+}
+
+function validTaskType(value: unknown): Task["type"] | undefined {
+  return value === "atomic" || value === "project_task" || value === "routine_instance" || value === "soft_invitation" ? value : undefined;
+}
+
+function validTaskStatus(value: unknown): Task["status"] | undefined {
+  return value === "active" ||
+    value === "scheduled" ||
+    value === "completed" ||
+    value === "deferred" ||
+    value === "blocked" ||
+    value === "waiting" ||
+    value === "archived"
+    ? value
+    : undefined;
+}
+
+function validCompletionBehavior(value: unknown): Task["completionBehavior"] | undefined {
+  return value === "exhaust_once" || value === "repeatable" || value === "keep_as_suggestion" || value === "regenerate_after_completion" ? value : undefined;
+}
+
+function validCompletionMode(value: unknown): Task["completionMode"] | undefined {
+  return value === "simple_done" ||
+    value === "outcome_done" ||
+    value === "timebox" ||
+    value === "repeatable_checkoff" ||
+    value === "progress_accumulating" ||
+    value === "suggestion_used"
+    ? value
+    : undefined;
+}
+
+function validEnergy(value: unknown): Task["energy"] | undefined {
+  return value === "low" || value === "medium" || value === "high" ? value : undefined;
+}
+
+function validStrictness(value: unknown): Task["strictness"] | undefined {
+  return value === "flexible" || value === "normal" || value === "strict" ? value : undefined;
+}
+
+function validPreferredWindow(value: unknown): AppState["routines"][number]["preferredWindow"] | undefined {
+  return value === "morning" || value === "afternoon" || value === "evening" ? value : undefined;
+}
+
+function normalizeRepeatPolicy(value: Task["repeatPolicy"] | undefined): Task["repeatPolicy"] {
+  if (!value || value.type === "none") return { type: "none" };
+  if (value.type === "daily" || value.type === "weekly") {
+    return {
+      type: value.type,
+      days: value.days,
+      preferredWindow: value.preferredWindow,
+      carryover: value.carryover ?? "skip",
+      cooldownDays: value.cooldownDays
+    };
+  }
+  return { type: "none" };
+}
+
+function normalizeRoutineRecurrence(value: AppState["routines"][number]["recurrence"] | undefined): AppState["routines"][number]["recurrence"] {
+  if (!value || value.type === "daily") return { type: "daily" };
+  return {
+    type: "weekly",
+    days: Array.isArray(value.days) && value.days.length ? value.days.map((day) => clampNumber(day, 0, 6, 1)) : [1]
+  };
 }
 
 function taskActionPatch(task: Task): Record<string, unknown> {

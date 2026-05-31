@@ -1,7 +1,7 @@
 "use client";
 
-import { Bot, Check, ChevronLeft, ChevronRight, Clock3, Layers3, Menu, Send, Undo2, X } from "lucide-react";
-import { Dispatch, SetStateAction, useEffect, useMemo, useState } from "react";
+import { Archive, Bot, Check, ChevronLeft, ChevronRight, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
+import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useState } from "react";
 import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 
@@ -181,7 +181,7 @@ export default function Home() {
         </div>
       </header>
 
-      {activeView && <SecondaryPanel view={activeView} state={state} plan={plan} onClose={() => setActiveView(null)} />}
+      {activeView && <SecondaryPanel view={activeView} state={state} plan={plan} post={post} onClose={() => setActiveView(null)} />}
 
       <section className="calendarTimeline" aria-label="Timed day plan">
         <div className="calendarScroll">
@@ -473,15 +473,104 @@ async function responseError(response: Response): Promise<string> {
   }
 }
 
+const projectKinds = ["project", "area", "person", "list", "idea_pool", "maintenance"] as const;
+const planningModes = ["deadline_driven", "maintenance", "suggestion_pool", "relationship", "open_backlog"] as const;
+const projectStatuses = ["active", "paused", "completed"] as const;
+const taskStatuses = ["active", "scheduled", "completed", "deferred", "blocked", "waiting", "archived"] as const;
+const completionBehaviors = ["exhaust_once", "repeatable", "keep_as_suggestion", "regenerate_after_completion"] as const;
+const completionModes = ["simple_done", "outcome_done", "timebox", "repeatable_checkoff", "progress_accumulating", "suggestion_used"] as const;
+
+function submitStructureForm(
+  event: FormEvent<HTMLFormElement>,
+  post: PostFn,
+  entity: "domain" | "project" | "task" | "routine",
+  action: "create" | "update",
+  id?: string
+) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const patch = structurePatch(entity, formData);
+  void post("/api/structure", { entity, action, id, patch }).then(() => {
+    if (action === "create") form.reset();
+  });
+}
+
+function structurePatch(entity: "domain" | "project" | "task" | "routine", formData: FormData): Record<string, unknown> {
+  if (entity === "domain") {
+    return {
+      name: fieldText(formData, "name"),
+      weight: fieldNumber(formData, "weight")
+    };
+  }
+
+  if (entity === "project") {
+    return {
+      name: fieldText(formData, "name"),
+      domainId: fieldText(formData, "domainId"),
+      kind: fieldText(formData, "kind"),
+      planningMode: fieldText(formData, "planningMode"),
+      status: fieldText(formData, "status"),
+      defaultBlockMinutes: fieldNumber(formData, "defaultBlockMinutes"),
+      contextNote: fieldText(formData, "contextNote")
+    };
+  }
+
+  if (entity === "routine") {
+    const recurrenceType = fieldText(formData, "recurrenceType");
+    const weeklyDays = fieldText(formData, "weeklyDays")
+      .split(",")
+      .map((day) => Number(day.trim()))
+      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+    return {
+      title: fieldText(formData, "title"),
+      domainId: fieldText(formData, "domainId"),
+      recurrence: recurrenceType === "weekly" ? { type: "weekly", days: weeklyDays.length ? weeklyDays : [1] } : { type: "daily" },
+      defaultEffortMinutes: fieldNumber(formData, "defaultEffortMinutes"),
+      preferredWindow: fieldText(formData, "preferredWindow")
+    };
+  }
+
+  return {
+    title: fieldText(formData, "title"),
+    domainId: fieldText(formData, "domainId"),
+    projectId: fieldText(formData, "projectId"),
+    status: fieldText(formData, "status"),
+    priority: fieldNumber(formData, "priority"),
+    importance: fieldNumber(formData, "importance"),
+    urgency: fieldNumber(formData, "urgency"),
+    effortMinutes: fieldNumber(formData, "effortMinutes"),
+    dueDate: fieldText(formData, "dueDate"),
+    scheduledDate: fieldText(formData, "scheduledDate"),
+    scheduledTime: fieldText(formData, "scheduledTime"),
+    completionBehavior: fieldText(formData, "completionBehavior"),
+    completionMode: fieldText(formData, "completionMode"),
+    definitionOfDone: fieldText(formData, "definitionOfDone"),
+    notes: fieldText(formData, "notes")
+  };
+}
+
+function fieldText(formData: FormData, key: string): string {
+  const value = formData.get(key);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function fieldNumber(formData: FormData, key: string): number | undefined {
+  const value = fieldText(formData, key);
+  return value ? Number(value) : undefined;
+}
+
 function SecondaryPanel({
   view,
   state,
   plan,
+  post,
   onClose
 }: {
   view: SecondaryView;
   state: AppState;
   plan: DayPlan;
+  post: PostFn;
   onClose: () => void;
 }) {
   const taskGroups = buildTaskGroups(state, plan);
@@ -496,9 +585,24 @@ function SecondaryPanel({
       <p className="eyebrow">{view}</p>
       {view === "Domains" && (
         <div className="panelGrid">
+          <form className="structureForm" aria-label="Create domain" onSubmit={(event) => submitStructureForm(event, post, "domain", "create")}>
+            <h2>New domain</h2>
+            <input name="name" placeholder="Domain name" aria-label="Domain name" />
+            <input name="weight" type="number" min="1" max="10" defaultValue="5" aria-label="Domain weight" />
+            <button type="submit">
+              <Plus size={15} />
+              Add
+            </button>
+          </form>
           {state.domains.map((domain) => (
-            <article key={domain.id}>
-              <h2>{domain.name}</h2>
+            <article key={domain.id} className="editableCard">
+              <form onSubmit={(event) => submitStructureForm(event, post, "domain", "update", domain.id)}>
+                <input name="name" defaultValue={domain.name} aria-label={`Name ${domain.name}`} />
+                <input name="weight" type="number" min="1" max="10" defaultValue={domain.weight} aria-label={`Weight ${domain.name}`} />
+                <button type="submit" aria-label={`Save ${domain.name}`}>
+                  <Save size={15} />
+                </button>
+              </form>
               <span>Weight {domain.weight}</span>
             </article>
           ))}
@@ -506,10 +610,81 @@ function SecondaryPanel({
       )}
       {view === "Projects" && (
         <div className="panelGrid">
+          <form className="structureForm" aria-label="Create project" onSubmit={(event) => submitStructureForm(event, post, "project", "create")}>
+            <h2>New project</h2>
+            <input name="name" placeholder="Project name" aria-label="Project name" />
+            <select name="domainId" aria-label="Project domain" defaultValue={state.domains[0]?.id}>
+              {state.domains.map((domain) => (
+                <option value={domain.id} key={domain.id}>
+                  {domain.name}
+                </option>
+              ))}
+            </select>
+            <select name="kind" aria-label="Project kind" defaultValue="project">
+              {projectKinds.map((kind) => (
+                <option value={kind} key={kind}>
+                  {kind}
+                </option>
+              ))}
+            </select>
+            <select name="planningMode" aria-label="Planning mode" defaultValue="open_backlog">
+              {planningModes.map((mode) => (
+                <option value={mode} key={mode}>
+                  {mode}
+                </option>
+              ))}
+            </select>
+            <input name="defaultBlockMinutes" type="number" min="5" max="480" defaultValue="60" aria-label="Default block minutes" />
+            <button type="submit">
+              <Plus size={15} />
+              Add
+            </button>
+          </form>
           {projectSummaries.map(({ project, activeTasks, nextTasks }) => (
             <article key={project.id} className="projectCard">
-              <h2>{project.name}</h2>
-              <p>{project.contextNote || project.planningMode}</p>
+              <form className="stackedEditForm" onSubmit={(event) => submitStructureForm(event, post, "project", "update", project.id)}>
+                <input name="name" defaultValue={project.name} aria-label={`Name ${project.name}`} />
+                <select name="domainId" defaultValue={project.domainId} aria-label={`Domain ${project.name}`}>
+                  {state.domains.map((domain) => (
+                    <option value={domain.id} key={domain.id}>
+                      {domain.name}
+                    </option>
+                  ))}
+                </select>
+                <select name="kind" defaultValue={project.kind} aria-label={`Kind ${project.name}`}>
+                  {projectKinds.map((kind) => (
+                    <option value={kind} key={kind}>
+                      {kind}
+                    </option>
+                  ))}
+                </select>
+                <select name="planningMode" defaultValue={project.planningMode} aria-label={`Planning mode ${project.name}`}>
+                  {planningModes.map((mode) => (
+                    <option value={mode} key={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
+                <select name="status" defaultValue={project.status} aria-label={`Status ${project.name}`}>
+                  {projectStatuses.map((status) => (
+                    <option value={status} key={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+                <input name="defaultBlockMinutes" type="number" min="5" max="480" defaultValue={project.defaultBlockMinutes} aria-label={`Minutes ${project.name}`} />
+                <textarea name="contextNote" defaultValue={project.contextNote} aria-label={`Context ${project.name}`} />
+                <div className="formActions">
+                  <button type="submit" aria-label={`Save ${project.name}`}>
+                    <Save size={15} />
+                    Save
+                  </button>
+                  <button type="button" onClick={() => post("/api/structure", { entity: "project", action: "archive", id: project.id })}>
+                    <Archive size={15} />
+                    Pause
+                  </button>
+                </div>
+              </form>
               <span>
                 {project.kind} - {project.planningMode} - {activeTasks.length} active - {project.defaultBlockMinutes}m
               </span>
@@ -527,6 +702,31 @@ function SecondaryPanel({
       )}
       {view === "Tasks" && (
         <div className="taskSections">
+          <form className="structureForm wideStructureForm" aria-label="Create task" onSubmit={(event) => submitStructureForm(event, post, "task", "create")}>
+            <h2>New task</h2>
+            <input name="title" placeholder="Task title" aria-label="Task title" />
+            <select name="domainId" aria-label="Task domain" defaultValue={state.domains[0]?.id}>
+              {state.domains.map((domain) => (
+                <option value={domain.id} key={domain.id}>
+                  {domain.name}
+                </option>
+              ))}
+            </select>
+            <select name="projectId" aria-label="Task project" defaultValue="">
+              <option value="">No project</option>
+              {state.projects.filter((project) => project.status === "active").map((project) => (
+                <option value={project.id} key={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <input name="effortMinutes" type="number" min="1" max="720" defaultValue="30" aria-label="Task minutes" />
+            <input name="dueDate" type="date" aria-label="Task due date" />
+            <button type="submit">
+              <Plus size={15} />
+              Add
+            </button>
+          </form>
           {taskGroups.map((group) => (
             <section className="taskSection" aria-label={group.title} key={group.title}>
               <div className="sectionHeader">
@@ -555,6 +755,73 @@ function SecondaryPanel({
                         </span>
                       )}
                     </div>
+                    <details className="inlineEditor">
+                      <summary>Edit</summary>
+                      <form onSubmit={(event) => submitStructureForm(event, post, "task", "update", task.id)}>
+                        <input name="title" defaultValue={task.title} aria-label={`Title ${task.title}`} />
+                        <select name="domainId" defaultValue={task.domainId} aria-label={`Domain ${task.title}`}>
+                          {state.domains.map((domain) => (
+                            <option value={domain.id} key={domain.id}>
+                              {domain.name}
+                            </option>
+                          ))}
+                        </select>
+                        <select name="projectId" defaultValue={task.projectId ?? ""} aria-label={`Project ${task.title}`}>
+                          <option value="">No project</option>
+                          {state.projects.filter((project) => project.status === "active").map((project) => (
+                            <option value={project.id} key={project.id}>
+                              {project.name}
+                            </option>
+                          ))}
+                        </select>
+                        <select name="status" defaultValue={task.status} aria-label={`Status ${task.title}`}>
+                          {taskStatuses.map((status) => (
+                            <option value={status} key={status}>
+                              {status}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="compactFields">
+                          <input name="priority" type="number" min="1" max="10" defaultValue={task.priority} aria-label={`Priority ${task.title}`} />
+                          <input name="importance" type="number" min="1" max="10" defaultValue={task.importance} aria-label={`Importance ${task.title}`} />
+                          <input name="urgency" type="number" min="1" max="10" defaultValue={task.urgency} aria-label={`Urgency ${task.title}`} />
+                          <input name="effortMinutes" type="number" min="1" max="720" defaultValue={task.effortMinutes} aria-label={`Minutes ${task.title}`} />
+                        </div>
+                        <div className="compactFields">
+                          <input name="dueDate" type="date" defaultValue={task.dueDate ?? ""} aria-label={`Due ${task.title}`} />
+                          <input name="scheduledDate" type="date" defaultValue={task.scheduledDate ?? ""} aria-label={`Scheduled ${task.title}`} />
+                          <input name="scheduledTime" type="time" defaultValue={task.scheduledTime ?? ""} aria-label={`Time ${task.title}`} />
+                        </div>
+                        <div className="compactFields">
+                          <select name="completionBehavior" defaultValue={task.completionBehavior} aria-label={`Behavior ${task.title}`}>
+                            {completionBehaviors.map((behavior) => (
+                              <option value={behavior} key={behavior}>
+                                {behavior}
+                              </option>
+                            ))}
+                          </select>
+                          <select name="completionMode" defaultValue={task.completionMode ?? "simple_done"} aria-label={`Mode ${task.title}`}>
+                            {completionModes.map((mode) => (
+                              <option value={mode} key={mode}>
+                                {mode}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <textarea name="definitionOfDone" defaultValue={task.definitionOfDone ?? ""} aria-label={`Definition of done ${task.title}`} />
+                        <textarea name="notes" defaultValue={task.notes ?? ""} aria-label={`Notes ${task.title}`} />
+                        <div className="formActions">
+                          <button type="submit">
+                            <Save size={15} />
+                            Save
+                          </button>
+                          <button type="button" onClick={() => post("/api/structure", { entity: "task", action: "archive", id: task.id })}>
+                            <Archive size={15} />
+                            Archive
+                          </button>
+                        </div>
+                      </form>
+                    </details>
                   </article>
                 ))}
               </div>
@@ -564,12 +831,68 @@ function SecondaryPanel({
       )}
       {view === "Routines" && (
         <div className="panelGrid">
+          <form className="structureForm" aria-label="Create routine" onSubmit={(event) => submitStructureForm(event, post, "routine", "create")}>
+            <h2>New routine</h2>
+            <input name="title" placeholder="Routine title" aria-label="Routine title" />
+            <select name="domainId" aria-label="Routine domain" defaultValue={state.domains[0]?.id}>
+              {state.domains.map((domain) => (
+                <option value={domain.id} key={domain.id}>
+                  {domain.name}
+                </option>
+              ))}
+            </select>
+            <select name="recurrenceType" aria-label="Routine recurrence" defaultValue="daily">
+              <option value="daily">daily</option>
+              <option value="weekly">weekly</option>
+            </select>
+            <input name="defaultEffortMinutes" type="number" min="1" max="240" defaultValue="20" aria-label="Routine minutes" />
+            <button type="submit">
+              <Plus size={15} />
+              Add
+            </button>
+          </form>
           {state.routines.map((routine) => (
             <article key={routine.id}>
-              <h2>{routine.title}</h2>
+              <form className="stackedEditForm" onSubmit={(event) => submitStructureForm(event, post, "routine", "update", routine.id)}>
+                <input name="title" defaultValue={routine.title} aria-label={`Title ${routine.title}`} />
+                <select name="domainId" defaultValue={routine.domainId} aria-label={`Domain ${routine.title}`}>
+                  {state.domains.map((domain) => (
+                    <option value={domain.id} key={domain.id}>
+                      {domain.name}
+                    </option>
+                  ))}
+                </select>
+                <select name="recurrenceType" defaultValue={routine.recurrence.type} aria-label={`Recurrence ${routine.title}`}>
+                  <option value="daily">daily</option>
+                  <option value="weekly">weekly</option>
+                </select>
+                <input
+                  name="weeklyDays"
+                  defaultValue={routine.recurrence.type === "weekly" ? routine.recurrence.days.join(",") : ""}
+                  placeholder="Weekly days 0-6"
+                  aria-label={`Weekly days ${routine.title}`}
+                />
+                <input name="defaultEffortMinutes" type="number" min="1" max="240" defaultValue={routine.defaultEffortMinutes} aria-label={`Minutes ${routine.title}`} />
+                <select name="preferredWindow" defaultValue={routine.preferredWindow ?? ""} aria-label={`Window ${routine.title}`}>
+                  <option value="">anytime</option>
+                  <option value="morning">morning</option>
+                  <option value="afternoon">afternoon</option>
+                  <option value="evening">evening</option>
+                </select>
+                <div className="formActions">
+                  <button type="submit">
+                    <Save size={15} />
+                    Save
+                  </button>
+                  <button type="button" onClick={() => post("/api/structure", { entity: "routine", action: "archive", id: routine.id })}>
+                    <Archive size={15} />
+                    Archive
+                  </button>
+                </div>
+              </form>
               <p>{routine.recurrence.type === "daily" ? "Daily" : `Weekly: ${routine.recurrence.days.join(", ")}`}</p>
               <span>
-                {routine.defaultEffortMinutes}m - {routine.energy} - {routine.strictness}
+                {routine.defaultEffortMinutes}m - {routine.energy} - {routine.strictness} - {routine.active ? "active" : "inactive"}
               </span>
             </article>
           ))}

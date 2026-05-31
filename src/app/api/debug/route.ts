@@ -10,6 +10,8 @@ export async function GET() {
     currentTime: state.currentTime,
     taskCount: state.tasks.length,
     routineCount: state.routines.length,
+    domains: state.domains,
+    projects: state.projects,
     routines: state.routines,
     inbox: state.inbox.map((entry) => ({
       id: entry.id,
