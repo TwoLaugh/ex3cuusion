@@ -421,4 +421,30 @@ describe("interpretInboxInput", () => {
       payload: { title: "Clean house", scheduledDate: "2026-06-01", scheduledTime: "16:00" }
     });
   });
+
+  it("keeps interpreter debug traces on the inbox entry", async () => {
+    const state = createSeedState();
+    const entry = await interpretInboxInput("I need to cut my nails", state, async (input) => ({
+      ...(await fixtureInterpreter(input, state)),
+      debugTrace: {
+        calls: [
+          {
+            label: "Fixture call",
+            model: "fixture",
+            createdAt: "2026-06-01T08:30:00.000Z",
+            instructions: "Test instructions",
+            input,
+            response: "{\"summary\":\"ok\"}",
+            parsedResponse: { summary: "ok" }
+          }
+        ]
+      }
+    }));
+
+    expect(entry.debugTrace?.calls[0]).toMatchObject({
+      label: "Fixture call",
+      instructions: "Test instructions",
+      response: "{\"summary\":\"ok\"}"
+    });
+  });
 });

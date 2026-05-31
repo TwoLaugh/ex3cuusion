@@ -5,7 +5,7 @@ import { addDays, nextDayOfWeek, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
 import { buildDayPlan } from "./planner";
 import { buildWeekPlan } from "./week-plan";
-import type { AiAction, AppState, CaptureSession, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
+import type { AiAction, AiDebugTrace, AppState, CaptureSession, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
 
 const aiActionSchema = z.object({
   summary: z.string(),
@@ -43,7 +43,7 @@ const aiActionSchema = z.object({
 type ParsedAiResponse = z.infer<typeof aiActionSchema>;
 type ParsedAiAction = ParsedAiResponse["actions"][number];
 type InterpretationMode = "default" | "day_rewrite";
-export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAiResponse & { model?: string; interpretationMode?: InterpretationMode }>;
+export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAiResponse & { model?: string; interpretationMode?: InterpretationMode; debugTrace?: AiDebugTrace }>;
 
 const dayRewriteSchema = z.object({
   summary: z.string(),
@@ -118,7 +118,8 @@ export async function interpretInboxInput(
     createdAt: timestampForState(state),
     input,
     actions,
-    summary: parsed.summary || `${actions.length} structured action${actions.length === 1 ? "" : "s"} proposed.`
+    summary: parsed.summary || `${actions.length} structured action${actions.length === 1 ? "" : "s"} proposed.`,
+    debugTrace: parsed.debugTrace
   };
 }
 
@@ -132,7 +133,7 @@ export async function interpretCaptureRevision(
   return interpreter({ message, state, session, task });
 }
 
-async function defaultInterpreter(input: string, state: AppState): Promise<ParsedAiResponse & { model?: string }> {
+async function defaultInterpreter(input: string, state: AppState): Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (process.env.EX3CUUSION_AI_MODE === "fixture" || process.env.NODE_ENV === "test" || (!apiKey && process.env.NODE_ENV !== "production")) {
     return fixtureInterpreter(input, state);
@@ -152,7 +153,11 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
   const dayRewrite = await defaultDayRewriteInterpreter(input, state, openai, model);
   if (dayRewrite.actions.length > 0) return dayRewrite;
 
-  return defaultActionInterpreter(input, state, openai, model);
+  const actionResponse = await defaultActionInterpreter(input, state, openai, model);
+  return {
+    ...actionResponse,
+    debugTrace: mergeDebugTraces(dayRewrite.debugTrace, actionResponse.debugTrace)
+  };
 }
 
 async function defaultDayRewriteInterpreter(
@@ -160,26 +165,28 @@ async function defaultDayRewriteInterpreter(
   state: AppState,
   openai: OpenAI,
   model: string
-): Promise<ParsedAiResponse & { model?: string; interpretationMode: "day_rewrite" }> {
+): Promise<ParsedAiResponse & { model?: string; interpretationMode: "day_rewrite"; debugTrace?: AiDebugTrace }> {
+  const instructions =
+    "You rewrite a single day's task schedule for a personal execution planner. " +
+    "You will receive only a simple current-day list: task IDs, titles, start times, and effort minutes, plus the user's request. " +
+    "Return the revised day list in the same simple form. Copy unchanged tasks exactly, including taskId. " +
+    "If the user asks to move or correct a time, keep the same taskId and change only startTime. " +
+    "If the user asks to remove, delete, cancel, archive, get rid of, or dedupe an existing task, put its taskId in archivedTaskIds and omit it from revisedDay. " +
+    "If the user asks to add a new task for today, include it in revisedDay with taskId null. " +
+    "Do not invent task IDs. Do not archive anything unless the user clearly asked for removal or dedupe. " +
+    "If the request cannot be represented as a same-day schedule edit or add/remove, leave revisedDay unchanged and use question only if one useful question is needed. " +
+    "Use HH:mm 24-hour startTime values, or null when the task should remain untimed. Output only the structured JSON.";
+  const modelInput =
+    `Current date: ${state.currentDate}\n` +
+    `User request: ${input}\n\n` +
+    `Current day JSON:\n${JSON.stringify(buildSimpleDayForModel(state), null, 2)}`;
   const response = await openai.responses.parse({
     model,
-    instructions:
-      "You rewrite a single day's task schedule for a personal execution planner. " +
-      "You will receive only a simple current-day list: task IDs, titles, start times, and effort minutes, plus the user's request. " +
-      "Return the revised day list in the same simple form. Copy unchanged tasks exactly, including taskId. " +
-      "If the user asks to move or correct a time, keep the same taskId and change only startTime. " +
-      "If the user asks to remove, delete, cancel, archive, get rid of, or dedupe an existing task, put its taskId in archivedTaskIds and omit it from revisedDay. " +
-      "If the user asks to add a new task for today, include it in revisedDay with taskId null. " +
-      "Do not invent task IDs. Do not archive anything unless the user clearly asked for removal or dedupe. " +
-      "If the request cannot be represented as a same-day schedule edit or add/remove, leave revisedDay unchanged and use question only if one useful question is needed. " +
-      "Use HH:mm 24-hour startTime values, or null when the task should remain untimed. Output only the structured JSON.",
+    instructions,
     input: [
       {
         role: "user",
-        content:
-          `Current date: ${state.currentDate}\n` +
-          `User request: ${input}\n\n` +
-          `Current day JSON:\n${JSON.stringify(buildSimpleDayForModel(state), null, 2)}`
+        content: modelInput
       }
     ],
     text: {
@@ -191,47 +198,52 @@ async function defaultDayRewriteInterpreter(
     throw new Error("OpenAI response did not match the expected day rewrite schema");
   }
 
-  return buildParsedActionsFromDayRewrite(response.output_parsed, state, `${model}:day-rewrite`);
+  return {
+    ...buildParsedActionsFromDayRewrite(response.output_parsed, state, `${model}:day-rewrite`),
+    debugTrace: debugTraceForCall("Day rewrite", model, instructions, modelInput, responseText(response), response.output_parsed)
+  };
 }
 
-async function defaultActionInterpreter(input: string, state: AppState, openai: OpenAI, model: string): Promise<ParsedAiResponse & { model?: string }> {
+async function defaultActionInterpreter(input: string, state: AppState, openai: OpenAI, model: string): Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }> {
+  const instructions =
+    "You are the state-editing brain for a personal execution planner. " +
+    "You receive the user's full current app state, current day plan, and week plan as JSON. Use that context directly; do not guess blindly from the latest message. " +
+    "Decide what should change in the existing state. Prefer editing, archiving, rescheduling, or asking a useful clarification over creating duplicates. " +
+    "The durable unit is a task; chat exists only to clarify ambiguity before creating good task state. " +
+    "Think through the task silently first. Ask a follow-up only when the answer materially changes storage, recurrence, scheduling, completion behavior, project placement, splitting, or definition of done. " +
+    "When the user asks to remove, delete, cancel, dedupe, keep only one, or get rid of an old/original task, use archive_task with the exact targetTaskId from context. " +
+    "When the user asks to move or change timing for an existing task, use schedule_task with the exact targetTaskId from context. " +
+    "If two tasks overlap nonsensically or a request would create a bad day, either return several edits that fix the day or ask one worthwhile clarification. " +
+    "Do not ask low-value questions for obvious simple tasks; infer reasonable defaults and create the task. " +
+    "For explicit requests to add or create an ordinary obvious task, return create_task. " +
+    "For broad work where done-state is unclear, return ask_clarification, not create_task. Examples: clean the house, sort backend, fix the app, organize life admin. " +
+    "For ask_clarification actions: title must be the canonical future task title, not the question text. question must contain the user-facing question. definitionOfDone must be null. " +
+    "For 'clean the house', use title 'Clean house', clarificationKind 'definition_of_done', and ask what would count as enough cleaning. " +
+    "For reusable relationship ideas like 'ideas for things to do with Emma', use ask_clarification with title 'Ideas for things to do with Emma', completionBehavior keep_as_suggestion, completionMode suggestion_used, and ask whether to keep it as a reusable suggestion list. " +
+    "For timeboxed work like 'work on Diet App for two hours', return create_task with completionBehavior repeatable, completionMode timebox, effortMinutes 120, and the matching existing project. " +
+    "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
+    "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; set scheduledDate and dueDate to null for those and keep the date intent as a week-level window unless the user names a specific day or deadline. " +
+    "For deadline wording such as 'by Tuesday' or 'before Friday', set dueDate, not scheduledDate. For execution wording such as 'on Tuesday' or 'today', set scheduledDate. " +
+    "Preserve scheduling semantics in tags and estimates: laundry/washer/dryer is phased background work; cooking/travel can permit partial overlap; AI-side-work that can run while the user does something else is concurrent/background rather than a normal exclusive task. " +
+    "Interpret sleep/bed at 'half 11' as 23:30 unless the user clearly means morning. " +
+    "For explicit recurring habits, return create_routine with recurrenceDays when known. " +
+    "For 'message Will every Friday', return create_routine with title 'Message Will' and recurrenceDays [5]. " +
+    "For sleep or bed time, return create_task titled 'Sleep', not schedule_block. " +
+    "Use existing domain/project names and target task IDs when they fit. Return only actions that help choose, schedule, split, defer, prioritize, or prune work. " +
+    "projectName must be null unless it exactly refers to an existing project/container from the provided list. " +
+    "For archive_task and schedule_task, targetTaskId is required and must be an existing task ID. " +
+    "Nullable fields must be real JSON null, not strings like 'null', ':null', 'none', or 'N/A'. " +
+    "Use strictness flexible, normal, or strict. Score priority, importance, and urgency from 1 to 5.";
+  const modelInput =
+    `User input: ${input}\n\n` +
+    `Current planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
   const response = await openai.responses.parse({
     model,
-    instructions:
-      "You are the state-editing brain for a personal execution planner. " +
-      "You receive the user's full current app state, current day plan, and week plan as JSON. Use that context directly; do not guess blindly from the latest message. " +
-      "Decide what should change in the existing state. Prefer editing, archiving, rescheduling, or asking a useful clarification over creating duplicates. " +
-      "The durable unit is a task; chat exists only to clarify ambiguity before creating good task state. " +
-      "Think through the task silently first. Ask a follow-up only when the answer materially changes storage, recurrence, scheduling, completion behavior, project placement, splitting, or definition of done. " +
-      "When the user asks to remove, delete, cancel, dedupe, keep only one, or get rid of an old/original task, use archive_task with the exact targetTaskId from context. " +
-      "When the user asks to move or change timing for an existing task, use schedule_task with the exact targetTaskId from context. " +
-      "If two tasks overlap nonsensically or a request would create a bad day, either return several edits that fix the day or ask one worthwhile clarification. " +
-      "Do not ask low-value questions for obvious simple tasks; infer reasonable defaults and create the task. " +
-      "For explicit requests to add or create an ordinary obvious task, return create_task. " +
-      "For broad work where done-state is unclear, return ask_clarification, not create_task. Examples: clean the house, sort backend, fix the app, organize life admin. " +
-      "For ask_clarification actions: title must be the canonical future task title, not the question text. question must contain the user-facing question. definitionOfDone must be null. " +
-      "For 'clean the house', use title 'Clean house', clarificationKind 'definition_of_done', and ask what would count as enough cleaning. " +
-      "For reusable relationship ideas like 'ideas for things to do with Emma', use ask_clarification with title 'Ideas for things to do with Emma', completionBehavior keep_as_suggestion, completionMode suggestion_used, and ask whether to keep it as a reusable suggestion list. " +
-      "For timeboxed work like 'work on Diet App for two hours', return create_task with completionBehavior repeatable, completionMode timebox, effortMinutes 120, and the matching existing project. " +
-      "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
-      "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; set scheduledDate and dueDate to null for those and keep the date intent as a week-level window unless the user names a specific day or deadline. " +
-      "For deadline wording such as 'by Tuesday' or 'before Friday', set dueDate, not scheduledDate. For execution wording such as 'on Tuesday' or 'today', set scheduledDate. " +
-      "Preserve scheduling semantics in tags and estimates: laundry/washer/dryer is phased background work; cooking/travel can permit partial overlap; AI-side-work that can run while the user does something else is concurrent/background rather than a normal exclusive task. " +
-      "Interpret sleep/bed at 'half 11' as 23:30 unless the user clearly means morning. " +
-      "For explicit recurring habits, return create_routine with recurrenceDays when known. " +
-      "For 'message Will every Friday', return create_routine with title 'Message Will' and recurrenceDays [5]. " +
-      "For sleep or bed time, return create_task titled 'Sleep', not schedule_block. " +
-      "Use existing domain/project names and target task IDs when they fit. Return only actions that help choose, schedule, split, defer, prioritize, or prune work. " +
-      "projectName must be null unless it exactly refers to an existing project/container from the provided list. " +
-      "For archive_task and schedule_task, targetTaskId is required and must be an existing task ID. " +
-      "Nullable fields must be real JSON null, not strings like 'null', ':null', 'none', or 'N/A'. " +
-      "Use strictness flexible, normal, or strict. Score priority, importance, and urgency from 1 to 5.",
+    instructions,
     input: [
       {
         role: "user",
-        content:
-          `User input: ${input}\n\n` +
-          `Current planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`
+        content: modelInput
       }
     ],
     text: {
@@ -243,7 +255,51 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     throw new Error("OpenAI response did not match the expected execution action schema");
   }
 
-  return { ...response.output_parsed, model };
+  return {
+    ...response.output_parsed,
+    model,
+    debugTrace: debugTraceForCall("Full-context actions", model, instructions, modelInput, responseText(response), response.output_parsed)
+  };
+}
+
+function debugTraceForCall(
+  label: string,
+  model: string,
+  instructions: string,
+  input: string,
+  response: string,
+  parsedResponse: unknown
+): AiDebugTrace | undefined {
+  if (!aiDebugEnabled()) return undefined;
+  return {
+    calls: [
+      {
+        label,
+        model,
+        createdAt: new Date().toISOString(),
+        instructions,
+        input,
+        response,
+        parsedResponse
+      }
+    ]
+  };
+}
+
+function mergeDebugTraces(...traces: Array<AiDebugTrace | undefined>): AiDebugTrace | undefined {
+  const calls = traces.flatMap((trace) => trace?.calls ?? []);
+  return calls.length ? { calls } : undefined;
+}
+
+function aiDebugEnabled(): boolean {
+  return process.env.EX3CUUSION_AI_DEBUG === "1" || (process.env.NODE_ENV !== "production" && process.env.EX3CUUSION_AI_DEBUG !== "0");
+}
+
+function responseText(response: unknown): string {
+  const outputText = (response as { output_text?: unknown }).output_text;
+  if (typeof outputText === "string" && outputText.trim()) return outputText;
+  const parsed = (response as { output_parsed?: unknown }).output_parsed;
+  return JSON.stringify(parsed, null, 2);
 }
 
 function buildInboxModelContext(state: AppState) {

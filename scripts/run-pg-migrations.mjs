@@ -59,7 +59,7 @@ try {
 function loadLocalEnv() {
   for (const file of [".env.local", ".env"]) {
     try {
-      const contents = readFileSync(file);
+      const contents = readFileSync(file, "utf8");
       for (const line of contents.split(/\r?\n/)) {
         const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)\s*$/);
         if (!match || process.env[match[1]]) continue;

@@ -368,6 +368,21 @@ export interface InboxEntry {
   actions: AiAction[];
   summary: string;
   captureSessionId?: string;
+  debugTrace?: AiDebugTrace;
+}
+
+export interface AiDebugTrace {
+  calls: AiDebugCall[];
+}
+
+export interface AiDebugCall {
+  label: string;
+  model?: string;
+  createdAt: string;
+  instructions: string;
+  input: string;
+  response: string;
+  parsedResponse?: unknown;
 }
 
 export interface CaptureMessage {

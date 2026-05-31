@@ -362,13 +362,18 @@ async function projectState(client, state) {
   for (const entry of state.inbox ?? []) {
     const result = await client.query(
       `
-        insert into inbox_items (user_id, external_id, raw_text, status, assistant_summary, created_at, updated_at)
-        values ($1, $2, $3, $4, $5, $6, now())
+        insert into inbox_items (user_id, external_id, raw_text, status, assistant_summary, ai_debug_trace, created_at, updated_at)
+        values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
         on conflict (user_id, external_id) where external_id is not null
-        do update set raw_text = excluded.raw_text, status = excluded.status, assistant_summary = excluded.assistant_summary, updated_at = now()
+        do update set
+          raw_text = excluded.raw_text,
+          status = excluded.status,
+          assistant_summary = excluded.assistant_summary,
+          ai_debug_trace = excluded.ai_debug_trace,
+          updated_at = now()
         returning id
       `,
-      [userId, entry.id, entry.input, inboxStatus(entry), entry.summary, entry.createdAt]
+      [userId, entry.id, entry.input, inboxStatus(entry), entry.summary, jsonOrNull(entry.debugTrace), entry.createdAt]
     );
     inboxIds.set(entry.id, result.rows[0].id);
   }
@@ -725,7 +730,7 @@ async function readProjectedState(client) {
   );
   const inboxItems = await client.query(
     `
-      select external_id, raw_text, assistant_summary, created_at
+      select external_id, raw_text, assistant_summary, ai_debug_trace, created_at
       from inbox_items
       where user_id = $1 and external_id is not null
     `,
@@ -951,7 +956,8 @@ async function readProjectedState(client) {
         pendingQuestionId: action.pending_question_external_id ?? undefined
       })),
       summary: row.assistant_summary,
-      captureSessionId: sessionsByInbox.get(row.external_id) ?? undefined
+      captureSessionId: sessionsByInbox.get(row.external_id) ?? undefined,
+      debugTrace: row.ai_debug_trace ?? undefined
     })),
     captureSessions: sortRows(captureSessions.rows, order.captureSessions).map((row) => ({
       id: row.external_id,

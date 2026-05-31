@@ -1248,6 +1248,55 @@ textarea {
   padding: 5px 9px;
 }
 
+.aiDebugTrace {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+
+.aiDebugTrace summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.aiDebugTrace section {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.aiDebugTrace h3 {
+  font-size: 0.86rem;
+  margin: 0;
+}
+
+.aiDebugTrace strong {
+  color: var(--blue);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.aiDebugTrace pre {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #d9e2ef;
+  font-size: 0.72rem;
+  line-height: 1.42;
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 9px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .clarificationOptions,
 .clarificationAnswer {
   display: flex;

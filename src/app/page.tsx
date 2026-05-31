@@ -9,6 +9,7 @@ type ApiPayload = { state: AppState; plan: DayPlan };
 type PostFn = (url: string, body?: Record<string, unknown>) => Promise<void>;
 type SecondaryView = "Domains" | "Projects" | "Tasks" | "Routines" | "Planning preferences" | "AI activity";
 const secondaryViews: SecondaryView[] = ["Domains", "Projects", "Tasks", "Routines", "Planning preferences", "AI activity"];
+const showAiDebugTrace = process.env.NODE_ENV !== "production";
 
 export default function Home() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
@@ -686,6 +687,29 @@ function InboxSession({
           <button onClick={() => post(`/api/ai-actions/${action.id}/reject`, { reason: "Rejected from inbox." })}>Reject</button>
         </div>
       ))}
+      {showAiDebugTrace && entry.debugTrace?.calls?.length ? (
+        <details className="aiDebugTrace">
+          <summary>AI debug</summary>
+          {entry.debugTrace.calls.map((call, index) => (
+            <section key={`${call.label}_${index}`}>
+              <h3>
+                {call.label}
+                {call.model ? ` · ${call.model}` : ""}
+              </h3>
+              <strong>Prompt sent</strong>
+              <pre>{`Instructions:\n${call.instructions}\n\nInput:\n${call.input}`}</pre>
+              <strong>Response received</strong>
+              <pre>{call.response}</pre>
+              {call.parsedResponse !== undefined && (
+                <>
+                  <strong>Parsed response</strong>
+                  <pre>{JSON.stringify(call.parsedResponse, null, 2)}</pre>
+                </>
+              )}
+            </section>
+          ))}
+        </details>
+      ) : null}
       {session && (
         <div className="followUpBox">
           <input
