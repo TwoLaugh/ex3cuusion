@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fixtureInterpreter, interpretInboxInput } from "./ai-actions";
+import { buildParsedActionsFromDayRewrite, fixtureInterpreter, interpretInboxInput } from "./ai-actions";
 import { createSeedState } from "./seed";
 
 describe("interpretInboxInput", () => {
@@ -373,6 +373,52 @@ describe("interpretInboxInput", () => {
     });
     expect(report?.payload).toMatchObject({
       scheduling: { mode: "background", attentionLoad: "passive", canOverlap: true }
+    });
+  });
+
+  it("diffs a simple model-rewritten day into edit actions without semantic second-guessing", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+    const task = state.tasks.find((candidate) => candidate.title === "Message Will");
+
+    const entry = await interpretInboxInput("move message Will to 17:00 and add clean house at 16:00", state, async () =>
+      buildParsedActionsFromDayRewrite(
+        {
+          summary: "Rewrote the day.",
+          question: null,
+          archivedTaskIds: [],
+          revisedDay: [
+            {
+              taskId: task!.id,
+              title: "Message Will",
+              startTime: "17:00",
+              effortMinutes: task!.effortMinutes,
+              note: null
+            },
+            {
+              taskId: null,
+              title: "Clean house",
+              startTime: "16:00",
+              effortMinutes: 45,
+              note: "Do a focused cleaning pass."
+            }
+          ]
+        },
+        state
+      )
+    );
+
+    expect(entry.actions.map((action) => action.type)).toEqual(["schedule_task", "create_task"]);
+    expect(entry.actions[0]).toMatchObject({
+      type: "schedule_task",
+      safety: "auto_apply",
+      payload: { taskId: task!.id, scheduledDate: "2026-06-01", scheduledTime: "17:00" }
+    });
+    expect(entry.actions[1]).toMatchObject({
+      type: "create_task",
+      safety: "auto_apply",
+      payload: { title: "Clean house", scheduledDate: "2026-06-01", scheduledTime: "16:00" }
     });
   });
 });

@@ -3,10 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 const envPath = path.join(process.cwd(), ".env.local");
+const testUnsafeLocalEnv = new Set(["DATABASE_URL", "EX3CUUSION_STATE_REPOSITORY", "EX3CUUSION_LOCAL_USER_ID"]);
 if (fs.existsSync(envPath)) {
   for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
     const [key, ...rest] = line.split("=");
-    if (key && rest.length > 0 && !process.env[key]) {
+    if (key && rest.length > 0 && !testUnsafeLocalEnv.has(key) && !process.env[key]) {
       process.env[key] = rest.join("=");
     }
   }

@@ -42,7 +42,25 @@ const aiActionSchema = z.object({
 
 type ParsedAiResponse = z.infer<typeof aiActionSchema>;
 type ParsedAiAction = ParsedAiResponse["actions"][number];
-export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAiResponse & { model?: string }>;
+type InterpretationMode = "default" | "day_rewrite";
+export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAiResponse & { model?: string; interpretationMode?: InterpretationMode }>;
+
+const dayRewriteSchema = z.object({
+  summary: z.string(),
+  question: z.string().nullable(),
+  revisedDay: z.array(
+    z.object({
+      taskId: z.string().nullable(),
+      title: z.string(),
+      startTime: z.string().nullable(),
+      effortMinutes: z.number().int().min(5).max(480),
+      note: z.string().nullable()
+    })
+  ),
+  archivedTaskIds: z.array(z.string())
+});
+
+type DayRewrite = z.infer<typeof dayRewriteSchema>;
 
 const captureRevisionSchema = z.object({
   summary: z.string(),
@@ -91,7 +109,9 @@ export async function interpretInboxInput(
 ): Promise<InboxEntry> {
   const entryId = nextId("inbox");
   const parsed = await interpreter(input, state);
-  const actions = parsed.actions.map((action) => buildAction(action, state, entryId, parsed.model, input));
+  const actions = parsed.actions.map((action) =>
+    buildAction(action, state, entryId, parsed.model, input, parsed.interpretationMode === "day_rewrite" ? "minimal" : "semantic")
+  );
 
   return {
     id: entryId,
@@ -128,6 +148,53 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
     timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
     maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 1)
   });
+
+  const dayRewrite = await defaultDayRewriteInterpreter(input, state, openai, model);
+  if (dayRewrite.actions.length > 0) return dayRewrite;
+
+  return defaultActionInterpreter(input, state, openai, model);
+}
+
+async function defaultDayRewriteInterpreter(
+  input: string,
+  state: AppState,
+  openai: OpenAI,
+  model: string
+): Promise<ParsedAiResponse & { model?: string; interpretationMode: "day_rewrite" }> {
+  const response = await openai.responses.parse({
+    model,
+    instructions:
+      "You rewrite a single day's task schedule for a personal execution planner. " +
+      "You will receive only a simple current-day list: task IDs, titles, start times, and effort minutes, plus the user's request. " +
+      "Return the revised day list in the same simple form. Copy unchanged tasks exactly, including taskId. " +
+      "If the user asks to move or correct a time, keep the same taskId and change only startTime. " +
+      "If the user asks to remove, delete, cancel, archive, get rid of, or dedupe an existing task, put its taskId in archivedTaskIds and omit it from revisedDay. " +
+      "If the user asks to add a new task for today, include it in revisedDay with taskId null. " +
+      "Do not invent task IDs. Do not archive anything unless the user clearly asked for removal or dedupe. " +
+      "If the request cannot be represented as a same-day schedule edit or add/remove, leave revisedDay unchanged and use question only if one useful question is needed. " +
+      "Use HH:mm 24-hour startTime values, or null when the task should remain untimed. Output only the structured JSON.",
+    input: [
+      {
+        role: "user",
+        content:
+          `Current date: ${state.currentDate}\n` +
+          `User request: ${input}\n\n` +
+          `Current day JSON:\n${JSON.stringify(buildSimpleDayForModel(state), null, 2)}`
+      }
+    ],
+    text: {
+      format: zodTextFormat(dayRewriteSchema, "execution_day_rewrite")
+    }
+  });
+
+  if (!response.output_parsed) {
+    throw new Error("OpenAI response did not match the expected day rewrite schema");
+  }
+
+  return buildParsedActionsFromDayRewrite(response.output_parsed, state, `${model}:day-rewrite`);
+}
+
+async function defaultActionInterpreter(input: string, state: AppState, openai: OpenAI, model: string): Promise<ParsedAiResponse & { model?: string }> {
   const response = await openai.responses.parse({
     model,
     instructions:
@@ -227,6 +294,151 @@ function buildInboxModelContext(state: AppState) {
       revisionEvents: session.revisionEvents.slice(-6)
     }))
   };
+}
+
+function buildSimpleDayForModel(state: AppState) {
+  const plan = buildDayPlan(state);
+  const taskRows = new Map<string, { taskId: string; title: string; startTime: string | null; endTime: string | null; effortMinutes: number }>();
+
+  for (const item of plan.items) {
+    const taskIds = [item.taskId, ...(item.selectedTaskIds ?? [])].filter((taskId): taskId is string => Boolean(taskId));
+    for (const taskId of taskIds) {
+      const task = state.tasks.find((candidate) => candidate.id === taskId);
+      if (!task || task.status === "archived") continue;
+      taskRows.set(task.id, {
+        taskId: task.id,
+        title: task.title,
+        startTime: task.scheduledTime ?? item.startTime ?? null,
+        endTime: item.endTime ?? null,
+        effortMinutes: task.effortMinutes
+      });
+    }
+  }
+
+  for (const task of state.tasks) {
+    if (task.status === "archived" || task.scheduledDate !== state.currentDate || taskRows.has(task.id)) continue;
+    taskRows.set(task.id, {
+      taskId: task.id,
+      title: task.title,
+      startTime: task.scheduledTime ?? null,
+      endTime: null,
+      effortMinutes: task.effortMinutes
+    });
+  }
+
+  return {
+    date: state.currentDate,
+    tasks: [...taskRows.values()].sort((left, right) => (left.startTime ?? "99:99").localeCompare(right.startTime ?? "99:99"))
+  };
+}
+
+export function buildParsedActionsFromDayRewrite(
+  rewrite: DayRewrite,
+  state: AppState,
+  model = "day-rewrite-fixture"
+): ParsedAiResponse & { model: string; interpretationMode: "day_rewrite" } {
+  const actions: ParsedAiAction[] = [];
+  const currentDayTaskIds = new Set(buildSimpleDayForModel(state).tasks.map((task) => task.taskId));
+  const archivedTaskIds = new Set(rewrite.archivedTaskIds);
+
+  for (const taskId of archivedTaskIds) {
+    const task = state.tasks.find((candidate) => candidate.id === taskId && candidate.status !== "archived");
+    if (!task) continue;
+    actions.push(
+      baseAction("archive_task", `Archive ${task.title}`, task.title, state, {
+        targetTaskId: task.id,
+        domainName: domainNameForTask(state, task),
+        projectName: projectNameForTask(state, task),
+        effortMinutes: task.effortMinutes,
+        energy: task.energy,
+        strictness: task.strictness,
+        priority: clampScore(task.priority),
+        importance: clampScore(task.importance),
+        urgency: clampScore(task.urgency),
+        completionBehavior: task.completionBehavior,
+        completionMode: task.completionMode ?? null,
+        tags: task.tags ?? null
+      })
+    );
+  }
+
+  for (const item of rewrite.revisedDay) {
+    const startTime = normalizeClockValue(item.startTime);
+    if (item.taskId) {
+      if (archivedTaskIds.has(item.taskId)) continue;
+      const task = state.tasks.find((candidate) => candidate.id === item.taskId && candidate.status !== "archived");
+      if (!task) continue;
+      const shouldSchedule = currentDayTaskIds.has(task.id) && startTime && (task.scheduledDate !== state.currentDate || task.scheduledTime !== startTime);
+      if (!shouldSchedule) continue;
+      actions.push(
+        baseAction("schedule_task", `Schedule ${task.title}`, task.title, state, {
+          targetTaskId: task.id,
+          domainName: domainNameForTask(state, task),
+          projectName: projectNameForTask(state, task),
+          scheduledDate: state.currentDate,
+          scheduledTime: startTime,
+          effortMinutes: task.effortMinutes,
+          energy: task.energy,
+          strictness: task.strictness,
+          priority: clampScore(task.priority),
+          importance: clampScore(task.importance),
+          urgency: clampScore(task.urgency),
+          completionBehavior: task.completionBehavior,
+          completionMode: task.completionMode ?? null,
+          tags: task.tags ?? null
+        })
+      );
+      continue;
+    }
+
+    if (!item.title.trim()) continue;
+    actions.push(
+      baseAction("create_task", `Add ${item.title.trim()}`, item.title.trim(), state, {
+        scheduledDate: state.currentDate,
+        scheduledTime: startTime,
+        effortMinutes: item.effortMinutes,
+        completionBehavior: "exhaust_once",
+        completionMode: "simple_done",
+        definitionOfDone: item.note,
+        tags: ["day_rewrite"]
+      })
+    );
+  }
+
+  if (rewrite.question?.trim()) {
+    actions.push(
+      baseAction("ask_clarification", "Clarify day change", "Clarify day change", state, {
+        question: rewrite.question.trim(),
+        clarificationKind: "next_action",
+        clarificationOptions: []
+      })
+    );
+  }
+
+  return {
+    model,
+    interpretationMode: "day_rewrite",
+    summary: rewrite.summary,
+    actions
+  };
+}
+
+function domainNameForTask(state: AppState, task: Task): string {
+  return state.domains.find((domain) => domain.id === task.domainId)?.name ?? findDomainName(state, /work/i);
+}
+
+function projectNameForTask(state: AppState, task: Task): string | null {
+  return state.projects.find((project) => project.id === task.projectId)?.name ?? null;
+}
+
+function clampScore(value: number): number {
+  return Math.max(1, Math.min(5, Math.round(value)));
+}
+
+function normalizeClockValue(value: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : null;
 }
 
 async function defaultRevisionInterpreter({
@@ -789,8 +1001,18 @@ function baseAction(
   };
 }
 
-function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction {
-  const action = applyClarificationPolicy(normalizeParsedAction(rawAction, state, sourceText), sourceText);
+function buildAction(
+  rawAction: ParsedAiAction,
+  state: AppState,
+  inboxItemId: string,
+  model?: string,
+  sourceText = "",
+  normalization: "semantic" | "minimal" = "semantic"
+): AiAction {
+  const action =
+    normalization === "minimal"
+      ? normalizeParsedActionShape(rawAction, state)
+      : applyClarificationPolicy(normalizeParsedAction(rawAction, state, sourceText), sourceText);
   const validationErrors = validateStructuredAction(action, state);
   const safety = classifyRisk(action, validationErrors);
   const domainId = findDomainId(state, action.domainName, "domain_work");
@@ -929,16 +1151,7 @@ function isBroadOutcomeWork(text: string): boolean {
 }
 
 function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceText = ""): ParsedAiAction {
-  const normalized = { ...action };
-  normalized.projectName = cleanNullableString(normalized.projectName);
-  normalized.dueDate = cleanNullableString(normalized.dueDate);
-  normalized.scheduledDate = cleanNullableString(normalized.scheduledDate);
-  normalized.scheduledTime = cleanNullableString(normalized.scheduledTime);
-  normalized.question = cleanNullableString(normalized.question);
-  normalized.definitionOfDone = cleanNullableString(normalized.definitionOfDone);
-  if (normalized.projectName && !findProjectId(state, normalized.projectName)) normalized.projectName = null;
-  if (normalized.dueDate && !normalizeDate(normalized.dueDate, state.currentDate)) normalized.dueDate = null;
-  if (normalized.scheduledDate && !normalizeDate(normalized.scheduledDate, state.currentDate)) normalized.scheduledDate = null;
+  const normalized = normalizeParsedActionShape(action, state);
   const actionSource = relevantSourceText(normalized, sourceText);
   const combined = `${normalized.title} ${normalized.label} ${normalized.question ?? ""} ${actionSource}`.toLowerCase();
   const definitionLooksLikeQuestion = Boolean(normalized.definitionOfDone && /\\?|what counts|what should|include/i.test(normalized.definitionOfDone));
@@ -1017,6 +1230,21 @@ function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceTe
     normalized.tags = mergeTags(normalized.tags, ["relationship", "idea"]);
   }
 
+  return normalized;
+}
+
+function normalizeParsedActionShape(action: ParsedAiAction, state: AppState): ParsedAiAction {
+  const normalized = { ...action };
+  normalized.projectName = cleanNullableString(normalized.projectName);
+  normalized.dueDate = cleanNullableString(normalized.dueDate);
+  normalized.scheduledDate = cleanNullableString(normalized.scheduledDate);
+  normalized.scheduledTime = cleanNullableString(normalized.scheduledTime);
+  normalized.question = cleanNullableString(normalized.question);
+  normalized.definitionOfDone = cleanNullableString(normalized.definitionOfDone);
+  if (normalized.projectName && !findProjectId(state, normalized.projectName)) normalized.projectName = null;
+  if (normalized.dueDate && !normalizeDate(normalized.dueDate, state.currentDate)) normalized.dueDate = null;
+  if (normalized.scheduledDate && !normalizeDate(normalized.scheduledDate, state.currentDate)) normalized.scheduledDate = null;
+  if (normalized.scheduledTime && !/^\d{2}:\d{2}$/.test(normalized.scheduledTime)) normalized.scheduledTime = null;
   return normalized;
 }
 

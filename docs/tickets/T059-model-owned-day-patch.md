@@ -1,32 +1,33 @@
-# T059: Full-Context Model-Owned Inbox
+# T059: Simple Day-Rewrite Inbox
 
 Status: in progress.
 
 ## Goal
 
-Move AI inbox edits away from brittle intent-specific deterministic handlers and toward a single smart-model pass that receives enough state to decide what should change.
+Move current-day AI inbox edits away from brittle intent-specific deterministic handlers and toward a simple model-owned day rewrite.
 
 ## Scope
 
-- Send the smart model the user request plus full structured planner context: current state, current day plan, week plan, backlog, recent inbox, projects, tasks, routines, reviews, and execution history.
-- Let the model decide whether to create, archive, reschedule, ask a clarification, or make several actions in one response.
-- Validate the returned action JSON before applying it.
+- Send the smart model the user request plus a simple current-day JSON list: task IDs, titles, start times, end times, and effort minutes.
+- Ask the model to return the revised day in the same simple format, plus explicit archived task IDs and an optional question.
+- Diff the revised day into app actions: schedule existing tasks, archive explicitly removed tasks, and create new same-day tasks.
+- Fall back to the older full-context action interpreter only when the day rewrite produces no changes.
 - Show a concise summary of what changed.
-- Keep deterministic code as normalization, validation, application, conflict detection, and safety guardrails rather than primary interpretation.
-- Do not introduce a routing model yet. Add routing/context selection later only if the full-context pass shows real cost, latency, or accuracy problems.
+- Keep deterministic code as validation, application, and safety guardrails rather than primary interpretation.
+- Avoid semantic normalization for day-rewrite outputs so backend heuristics do not override the model's revised day.
 
 ## Acceptance Criteria
 
-- Requests like "move the dump run earlier", "remove the old duplicate", and "combine cut nails and shower" are handled as model-owned state edits, not accidental new task creation.
+- Requests like "move the dump run earlier", "remove the old duplicate", and "add clean house at 4" are represented as a revised day, not hand-parsed intents.
+- The model receives exact task IDs and copies unchanged tasks through unchanged.
 - The model can archive, reschedule, create, clarify, and preserve tasks in one response.
-- The model receives exact task IDs and is prompted to target existing IDs for edits/removals.
-- Validation rejects impossible states: missing IDs, invalid times, duplicate IDs, completed tasks being silently deleted, and schedule collisions that violate strict anchors.
+- Validation rejects impossible states: invalid times, archived/missing task IDs, and unsafe edits.
 - Tests cover before-state, user request, model action JSON, final state, and visible Today output.
-- The prompt explicitly asks the model to reason over current state silently, ask only worthwhile questions, then output only structured JSON.
+- The prompt explicitly asks the model to output only the revised day JSON.
 
 ## Implementation Notes
 
-- This replaces the current pre-model `deterministicExistingTaskActions` behavior for the main inbox path.
-- Keep action-level audit logs, but let one model patch contain multiple edits.
-- Start with the existing action schema plus `schedule_task` and `archive_task`; expand to richer whole-day/week patch objects only after dogfooding shows the action schema is too narrow.
+- This replaces the full-context-first live inbox experiment for day edits.
+- Keep action-level audit logs by compiling the revised day into existing `AiAction`s.
+- This is intentionally narrower than a full planner-state patch. Prove the model can build the visible day correctly first.
 - For V1 dogfooding, allow fixture tests and a live eval set with messy edit requests.
