@@ -76,6 +76,7 @@ export function buildDayPlan(state: AppState): DayPlan {
   const availableMinutes = calculateCapacity(state);
   const items: PlanCandidate[] = [];
   const todayCompletedTaskIdsByPlan = completedTaskIdsByPlan(state, date);
+  const todayBlockCompletionPlanIds = blockCompletionPlanIds(state, date);
   const todayOutcomePlanIds = new Set(
     state.executionEvents
       .filter((event) => event.date === date && event.planItemId && event.type !== "completed")
@@ -113,11 +114,13 @@ export function buildDayPlan(state: AppState): DayPlan {
     const project = state.projects.find((item) => item.id === projectId);
     if (!project || project.status !== "active") continue;
     const selected = tasks.slice(0, 3);
+    const override = projectBlockSelectionOverride(state, date, project.id);
     const selectedTaskIds = mergeTaskIds(
-      selected.map((task) => task.id),
+      override ?? selected.map((task) => task.id),
       todayCompletedTaskIdsByPlan.get(`plan_${date}_${project.id}`) ?? []
-    );
-    const minutes = Math.min(project.defaultBlockMinutes, selected.reduce((sum, task) => sum + task.effortMinutes, 0));
+    ).filter((taskId) => isValidProjectBlockTask(state, project.id, taskId));
+    const selectedTasks = state.tasks.filter((task) => selectedTaskIds.includes(task.id));
+    const minutes = Math.min(project.defaultBlockMinutes, selectedTasks.reduce((sum, task) => sum + task.effortMinutes, 0));
     items.push({
       id: `plan_${date}_${project.id}`,
       type: "project_block",
@@ -128,7 +131,9 @@ export function buildDayPlan(state: AppState): DayPlan {
       projectId: project.id,
       selectedTaskIds,
       estimatedMinutes: minutes,
-      reason: `Selected ${selected.length} high-impact next action${selected.length === 1 ? "" : "s"}.`
+      reason: override
+        ? `Using ${selectedTaskIds.length} manually selected next action${selectedTaskIds.length === 1 ? "" : "s"}.`
+        : `Selected ${selected.length} high-impact next action${selected.length === 1 ? "" : "s"}.`
     });
   }
 
@@ -206,7 +211,7 @@ export function buildDayPlan(state: AppState): DayPlan {
   const deferred = new Set(state.deferrals.filter((event) => event.date === date).map((event) => event.planItemId));
   const scheduledItems = scheduleItems(items, state.currentTime);
   const resolvedItems: PlanItem[] = scheduledItems.map((item) => {
-    const status: PlanItemStatus = isItemCompleted(item, completed, todayCompletedTaskIdsByPlan)
+    const status: PlanItemStatus = isItemCompleted(item, completed, todayCompletedTaskIdsByPlan, todayBlockCompletionPlanIds)
       ? "completed"
       : deferred.has(item.id) || todayOutcomePlanIds.has(item.id)
         ? "deferred"
@@ -239,6 +244,14 @@ function completedTaskIdsByPlan(state: AppState, date: string): Map<string, stri
     byPlan.set(event.planItemId, mergeTaskIds(existing, event.taskIds ?? []));
   }
   return byPlan;
+}
+
+function blockCompletionPlanIds(state: AppState, date: string): Set<string> {
+  return new Set(
+    state.completions
+      .filter((entry) => entry.date === date && (!entry.taskIds || entry.taskIds.length === 0))
+      .map((entry) => entry.planItemId)
+  );
 }
 
 function settledOutcomeTaskIds(state: AppState, date: string, planItemId: string): string[] {
@@ -282,13 +295,31 @@ function mergeTaskIds(primary: string[], secondary: string[]): string[] {
   return [...primary, ...secondary].filter((taskId, index, all) => all.indexOf(taskId) === index);
 }
 
-function isItemCompleted(item: PlanItem, completed: Set<string>, completedTaskIdsByPlanMap: Map<string, string[]>): boolean {
+function isItemCompleted(
+  item: PlanItem,
+  completed: Set<string>,
+  completedTaskIdsByPlanMap: Map<string, string[]>,
+  blockCompletionPlanIdsSet: Set<string>
+): boolean {
   if (!completed.has(item.id)) return false;
   if (item.type !== "project_block") return true;
+  if (blockCompletionPlanIdsSet.has(item.id)) return true;
   const selectedTaskIds = item.selectedTaskIds ?? [];
   if (!selectedTaskIds.length) return true;
   const completedTaskIds = new Set(completedTaskIdsByPlanMap.get(item.id) ?? []);
   return selectedTaskIds.every((taskId) => completedTaskIds.has(taskId));
+}
+
+function projectBlockSelectionOverride(state: AppState, date: string, projectId: string): string[] | undefined {
+  return state.projectBlockSelections?.find((selection) => selection.date === date && selection.projectId === projectId)?.selectedTaskIds;
+}
+
+function isValidProjectBlockTask(state: AppState, projectId: string, taskId: string): boolean {
+  const task = state.tasks.find((entry) => entry.id === taskId);
+  if (!task || task.projectId !== projectId || task.status === "archived") return false;
+  if (task.status === "blocked" && !task.blocked?.unblockAction) return false;
+  if (task.status === "waiting" && !task.waiting?.followUpDate) return false;
+  return true;
 }
 
 function shouldAppearInProjectBlock(state: AppState, task: Task): boolean {

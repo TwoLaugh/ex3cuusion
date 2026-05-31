@@ -1159,7 +1159,7 @@ textarea {
 .subtasks {
   display: grid;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 10px;
 }
 
 .subtaskRow {
@@ -1167,8 +1167,58 @@ textarea {
   border-top: 1px solid var(--line);
   display: grid;
   gap: 10px;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   padding-top: 10px;
+}
+
+.drawer h3 {
+  font-size: 0.9rem;
+  margin: 18px 0 0;
+}
+
+.drawerNote {
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.drawerStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.drawerStats span {
+  background: rgba(139, 184, 255, 0.1);
+  border: 1px solid rgba(139, 184, 255, 0.18);
+  border-radius: 999px;
+  color: #b8d0ff;
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.drawerActions {
+  margin-top: 12px;
+}
+
+.drawerActions button,
+.subtaskRemove {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.subtaskRemove {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.backlogSubtasks .subtaskRow {
+  opacity: 0.88;
 }
 
 .completedSubtask {

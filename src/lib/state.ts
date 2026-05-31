@@ -31,6 +31,8 @@ export type StructureMutation =
   | { entity: "routine"; action: "update"; id: string; patch: Partial<AppState["routines"][number]> }
   | { entity: "routine"; action: "archive"; id: string };
 
+export type ProjectBlockSelectionAction = "add" | "remove" | "regenerate";
+
 function currentState(): AppState {
   return getRepository().read();
 }
@@ -274,11 +276,86 @@ export function retreatDay(): AppState {
   return getState();
 }
 
+export function updateProjectBlockSelection(input: {
+  planItemId: string;
+  taskId?: string;
+  action: ProjectBlockSelectionAction;
+}): AppState {
+  const state = currentState();
+  const plan = buildDayPlan(state);
+  const item = plan.items.find((entry) => entry.id === input.planItemId);
+  if (!item || item.type !== "project_block" || !item.projectId) return getState();
+
+  state.projectBlockSelections ??= [];
+  const existing = state.projectBlockSelections.find(
+    (selection) => selection.date === state.currentDate && selection.projectId === item.projectId
+  );
+
+  if (input.action === "regenerate") {
+    state.projectBlockSelections = state.projectBlockSelections.filter(
+      (selection) => !(selection.date === state.currentDate && selection.projectId === item.projectId)
+    );
+    return getState();
+  }
+
+  const currentSelection = existing?.selectedTaskIds ?? item.selectedTaskIds ?? [];
+  let nextSelection = currentSelection;
+
+  if (input.action === "add" && input.taskId && isSelectableProjectTask(state, item.projectId, input.taskId)) {
+    nextSelection = [...currentSelection, input.taskId].filter((taskId, index, all) => all.indexOf(taskId) === index);
+  }
+
+  if (input.action === "remove" && input.taskId) {
+    nextSelection = currentSelection.filter((taskId) => taskId !== input.taskId);
+  }
+
+  if (existing) {
+    existing.selectedTaskIds = nextSelection;
+    existing.updatedAt = timestampForState(state);
+  } else {
+    state.projectBlockSelections.push({
+      date: state.currentDate,
+      projectId: item.projectId,
+      selectedTaskIds: nextSelection,
+      updatedAt: timestampForState(state)
+    });
+  }
+
+  return getState();
+}
+
 export function completePlanItem(planItemId: string, actualMinutes?: number, completedTaskIds?: string[]): AppState {
   const state = currentState();
   const plan = buildDayPlan(state);
   const item = plan.items.find((entry) => entry.id === planItemId);
   if (!item) return getState();
+
+  if (item.type === "project_block" && !completedTaskIds?.length) {
+    const existing = state.completions.find(
+      (event) => event.date === state.currentDate && event.planItemId === planItemId && (!event.taskIds || event.taskIds.length === 0)
+    );
+    if (existing) {
+      state.completions = state.completions.filter((event) => event !== existing);
+      state.executionEvents = state.executionEvents.filter(
+        (event) => !(event.date === state.currentDate && event.planItemId === planItemId && event.type === "completed" && !event.taskIds?.length)
+      );
+      return getState();
+    }
+    state.deferrals = state.deferrals.filter((event) => !(event.date === state.currentDate && event.planItemId === planItemId));
+    state.completions.push({
+      id: nextId("completion"),
+      date: state.currentDate,
+      planItemId,
+      taskIds: [],
+      actualMinutes
+    });
+    addExecutionEvent(state, {
+      type: "completed",
+      planItemId,
+      actualMinutes
+    });
+    return getState();
+  }
 
   if (item.type === "project_block" && completedTaskIds?.length) {
     for (const taskId of completedTaskIds) {
@@ -1190,6 +1267,14 @@ function validDomainId(state: AppState, value: unknown): string | undefined {
 
 function validProjectId(state: AppState, value: unknown): string | undefined {
   return typeof value === "string" && state.projects.some((project) => project.id === value && project.status === "active") ? value : undefined;
+}
+
+function isSelectableProjectTask(state: AppState, projectId: string, taskId: string): boolean {
+  const task = state.tasks.find((entry) => entry.id === taskId);
+  if (!task || task.projectId !== projectId || task.status === "archived") return false;
+  if (task.status === "blocked" && !task.blocked?.unblockAction) return false;
+  if (task.status === "waiting" && !task.waiting?.followUpDate) return false;
+  return true;
 }
 
 function validProjectKind(value: unknown): AppState["projects"][number]["kind"] | undefined {

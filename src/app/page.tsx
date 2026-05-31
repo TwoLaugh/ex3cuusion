@@ -57,7 +57,21 @@ export default function Home() {
       .map((taskId) => state.tasks.find((task) => task.id === taskId))
       .filter((task): task is AppState["tasks"][number] => Boolean(task));
   }, [state, selected]);
+  const selectedProject = selected?.projectId ? state?.projects.find((project) => project.id === selected.projectId) : undefined;
+  const selectedBacklog = useMemo(() => {
+    if (!state || !selected?.projectId) return [];
+    const selectedIds = new Set(selected.selectedTaskIds ?? []);
+    return state.tasks
+      .filter((task) => task.projectId === selected.projectId && !selectedIds.has(task.id) && !["archived", "blocked", "waiting"].includes(task.status))
+      .sort((a, b) => b.priority + b.importance + b.urgency - (a.priority + a.importance + a.urgency));
+  }, [state, selected]);
   const timeline = useMemo(() => (plan ? buildTimeline(plan.items, state?.currentTime) : null), [plan, state?.currentTime]);
+
+  useEffect(() => {
+    if (!selected || !plan) return;
+    const refreshed = plan.items.find((item) => item.id === selected.id);
+    if (refreshed && refreshed !== selected) setSelected(refreshed);
+  }, [plan, selected]);
 
   if (!payload || !plan || !state) {
     return <main className="loading">Building today...</main>;
@@ -241,7 +255,23 @@ export default function Home() {
           </button>
           <p className="eyebrow">Project block</p>
           <h2>{selected.title}</h2>
+          <p className="drawerNote">{selected.reason}</p>
+          {selectedProject && (
+            <div className="drawerStats">
+              <span>{selectedProject.defaultBlockMinutes}m block</span>
+              <span>
+                {selectedTasks.filter((task) => isTaskCompletedToday(task, state.currentDate)).length}/{selectedTasks.length} selected done
+              </span>
+            </div>
+          )}
+          <div className="drawerActions">
+            <button onClick={() => post("/api/project-block-selection", { planItemId: selected.id, action: "regenerate" })}>
+              Regenerate selection
+            </button>
+          </div>
+          <h3>Selected subtasks</h3>
           <div className="subtasks">
+            {selectedTasks.length === 0 && <p className="emptyPanel">No selected subtasks yet.</p>}
             {selectedTasks.map((task) => {
               const completedToday = isTaskCompletedToday(task, state.currentDate);
               return (
@@ -255,11 +285,41 @@ export default function Home() {
                   </button>
                   <div>
                     <strong>{task.title}</strong>
-                    <span>{task.effortMinutes}m - {task.energy}</span>
+                    <span>
+                      {task.effortMinutes}m - {task.energy} - {task.status}
+                    </span>
                   </div>
+                  <button
+                    className="subtaskRemove"
+                    onClick={() => post("/api/project-block-selection", { planItemId: selected.id, action: "remove", taskId: task.id })}
+                    aria-label={`Remove ${task.title} from block`}
+                  >
+                    Remove
+                  </button>
                 </div>
               );
             })}
+          </div>
+          <h3>Project backlog</h3>
+          <div className="subtasks backlogSubtasks">
+            {selectedBacklog.length === 0 && <p className="emptyPanel">No extra active project tasks.</p>}
+            {selectedBacklog.slice(0, 6).map((task) => (
+              <div className="subtaskRow" key={task.id}>
+                <button
+                  className="subtaskCheck"
+                  onClick={() => post("/api/project-block-selection", { planItemId: selected.id, action: "add", taskId: task.id })}
+                  aria-label={`Add ${task.title} to block`}
+                >
+                  <Plus size={15} />
+                </button>
+                <div>
+                  <strong>{task.title}</strong>
+                  <span>
+                    {task.effortMinutes}m - {dateIntentLabel(task)} - p{task.priority}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

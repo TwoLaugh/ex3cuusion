@@ -103,9 +103,9 @@ async function projectState(client, state) {
   await client.query(
     `
       insert into app_runtime_state (
-        user_id, current_day, current_clock, available_minutes, deferrals_json, completions_json, entity_order_json, updated_at
+        user_id, current_day, current_clock, available_minutes, deferrals_json, completions_json, project_block_selections_json, entity_order_json, updated_at
       )
-      values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, now())
+      values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, now())
       on conflict (user_id)
       do update set
         current_day = excluded.current_day,
@@ -113,6 +113,7 @@ async function projectState(client, state) {
         available_minutes = excluded.available_minutes,
         deferrals_json = excluded.deferrals_json,
         completions_json = excluded.completions_json,
+        project_block_selections_json = excluded.project_block_selections_json,
         entity_order_json = excluded.entity_order_json,
         updated_at = now()
     `,
@@ -123,6 +124,7 @@ async function projectState(client, state) {
       state.availableMinutes,
       JSON.stringify(state.deferrals ?? []),
       JSON.stringify(state.completions ?? []),
+      JSON.stringify(state.projectBlockSelections ?? []),
       JSON.stringify(entityOrder(state))
     ]
   );
@@ -930,6 +932,7 @@ async function readProjectedState(client) {
     })),
     deferrals: runtimeRow.deferrals_json ?? [],
     completions: runtimeRow.completions_json ?? [],
+    projectBlockSelections: runtimeRow.project_block_selections_json ?? [],
     executionEvents: sortRows(executionEvents.rows, order.executionEvents).map((row) => omitUndefined({
       id: row.external_id,
       date: formatDateOnly(row.event_date),

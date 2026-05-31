@@ -256,6 +256,13 @@ export interface CompletionEvent {
   actualMinutes?: number;
 }
 
+export interface ProjectBlockSelection {
+  date: string;
+  projectId: string;
+  selectedTaskIds: string[];
+  updatedAt: string;
+}
+
 export interface WeekPlanDay {
   date: string;
   plan: DayPlan;
@@ -408,6 +415,7 @@ export interface AppState {
   deferrals: DeferralLog[];
   completions: CompletionEvent[];
   executionEvents: ExecutionEvent[];
+  projectBlockSelections: ProjectBlockSelection[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];
 }

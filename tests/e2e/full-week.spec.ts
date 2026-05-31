@@ -53,6 +53,18 @@ test("realistic full-week execution loop with time changes", async ({ page, requ
   await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Open" }).click();
   await expect(page.getByRole("dialog", { name: /diet app project drawer/i })).toBeVisible();
   await expect(page.getByText("Finish auth bug", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove Finish auth bug from block" })).toBeVisible();
+  await page.getByRole("button", { name: "Remove Finish auth bug from block" }).click();
+  await expect(page.getByRole("button", { name: "Add Finish auth bug to block" })).toBeVisible();
+  await page.getByRole("button", { name: "Add Finish auth bug to block" }).click();
+  await page.getByRole("button", { name: "Complete Finish auth bug" }).click();
+  await expect(page.getByRole("button", { name: "Undo complete Finish auth bug" })).toBeVisible();
+  let debug = await (await request.get("/api/debug")).json();
+  expect(debug.tasks.find((task: { id: string; status: string }) => task.id === "task_auth_bug")?.status).toBe("completed");
+  await page.getByRole("button", { name: "Undo complete Finish auth bug" }).click();
+  debug = await (await request.get("/api/debug")).json();
+  expect(debug.tasks.find((task: { id: string; status: string }) => task.id === "task_auth_bug")?.status).toBe("active");
+  await page.getByLabel("Close project drawer").click();
 
   await page.getByRole("button", { name: "Next day" }).click();
   await expect(page.getByRole("heading", { name: /friday/i })).toBeVisible();

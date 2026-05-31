@@ -125,6 +125,7 @@ function buildDefaultRepository(): AppStateRepository {
 
 function normalizeState(state: AppState): AppState {
   state.executionEvents ??= [];
+  state.projectBlockSelections ??= [];
   state.captureSessions ??= [];
   for (const session of state.captureSessions) {
     session.messages ??= [];

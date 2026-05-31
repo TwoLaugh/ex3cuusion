@@ -68,6 +68,7 @@ export async function GET() {
       clockMinutes: item.clockMinutes,
       selectedTaskIds: item.selectedTaskIds
     })),
+    projectBlockSelections: state.projectBlockSelections,
     executionEvents: state.executionEvents,
     week: buildWeekPlan(state)
   });
