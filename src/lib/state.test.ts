@@ -403,7 +403,37 @@ describe("state integration", () => {
 
     expect(task).toBeDefined();
 
-    const afterMove = await submitInbox("actually cut nails at 5pm", fixtureInterpreter);
+    const afterMove = await submitInbox("actually cut nails at 5pm", async () => ({
+      model: "model-owned-edit-fixture",
+      summary: "Moved the existing cut nails task.",
+      actions: [
+        {
+          type: "schedule_task",
+          label: "Move Cut nails",
+          title: "Cut nails",
+          targetTaskId: task!.id,
+          domainName: "House Work",
+          projectName: null,
+          dueDate: null,
+          scheduledDate: "2026-06-01",
+          scheduledTime: "17:00",
+          effortMinutes: 10,
+          energy: "low",
+          strictness: "normal",
+          priority: 2,
+          importance: 2,
+          urgency: 2,
+          recurrenceDays: null,
+          completionBehavior: "exhaust_once",
+          completionMode: "simple_done",
+          definitionOfDone: null,
+          tags: ["personal"],
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null
+        }
+      ]
+    }));
     const moved = afterMove.tasks.find((candidate) => candidate.id === task!.id);
 
     expect(afterMove.tasks.filter((candidate) => candidate.title === "Cut nails")).toHaveLength(1);
@@ -415,7 +445,37 @@ describe("state integration", () => {
       appliedEntityId: task!.id
     });
 
-    const afterRemove = await submitInbox("remove cut nails", fixtureInterpreter);
+    const afterRemove = await submitInbox("remove cut nails", async () => ({
+      model: "model-owned-edit-fixture",
+      summary: "Removed the existing cut nails task.",
+      actions: [
+        {
+          type: "archive_task",
+          label: "Remove Cut nails",
+          title: "Cut nails",
+          targetTaskId: task!.id,
+          domainName: "House Work",
+          projectName: null,
+          dueDate: null,
+          scheduledDate: null,
+          scheduledTime: null,
+          effortMinutes: 10,
+          energy: "low",
+          strictness: "normal",
+          priority: 2,
+          importance: 2,
+          urgency: 2,
+          recurrenceDays: null,
+          completionBehavior: "exhaust_once",
+          completionMode: "simple_done",
+          definitionOfDone: null,
+          tags: ["personal"],
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null
+        }
+      ]
+    }));
     expect(afterRemove.tasks.find((candidate) => candidate.id === task!.id)?.status).toBe("archived");
     expect(afterRemove.inbox[0].actions[0]).toMatchObject({
       type: "archive_task",
@@ -435,7 +495,37 @@ describe("state integration", () => {
     const oldTask = before.tasks.find((task) => task.title === "Make dump run");
     const keepTask = before.tasks.find((task) => task.title === "Go to the dump");
 
-    const after = await submitInbox("there is a duplicate dump item, should only be one dump thing", fixtureInterpreter);
+    const after = await submitInbox("there is a duplicate dump item, should only be one dump thing", async () => ({
+      model: "model-owned-edit-fixture",
+      summary: "Removed the older duplicate dump task.",
+      actions: [
+        {
+          type: "archive_task",
+          label: "Archive duplicate Make dump run",
+          title: "Make dump run",
+          targetTaskId: oldTask!.id,
+          domainName: "House Work",
+          projectName: null,
+          dueDate: null,
+          scheduledDate: null,
+          scheduledTime: null,
+          effortMinutes: 60,
+          energy: "medium",
+          strictness: "normal",
+          priority: 2,
+          importance: 2,
+          urgency: 2,
+          recurrenceDays: null,
+          completionBehavior: "exhaust_once",
+          completionMode: "simple_done",
+          definitionOfDone: null,
+          tags: ["duplicate"],
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null
+        }
+      ]
+    }));
 
     expect(after.tasks.find((task) => task.id === keepTask!.id)?.status).toBe("active");
     expect(after.tasks.find((task) => task.id === oldTask!.id)?.status).toBe("archived");

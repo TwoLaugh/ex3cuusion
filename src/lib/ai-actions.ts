@@ -3,15 +3,18 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { addDays, nextDayOfWeek, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
+import { buildDayPlan } from "./planner";
+import { buildWeekPlan } from "./week-plan";
 import type { AiAction, AppState, CaptureSession, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
 
 const aiActionSchema = z.object({
   summary: z.string(),
   actions: z.array(
     z.object({
-      type: z.enum(["create_task", "create_routine", "create_project", "schedule_block", "ask_clarification"]),
+      type: z.enum(["create_task", "create_routine", "create_project", "schedule_block", "schedule_task", "archive_task", "ask_clarification"]),
       label: z.string(),
       title: z.string(),
+      targetTaskId: z.string().nullable().optional(),
       domainName: z.string(),
       projectName: z.string().nullable(),
       dueDate: z.string().nullable(),
@@ -72,7 +75,6 @@ export type AiRevisionInterpreter = (input: {
 }) => Promise<CaptureRevision>;
 
 const highRiskActions: ReadonlySet<AiAction["type"]> = new Set([
-  "archive_task",
   "archive_project",
   "move_deadline",
   "change_routine_recurrence",
@@ -88,25 +90,8 @@ export async function interpretInboxInput(
   interpreter: AiInterpreter = defaultInterpreter
 ): Promise<InboxEntry> {
   const entryId = nextId("inbox");
-  const deterministicActions = deterministicExistingTaskActions(input, state, entryId);
-  if (deterministicActions) {
-    return {
-      id: entryId,
-      createdAt: timestampForState(state),
-      input,
-      actions: deterministicActions,
-      summary: deterministicActions[0]?.type === "archive_task" ? "Removed the matching existing task." : "Updated the matching existing task."
-    };
-  }
-
   const parsed = await interpreter(input, state);
-  const actions = supplementMissingSourceActions(
-    parsed.actions.flatMap((action) => buildActions(action, state, entryId, parsed.model, input)),
-    input,
-    state,
-    entryId,
-    parsed.model
-  );
+  const actions = parsed.actions.map((action) => buildAction(action, state, entryId, parsed.model, input));
 
   return {
     id: entryId,
@@ -146,9 +131,14 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
   const response = await openai.responses.parse({
     model,
     instructions:
-      "You turn messy personal execution input into structured JSON actions for an execution planner. " +
+      "You are the state-editing brain for a personal execution planner. " +
+      "You receive the user's full current app state, current day plan, and week plan as JSON. Use that context directly; do not guess blindly from the latest message. " +
+      "Decide what should change in the existing state. Prefer editing, archiving, rescheduling, or asking a useful clarification over creating duplicates. " +
       "The durable unit is a task; chat exists only to clarify ambiguity before creating good task state. " +
       "Think through the task silently first. Ask a follow-up only when the answer materially changes storage, recurrence, scheduling, completion behavior, project placement, splitting, or definition of done. " +
+      "When the user asks to remove, delete, cancel, dedupe, keep only one, or get rid of an old/original task, use archive_task with the exact targetTaskId from context. " +
+      "When the user asks to move or change timing for an existing task, use schedule_task with the exact targetTaskId from context. " +
+      "If two tasks overlap nonsensically or a request would create a bad day, either return several edits that fix the day or ask one worthwhile clarification. " +
       "Do not ask low-value questions for obvious simple tasks; infer reasonable defaults and create the task. " +
       "For explicit requests to add or create an ordinary obvious task, return create_task. " +
       "For broad work where done-state is unclear, return ask_clarification, not create_task. Examples: clean the house, sort backend, fix the app, organize life admin. " +
@@ -164,18 +154,17 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
       "For explicit recurring habits, return create_routine with recurrenceDays when known. " +
       "For 'message Will every Friday', return create_routine with title 'Message Will' and recurrenceDays [5]. " +
       "For sleep or bed time, return create_task titled 'Sleep', not schedule_block. " +
-      "Use existing domain/project names when they fit. Return only actions that help choose, schedule, split, defer, prioritize, or prune work. " +
+      "Use existing domain/project names and target task IDs when they fit. Return only actions that help choose, schedule, split, defer, prioritize, or prune work. " +
       "projectName must be null unless it exactly refers to an existing project/container from the provided list. " +
+      "For archive_task and schedule_task, targetTaskId is required and must be an existing task ID. " +
       "Nullable fields must be real JSON null, not strings like 'null', ':null', 'none', or 'N/A'. " +
       "Use strictness flexible, normal, or strict. Score priority, importance, and urgency from 1 to 5.",
     input: [
       {
         role: "user",
         content:
-          `Current date: ${state.currentDate}. Current time: ${state.currentTime}. ` +
-          `Domains: ${state.domains.map((domain) => domain.name).join(", ")}. ` +
-          `Projects: ${state.projects.map((project) => project.name).join(", ")}. ` +
-          `User input: ${input}`
+          `User input: ${input}\n\n` +
+          `Current planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`
       }
     ],
     text: {
@@ -188,6 +177,56 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
   }
 
   return { ...response.output_parsed, model };
+}
+
+function buildInboxModelContext(state: AppState) {
+  return {
+    currentDate: state.currentDate,
+    currentTime: state.currentTime,
+    availableMinutes: state.availableMinutes,
+    domains: state.domains,
+    projects: state.projects,
+    tasks: state.tasks,
+    routines: state.routines,
+    deferrals: state.deferrals,
+    completions: state.completions,
+    executionEvents: state.executionEvents,
+    projectBlockSelections: state.projectBlockSelections,
+    dailyReviews: state.dailyReviews,
+    currentDayPlan: buildDayPlan(state),
+    weekPlan: buildWeekPlan(state),
+    recentInbox: state.inbox.slice(0, 10).map((entry) => ({
+      id: entry.id,
+      createdAt: entry.createdAt,
+      input: entry.input,
+      summary: entry.summary,
+      actions: entry.actions.map((action) => ({
+        id: action.id,
+        type: action.type,
+        label: action.label,
+        status: action.status,
+        safety: action.safety,
+        appliedEntityId: action.appliedEntityId,
+        payload: action.payload
+      }))
+    })),
+    captureSessions: state.captureSessions.slice(0, 10).map((session) => ({
+      id: session.id,
+      status: session.status,
+      source: session.source,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      summary: session.summary,
+      actionIds: session.actionIds,
+      draftActionIds: session.draftActionIds,
+      appliedEntityIds: session.appliedEntityIds,
+      unresolvedFields: session.unresolvedFields,
+      answeredFields: session.answeredFields,
+      questions: session.questions,
+      recentMessages: session.messages.slice(-6),
+      revisionEvents: session.revisionEvents.slice(-6)
+    }))
+  };
 }
 
 async function defaultRevisionInterpreter({
@@ -750,144 +789,13 @@ function baseAction(
   };
 }
 
-function buildActions(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction[] {
-  if (shouldSplitConcurrentCookingAi(rawAction, sourceText)) {
-    return [
-      buildAction(baseAction("create_task", "Add dinner prep", "Cook dinner", state, {
-        domainName: findDomainName(state, /house|home/i),
-        scheduledDate: /today|tonight/.test(sourceText.toLowerCase()) ? state.currentDate : rawAction.scheduledDate,
-        effortMinutes: 45,
-        energy: "medium",
-        strictness: "normal",
-        priority: Math.max(rawAction.priority, 3),
-        importance: Math.max(rawAction.importance, 3),
-        urgency: Math.max(rawAction.urgency, 3),
-        completionBehavior: "exhaust_once",
-        completionMode: "simple_done",
-        tags: ["cooking", "concurrent"]
-      }), state, inboxItemId, model, sourceText),
-      buildAction(baseAction("create_task", "Add AI report run", "Run AI report draft", state, {
-        domainName: findDomainName(state, /work|product/i),
-        scheduledDate: /today|tonight/.test(sourceText.toLowerCase()) ? state.currentDate : rawAction.scheduledDate,
-        effortMinutes: rawAction.effortMinutes,
-        energy: "low",
-        strictness: "flexible",
-        priority: rawAction.priority,
-        importance: rawAction.importance,
-        urgency: rawAction.urgency,
-        completionBehavior: "exhaust_once",
-        completionMode: "progress_accumulating",
-        tags: ["ai_running", "background", "concurrent"]
-      }), state, inboxItemId, model, sourceText)
-    ];
-  }
-  return [buildAction(rawAction, state, inboxItemId, model, sourceText)];
-}
-
-function supplementMissingSourceActions(actions: AiAction[], sourceText: string, state: AppState, inboxItemId: string, model?: string): AiAction[] {
-  const lower = sourceText.toLowerCase();
-  const titles = actions.map((action) => String(action.payload.title ?? "").toLowerCase());
-  const supplemented = [...actions];
-
-  if (/book dentist|dentist/.test(lower) && /next week|sometime/.test(lower) && !titles.some((title) => /dentist/.test(title))) {
-    supplemented.push(
-      buildAction(baseAction("create_task", "Add Book dentist", "Book dentist", state, {
-        domainName: findDomainName(state, /health/i),
-        effortMinutes: 15,
-        energy: "low",
-        strictness: "normal",
-        priority: 3,
-        importance: 4,
-        urgency: 2,
-        completionBehavior: "exhaust_once",
-        completionMode: "simple_done",
-        tags: ["health", "next-week"]
-      }), state, inboxItemId, model, sourceText)
-    );
-  }
-
-  return supplemented;
-}
-
-function deterministicExistingTaskActions(sourceText: string, state: AppState, inboxItemId: string, model?: string): AiAction[] | undefined {
-  const duplicatePruneActions = deterministicDuplicatePruneActions(sourceText, state, inboxItemId, model);
-  if (duplicatePruneActions) return duplicatePruneActions;
-
-  const task = findReferencedActiveTask(state, sourceText);
-  if (!task) return undefined;
-
-  if (/\b(remove|delete|archive|cancel|get rid of|drop)\b/i.test(sourceText)) {
-    return [
-      {
-        id: nextId("action"),
-        type: "archive_task",
-        label: `Archive ${task.title}`,
-        safety: "auto_apply",
-        status: "proposed",
-        model,
-        createdAt: timestampForState(state),
-        sourceMessageId: inboxItemId,
-        payload: { taskId: task.id, title: task.title }
-      }
-    ];
-  }
-
-  const scheduledTime = parseClockTime(sourceText);
-  const scheduledDate = deterministicScheduledDate(sourceText, state);
-  if (/\b(actually|instead|move|reschedule|change|correct|make it|put it|should be|at)\b/i.test(sourceText) && (scheduledTime || scheduledDate)) {
-    return [
-      {
-        id: nextId("action"),
-        type: "schedule_task",
-        label: `Reschedule ${task.title}`,
-        safety: "auto_apply",
-        status: "proposed",
-        model,
-        createdAt: timestampForState(state),
-        sourceMessageId: inboxItemId,
-        payload: {
-          taskId: task.id,
-          title: task.title,
-          scheduledDate: scheduledDate ?? task.scheduledDate ?? state.currentDate,
-          scheduledTime: scheduledTime ?? task.scheduledTime
-        }
-      }
-    ];
-  }
-
-  return undefined;
-}
-
-function deterministicDuplicatePruneActions(sourceText: string, state: AppState, inboxItemId: string, model?: string): AiAction[] | undefined {
-  if (!/\b(duplicate|duplicates|same thing|only be one|just one|old|original|older)\b/i.test(sourceText)) return undefined;
-  if (!/\b(remove|delete|archive|cancel|get rid of|drop|should only be|only be one|keep one|just one)\b/i.test(sourceText)) return undefined;
-
-  const matches = findReferencedActiveTasks(state, sourceText);
-  if (matches.length < 2) return undefined;
-
-  const keep = bestTaskToKeep(matches);
-  const toArchive = matches.filter((task) => task.id !== keep.id);
-  if (!toArchive.length) return undefined;
-
-  return toArchive.map((task) => ({
-    id: nextId("action"),
-    type: "archive_task",
-    label: `Archive duplicate ${task.title}`,
-    safety: "auto_apply",
-    status: "proposed",
-    model,
-    createdAt: timestampForState(state),
-    sourceMessageId: inboxItemId,
-    payload: { taskId: task.id, title: task.title, keptTaskId: keep.id, keptTitle: keep.title, reason: "duplicate_prune" }
-  }));
-}
-
 function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction {
   const action = applyClarificationPolicy(normalizeParsedAction(rawAction, state, sourceText), sourceText);
   const validationErrors = validateStructuredAction(action, state);
   const safety = classifyRisk(action, validationErrors);
   const domainId = findDomainId(state, action.domainName, "domain_work");
   const projectId = findProjectId(state, action.projectName);
+  const targetTask = action.targetTaskId ? state.tasks.find((task) => task.id === action.targetTaskId) : undefined;
   const normalizedType = action.type;
   const status: AiAction["status"] = validationErrors.length > 0 && safety === "auto_apply" ? "failed" : "proposed";
 
@@ -931,15 +839,30 @@ function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: st
                   minutes: action.effortMinutes,
                   title: action.title
                 }
-              : {
-                  question: action.question ?? "What should this become?",
-                  questionKind: action.clarificationKind ?? "next_action",
-                  options: action.clarificationOptions ?? [],
-                  rationale: clarificationRationale(action, sourceText),
-                  materiality: clarificationMateriality(action, sourceText),
-                  draftActionType: "create_task",
-                  draftAction: taskPayload(state, { ...action, type: "create_task" }, inboxItemId, projectId, sourceText)
-                }
+              : normalizedType === "schedule_task"
+                ? {
+                    taskId: action.targetTaskId,
+                    title: targetTask?.title ?? action.title,
+                    scheduledDate: normalizeDate(action.scheduledDate ?? undefined, state.currentDate),
+                    scheduledTime: action.scheduledTime && /^\d{2}:\d{2}$/.test(action.scheduledTime) ? action.scheduledTime : undefined,
+                    dueDate: normalizeDate(action.dueDate ?? undefined, state.currentDate),
+                    effortMinutes: action.effortMinutes
+                  }
+                : normalizedType === "archive_task"
+                  ? {
+                      taskId: action.targetTaskId,
+                      title: targetTask?.title ?? action.title,
+                      reason: action.label
+                    }
+                  : {
+                      question: action.question ?? "What should this become?",
+                      questionKind: action.clarificationKind ?? "next_action",
+                      options: action.clarificationOptions ?? [],
+                      rationale: clarificationRationale(action, sourceText),
+                      materiality: clarificationMateriality(action, sourceText),
+                      draftActionType: "create_task",
+                      draftAction: taskPayload(state, { ...action, type: "create_task" }, inboxItemId, projectId, sourceText)
+                    }
   };
 }
 
@@ -1003,12 +926,6 @@ function isObviousSimpleTask(text: string): boolean {
 
 function isBroadOutcomeWork(text: string): boolean {
   return /clean (the )?(house|home)|sort|organize|fix|build|redesign|refactor|life admin|backend|product|garage|paperwork/.test(text);
-}
-
-function shouldSplitConcurrentCookingAi(action: ParsedAiAction, sourceText: string): boolean {
-  const text = `${sourceText} ${action.title} ${action.label}`.toLowerCase();
-  if (!/ai.*while.*cook|cook.*while.*ai|report.*while.*cook/.test(text)) return false;
-  return !/^(cook dinner|run ai report draft)$/i.test(action.title);
 }
 
 function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceText = ""): ParsedAiAction {
@@ -1308,6 +1225,16 @@ function validateStructuredAction(action: ParsedAiAction, state: AppState): stri
   if (action.projectName && !findProjectId(state, action.projectName)) {
     errors.push("Project match is ambiguous or missing.");
   }
+  if (action.type === "schedule_task" || action.type === "archive_task") {
+    if (!action.targetTaskId) {
+      errors.push("Target task is required.");
+    } else if (!state.tasks.some((task) => task.id === action.targetTaskId && task.status !== "archived")) {
+      errors.push("Target task is missing or archived.");
+    }
+  }
+  if (action.type === "schedule_task" && !action.scheduledDate && !action.scheduledTime && !action.dueDate) {
+    errors.push("Schedule task needs a date, time, or deadline change.");
+  }
   return errors;
 }
 
@@ -1408,57 +1335,6 @@ function findProjectName(state: AppState, pattern: RegExp): string | null {
   return state.projects.find((project) => pattern.test(project.name))?.name ?? null;
 }
 
-function findReferencedActiveTask(state: AppState, sourceText: string): Task | undefined {
-  const matches = findReferencedActiveTasks(state, sourceText);
-  if (matches.length === 1) return matches[0];
-
-  const activeTasks = state.tasks.filter((task) => task.status !== "archived");
-  if (activeTasks.length === 1 && /\b(it|that|this|the task)\b/i.test(sourceText)) return activeTasks[0];
-  return undefined;
-}
-
-function findReferencedActiveTasks(state: AppState, sourceText: string): Task[] {
-  const activeTasks = state.tasks.filter((task) => task.status !== "archived");
-  const lower = sourceText.toLowerCase();
-  const explicitMatches = activeTasks.filter((task) => lower.includes(task.title.toLowerCase()));
-  if (explicitMatches.length) return explicitMatches;
-
-  const sourceTokens = new Set((lower.match(/[a-z0-9]+/g) ?? []).filter((token) => token.length > 2));
-  const tokenMatches = activeTasks.filter((task) => {
-    const meaningful = task.title
-      .toLowerCase()
-      .match(/[a-z0-9]+/g)
-      ?.filter((token) => token.length > 2) ?? [];
-    if (meaningful.length === 0) return false;
-    const matched = meaningful.filter((token) => sourceTokens.has(token) || taskReferenceAliases(token).some((alias) => sourceTokens.has(alias)));
-    return matched.length >= Math.min(meaningful.length, 2) || (matched.length === 1 && meaningful.length <= 3);
-  });
-  return tokenMatches;
-}
-
-function taskReferenceAliases(token: string): string[] {
-  if (token === "dump") return ["tip", "recycling"];
-  if (token === "shower") return ["wash"];
-  if (token === "nails") return ["nail"];
-  return [];
-}
-
-function bestTaskToKeep(tasks: Task[]): Task {
-  return [...tasks].sort((a, b) => taskKeepScore(b) - taskKeepScore(a))[0];
-}
-
-function taskKeepScore(task: Task): number {
-  const idScore = Number(task.id.match(/(\d+)$/)?.[1] ?? 0) / 1000;
-  return (
-    (task.scheduledTime ? 20 : 0) +
-    (task.scheduledDate ? 5 : 0) +
-    task.priority * 3 +
-    task.importance * 2 +
-    task.urgency +
-    idScore
-  );
-}
-
 function findDomainId(state: AppState, name: string, fallback: string): string {
   const lower = name.toLowerCase();
   return state.domains.find((domain) => domain.name.toLowerCase().includes(lower) || lower.includes(domain.name.toLowerCase()))?.id ?? fallback;
@@ -1475,14 +1351,6 @@ function normalizeDate(value: string | undefined, currentDate: string): string |
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   if (/today|tonight/i.test(value)) return currentDate;
   return undefined;
-}
-
-function deterministicScheduledDate(sourceText: string, state: AppState): string | undefined {
-  const lower = sourceText.toLowerCase();
-  if (/\btomorrow\b/.test(lower)) return addDays(state.currentDate, 1);
-  if (/\b(today|tonight)\b/.test(lower)) return state.currentDate;
-  const iso = sourceText.match(/\b\d{4}-\d{2}-\d{2}\b/);
-  return iso?.[0];
 }
 
 function parseClockTime(sourceText: string): string | undefined {
