@@ -67,6 +67,14 @@ postgres://ex3cuusion:ex3cuusion@127.0.0.1:54329/ex3cuusion
 
 Add that as `DATABASE_URL` in `.env.local` if it is not already present.
 
+To run the current app state through Postgres instead of memory/file storage:
+
+```text
+EX3CUUSION_STATE_REPOSITORY=postgres
+```
+
+This uses a snapshot bridge while the normalized table mappers are being introduced.
+
 Stop the database with:
 
 ```bash

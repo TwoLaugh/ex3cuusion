@@ -15,7 +15,8 @@
     "eval:ai:live": "node scripts/run-ai-evals.mjs --live",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
-    "db:migrate": "node scripts/run-pg-migrations.mjs"
+    "db:migrate": "node scripts/run-pg-migrations.mjs",
+    "db:state:read": "node scripts/pg-state-repository.mjs read"
   },
   "dependencies": {
     "@types/node": "^22.15.29",
