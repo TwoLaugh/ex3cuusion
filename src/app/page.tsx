@@ -20,6 +20,7 @@ export default function Home() {
   const [inboxError, setInboxError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PlanItem | null>(null);
   const [notDoneItem, setNotDoneItem] = useState<PlanItem | null>(null);
+  const [moveItem, setMoveItem] = useState<PlanItem | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState("no_time");
   const [notDoneNote, setNotDoneNote] = useState("");
@@ -139,6 +140,22 @@ export default function Home() {
     });
   }
 
+  async function submitMove(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!moveItem?.taskId) return;
+    const formData = new FormData(event.currentTarget);
+    await post("/api/structure", {
+      entity: "task",
+      action: "update",
+      id: moveItem.taskId,
+      patch: {
+        scheduledDate: fieldText(formData, "scheduledDate"),
+        scheduledTime: fieldText(formData, "scheduledTime")
+      }
+    });
+    setMoveItem(null);
+  }
+
   return (
     <main className="shell">
       <aside className={menuOpen ? "sideNav sideNavOpen" : "sideNav"} aria-label="Secondary pages">
@@ -234,7 +251,7 @@ export default function Home() {
                     <PlanItemMeta item={item} />
                     {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
                   </div>
-                  <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} />
+                  <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
                 </div>
               </article>
             ))}
@@ -248,7 +265,7 @@ export default function Home() {
               <PlanItemMeta item={item} />
               {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
             </div>
-            <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} />
+            <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
           </article>
         ))}
       </section>
@@ -339,18 +356,17 @@ export default function Home() {
             <button className="iconButton closeButton" onClick={() => setInboxOpen(false)} aria-label="Close AI inbox">
               <X size={18} />
             </button>
-            <p className="eyebrow">AI inbox</p>
-            <h2>Capture messy input</h2>
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="Need back rehab daily, clean garage this weekend, finish auth bug before Friday..."
-              aria-label="Inbox input"
-            />
-            <button className="sendButton" onClick={submitInbox} disabled={sending}>
-              <Send size={16} />
-              {sending ? "Thinking..." : "Send to AI"}
-            </button>
+            <div className="inboxComposer">
+              <textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Tell me what changed..."
+                aria-label="Inbox input"
+              />
+              <button className="sendIconButton" onClick={submitInbox} disabled={sending} aria-label={sending ? "Thinking" : "Send to AI"}>
+                <Send size={18} />
+              </button>
+            </div>
             {inboxError && (
               <p className="errorMessage" role="alert">
                 {inboxError}
@@ -404,6 +420,26 @@ export default function Home() {
             <button className="sendButton" onClick={submitNotDone}>
               Save
             </button>
+          </section>
+        </div>
+      )}
+
+      {moveItem && (
+        <div className="overlay" role="dialog" aria-label={`Move ${moveItem.title}`}>
+          <section className="movePanel">
+            <button className="iconButton closeButton" onClick={() => setMoveItem(null)} aria-label="Close move">
+              <X size={18} />
+            </button>
+            <p className="eyebrow">Move task</p>
+            <h2>{moveItem.title}</h2>
+            <form className="moveForm" onSubmit={submitMove}>
+              <input name="scheduledDate" type="date" defaultValue={plan.date} aria-label="Move date" />
+              <input name="scheduledTime" type="time" defaultValue={isClockTime(moveItem.startTime) ? moveItem.startTime : ""} aria-label="Move time" />
+              <button className="sendButton" type="submit">
+                <Clock3 size={16} />
+                Move
+              </button>
+            </form>
           </section>
         </div>
       )}
@@ -620,6 +656,8 @@ function InboxSession({
 
 function actionSummary(action: AppState["inbox"][number]["actions"][number]): string {
   if (action.type === "create_task") return `Task: ${String(action.payload.title ?? action.label)}`;
+  if (action.type === "schedule_task") return `Moved: ${String(action.payload.title ?? action.label)}`;
+  if (action.type === "archive_task") return `Removed: ${String(action.payload.title ?? action.label)}`;
   if (action.type === "create_routine") return `Routine: ${String(action.payload.title ?? action.label)}`;
   if (action.type === "create_project") return `Project: ${String(action.payload.name ?? action.payload.title ?? action.label)}`;
   return action.label;
@@ -1293,12 +1331,14 @@ function PlanItemActions({
   item,
   post,
   setSelected,
-  setNotDoneItem
+  setNotDoneItem,
+  setMoveItem
 }: {
   item: PlanItem;
   post: PostFn;
   setSelected: Dispatch<SetStateAction<PlanItem | null>>;
   setNotDoneItem: Dispatch<SetStateAction<PlanItem | null>>;
+  setMoveItem: Dispatch<SetStateAction<PlanItem | null>>;
 }) {
   return (
     <div className="itemActions">
@@ -1315,6 +1355,11 @@ function PlanItemActions({
       >
         {item.status === "deferred" ? "Deferred" : "Not done"}
       </button>
+      {item.taskId && (
+        <button className="moveButton" onClick={() => setMoveItem(item)} aria-label={`Move ${item.title}`}>
+          <Clock3 size={15} />
+        </button>
+      )}
       {item.type === "project_block" && <button onClick={() => setSelected(item)}>Open</button>}
     </div>
   );

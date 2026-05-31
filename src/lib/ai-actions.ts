@@ -50,6 +50,7 @@ const captureRevisionSchema = z.object({
   domainName: z.string().nullable(),
   dateIntent: z.enum(["unchanged", "today", "tomorrow", "this_week", "next_week", "someday", "specific_date", "deadline"]).nullable(),
   scheduledDate: z.string().nullable(),
+  scheduledTime: z.string().nullable(),
   dueDate: z.string().nullable(),
   effortMinutes: z.number().int().min(5).max(480).nullable(),
   priority: z.number().int().min(1).max(9).nullable(),
@@ -86,8 +87,19 @@ export async function interpretInboxInput(
   state: AppState,
   interpreter: AiInterpreter = defaultInterpreter
 ): Promise<InboxEntry> {
-  const parsed = await interpreter(input, state);
   const entryId = nextId("inbox");
+  const deterministicActions = deterministicExistingTaskActions(input, state, entryId);
+  if (deterministicActions) {
+    return {
+      id: entryId,
+      createdAt: timestampForState(state),
+      input,
+      actions: deterministicActions,
+      summary: deterministicActions[0]?.type === "archive_task" ? "Removed the matching existing task." : "Updated the matching existing task."
+    };
+  }
+
+  const parsed = await interpreter(input, state);
   const actions = supplementMissingSourceActions(
     parsed.actions.flatMap((action) => buildActions(action, state, entryId, parsed.model, input)),
     input,
@@ -213,6 +225,7 @@ async function defaultRevisionInterpreter({
       "Use projectName only when it exactly matches an existing project/person/container. " +
       "For broad date windows like 'next week' set dateIntent to next_week and leave scheduledDate/dueDate null. " +
       "For deadline wording like 'by Friday' use dueDate. For execution wording like 'tomorrow' or 'today' use scheduledDate/dateIntent. " +
+      "For explicit clock-time corrections like 'at 5pm' or 'make it 17:00', set scheduledTime in HH:mm. Preserve the existing date unless the user changes it. " +
       "If the message is just extra context, put it in note and shouldApply true. If it is unrelated or unsafe, shouldApply false.",
     input: [
       {
@@ -227,6 +240,7 @@ async function defaultRevisionInterpreter({
             projectId: task.projectId,
             domainId: task.domainId,
             scheduledDate: task.scheduledDate,
+            scheduledTime: task.scheduledTime,
             dueDate: task.dueDate,
             dateIntent: task.dateIntent,
             effortMinutes: task.effortMinutes,
@@ -271,6 +285,7 @@ export async function fixtureRevisionInterpreter({
     domainName: null,
     dateIntent: null,
     scheduledDate: null,
+    scheduledTime: null,
     dueDate: null,
     effortMinutes: null,
     priority: null,
@@ -297,6 +312,16 @@ export async function fixtureRevisionInterpreter({
     revision.dateIntent = "today";
     revision.scheduledDate = state.currentDate;
     changes.push("scheduled for today");
+  }
+
+  const scheduledTime = parseClockTime(message);
+  if (scheduledTime) {
+    revision.scheduledTime = scheduledTime;
+    if (!revision.dateIntent && !revision.scheduledDate) {
+      revision.dateIntent = "today";
+      revision.scheduledDate = state.currentDate;
+    }
+    changes.push(`scheduled for ${scheduledTime}`);
   }
 
   const project = state.projects.find((candidate) => lower.includes(candidate.name.toLowerCase()));
@@ -782,6 +807,52 @@ function supplementMissingSourceActions(actions: AiAction[], sourceText: string,
   }
 
   return supplemented;
+}
+
+function deterministicExistingTaskActions(sourceText: string, state: AppState, inboxItemId: string, model?: string): AiAction[] | undefined {
+  const task = findReferencedActiveTask(state, sourceText);
+  if (!task) return undefined;
+
+  if (/\b(remove|delete|archive|cancel|get rid of|drop)\b/i.test(sourceText)) {
+    return [
+      {
+        id: nextId("action"),
+        type: "archive_task",
+        label: `Archive ${task.title}`,
+        safety: "auto_apply",
+        status: "proposed",
+        model,
+        createdAt: timestampForState(state),
+        sourceMessageId: inboxItemId,
+        payload: { taskId: task.id, title: task.title }
+      }
+    ];
+  }
+
+  const scheduledTime = parseClockTime(sourceText);
+  const scheduledDate = deterministicScheduledDate(sourceText, state);
+  if (/\b(actually|instead|move|reschedule|change|correct|make it|put it|should be|at)\b/i.test(sourceText) && (scheduledTime || scheduledDate)) {
+    return [
+      {
+        id: nextId("action"),
+        type: "schedule_task",
+        label: `Reschedule ${task.title}`,
+        safety: "auto_apply",
+        status: "proposed",
+        model,
+        createdAt: timestampForState(state),
+        sourceMessageId: inboxItemId,
+        payload: {
+          taskId: task.id,
+          title: task.title,
+          scheduledDate: scheduledDate ?? task.scheduledDate ?? state.currentDate,
+          scheduledTime: scheduledTime ?? task.scheduledTime
+        }
+      }
+    ];
+  }
+
+  return undefined;
 }
 
 function buildAction(rawAction: ParsedAiAction, state: AppState, inboxItemId: string, model?: string, sourceText = ""): AiAction {
@@ -1310,6 +1381,23 @@ function findProjectName(state: AppState, pattern: RegExp): string | null {
   return state.projects.find((project) => pattern.test(project.name))?.name ?? null;
 }
 
+function findReferencedActiveTask(state: AppState, sourceText: string): Task | undefined {
+  const activeTasks = state.tasks.filter((task) => task.status !== "archived");
+  const lower = sourceText.toLowerCase();
+  const explicitMatches = activeTasks.filter((task) => lower.includes(task.title.toLowerCase()));
+  if (explicitMatches.length === 1) return explicitMatches[0];
+
+  const tokenMatches = activeTasks.filter((task) => {
+    const tokens = task.title.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+    const meaningful = tokens.filter((token) => token.length > 2);
+    return meaningful.length > 0 && meaningful.every((token) => lower.includes(token));
+  });
+  if (tokenMatches.length === 1) return tokenMatches[0];
+
+  if (activeTasks.length === 1 && /\b(it|that|this|the task)\b/i.test(sourceText)) return activeTasks[0];
+  return undefined;
+}
+
 function findDomainId(state: AppState, name: string, fallback: string): string {
   const lower = name.toLowerCase();
   return state.domains.find((domain) => domain.name.toLowerCase().includes(lower) || lower.includes(domain.name.toLowerCase()))?.id ?? fallback;
@@ -1325,6 +1413,37 @@ function normalizeDate(value: string | undefined, currentDate: string): string |
   if (!value) return undefined;
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   if (/today|tonight/i.test(value)) return currentDate;
+  return undefined;
+}
+
+function deterministicScheduledDate(sourceText: string, state: AppState): string | undefined {
+  const lower = sourceText.toLowerCase();
+  if (/\btomorrow\b/.test(lower)) return addDays(state.currentDate, 1);
+  if (/\b(today|tonight)\b/.test(lower)) return state.currentDate;
+  const iso = sourceText.match(/\b\d{4}-\d{2}-\d{2}\b/);
+  return iso?.[0];
+}
+
+function parseClockTime(sourceText: string): string | undefined {
+  const lower = sourceText.toLowerCase();
+  const colon = lower.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+  if (colon) return `${colon[1].padStart(2, "0")}:${colon[2]}`;
+
+  const meridiem = lower.match(/\b(1[0-2]|0?[1-9])(?:[.:]([0-5]\d))?\s*(am|pm)\b/);
+  if (meridiem) {
+    let hour = Number(meridiem[1]);
+    const minute = meridiem[2] ?? "00";
+    if (meridiem[3] === "pm" && hour !== 12) hour += 12;
+    if (meridiem[3] === "am" && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, "0")}:${minute}`;
+  }
+
+  const atHour = lower.match(/\b(?:at|for)\s+(1[0-2]|0?[1-9])\b/);
+  if (atHour) {
+    const hour = Number(atHour[1]);
+    return `${String(hour >= 7 ? hour : hour + 12).padStart(2, "0")}:00`;
+  }
+
   return undefined;
 }
 

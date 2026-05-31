@@ -589,7 +589,7 @@ export async function submitInbox(input: string, interpreter?: AiInterpreter): P
   }
 
   for (const action of entry.actions) {
-    applyAutoAction(state, action);
+    applyAutoAction(state, action, input);
     recordAppliedEntity(session, action);
   }
   session.status = session.questions.some((question) => question.status === "pending")
@@ -793,7 +793,7 @@ export function rejectAiAction(actionId: string, reason?: string): AppState {
   return getState();
 }
 
-function applyAutoAction(state: AppState, action: AiAction) {
+function applyAutoAction(state: AppState, action: AiAction, sourceText?: string) {
   if (action.status === "failed") return;
   if (action.safety !== "auto_apply") {
     action.skippedReason = action.validationErrors?.length
@@ -801,10 +801,10 @@ function applyAutoAction(state: AppState, action: AiAction) {
       : "Needs confirmation before applying.";
     return;
   }
-  applyAction(state, action, false);
+  applyAction(state, action, false, sourceText);
 }
 
-function applyAction(state: AppState, action: AiAction, confirmed: boolean) {
+function applyAction(state: AppState, action: AiAction, confirmed: boolean, sourceText?: string) {
   if (!confirmed && action.safety !== "auto_apply") return;
 
   if (action.type === "create_task") {
@@ -816,6 +816,12 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean) {
         task.status !== "archived"
     );
     if (existing) {
+      if (shouldUpdateExistingTaskFromCreate(sourceText) && applyTaskSchedulePatch(state, existing, action.payload)) {
+        action.status = "applied";
+        action.appliedEntityId = existing.id;
+        action.skippedReason = "Updated existing task instead of duplicating it.";
+        return;
+      }
       action.status = "applied";
       action.appliedEntityId = existing.id;
       action.skippedReason = "Task already exists.";
@@ -826,6 +832,36 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean) {
       ...payload
     };
     state.tasks.push(task);
+    action.status = "applied";
+    action.appliedEntityId = task.id;
+    action.skippedReason = undefined;
+    return;
+  }
+
+  if (action.type === "schedule_task") {
+    const task = findTaskForAction(state, action);
+    if (!task) {
+      action.status = "failed";
+      action.skippedReason = "Could not find the task to schedule.";
+      return;
+    }
+    applyTaskSchedulePatch(state, task, action.payload);
+    action.status = "applied";
+    action.appliedEntityId = task.id;
+    action.skippedReason = undefined;
+    return;
+  }
+
+  if (action.type === "archive_task") {
+    const task = findTaskForAction(state, action);
+    if (!task) {
+      action.status = "failed";
+      action.skippedReason = "Could not find the task to archive.";
+      return;
+    }
+    task.status = "archived";
+    task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
     action.status = "applied";
     action.appliedEntityId = task.id;
     action.skippedReason = undefined;
@@ -1157,6 +1193,9 @@ function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevis
   const dateChange = applyRevisionDate(state, task, revision);
   if (dateChange) changes.push(dateChange);
 
+  const timeChange = applyRevisionTime(state, task, revision);
+  if (timeChange) changes.push(timeChange);
+
   if (revision.effortMinutes && revision.effortMinutes !== task.effortMinutes) {
     task.effortMinutes = revision.effortMinutes;
     task.estimateConfidence = Math.max(task.estimateConfidence ?? 0.5, revision.confidence);
@@ -1186,6 +1225,60 @@ function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevis
   return uniqueChanges(changes.length ? changes : revision.changes);
 }
 
+function shouldUpdateExistingTaskFromCreate(sourceText: string | undefined): boolean {
+  return Boolean(sourceText && /\b(actually|instead|move|reschedule|change|correct|make it|put it|should be|at)\b/i.test(sourceText));
+}
+
+function findTaskForAction(state: AppState, action: AiAction): Task | undefined {
+  const taskId = typeof action.payload.taskId === "string" ? action.payload.taskId : undefined;
+  if (taskId) return state.tasks.find((task) => task.id === taskId && task.status !== "archived");
+  const title = typeof action.payload.title === "string" ? action.payload.title.toLowerCase() : "";
+  return state.tasks.find((task) => task.status !== "archived" && task.title.toLowerCase() === title);
+}
+
+function applyTaskSchedulePatch(state: AppState, task: Task, payload: Record<string, unknown>): boolean {
+  let changed = false;
+  const scheduledDate = typeof payload.scheduledDate === "string" && validDate(payload.scheduledDate) ? payload.scheduledDate : undefined;
+  const scheduledTime = typeof payload.scheduledTime === "string" && validTime(payload.scheduledTime) ? payload.scheduledTime : undefined;
+  const dueDate = typeof payload.dueDate === "string" && validDate(payload.dueDate) ? payload.dueDate : undefined;
+
+  if (scheduledDate) {
+    task.scheduledDate = scheduledDate;
+    task.dueDate = undefined;
+    task.dateIntent = {
+      kind: scheduledDate === state.currentDate ? "today" : scheduledDate === addDays(state.currentDate, 1) ? "tomorrow" : "specific_date",
+      scheduledDate,
+      confidence: 0.85
+    };
+    task.plannerFields.pressureLevel = "scheduled";
+    changed = true;
+  }
+
+  if (scheduledTime) {
+    task.scheduledDate ??= state.currentDate;
+    task.scheduledTime = scheduledTime;
+    task.dueDate = undefined;
+    task.dateIntent = {
+      kind: task.scheduledDate === state.currentDate ? "today" : task.scheduledDate === addDays(state.currentDate, 1) ? "tomorrow" : "specific_date",
+      scheduledDate: task.scheduledDate,
+      confidence: 0.85
+    };
+    task.plannerFields.pressureLevel = "scheduled";
+    changed = true;
+  }
+
+  if (dueDate) {
+    task.dueDate = dueDate;
+    task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
+    task.dateIntent = { kind: "deadline", dueDate, confidence: 0.8 };
+    task.plannerFields.pressureLevel = "due";
+    changed = true;
+  }
+
+  return changed;
+}
+
 function shouldApplyRevisionTitle(task: Task, revision: CaptureRevision, message: string): revision is CaptureRevision & { title: string } {
   const title = revision.title?.trim();
   if (!title || title === task.title) return false;
@@ -1200,6 +1293,7 @@ function applyRevisionDate(state: AppState, task: Task, revision: CaptureRevisio
   if (revision.dateIntent === "next_week") {
     const range = nextWeekRange(state.currentDate);
     task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
     task.dueDate = undefined;
     task.dateIntent = { kind: "week_window", originalText: revision.summary, ...range, confidence: revision.confidence };
     task.plannerFields.pressureLevel = "soft";
@@ -1209,6 +1303,7 @@ function applyRevisionDate(state: AppState, task: Task, revision: CaptureRevisio
   if (revision.dateIntent === "this_week") {
     const range = weekRange(state.currentDate);
     task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
     task.dueDate = undefined;
     task.dateIntent = { kind: "week_window", originalText: revision.summary, ...range, confidence: revision.confidence };
     task.plannerFields.pressureLevel = "soft";
@@ -1235,6 +1330,7 @@ function applyRevisionDate(state: AppState, task: Task, revision: CaptureRevisio
 
   if (revision.dateIntent === "someday") {
     task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
     task.dueDate = undefined;
     task.dateIntent = { kind: "someday", originalText: revision.summary, confidence: revision.confidence };
     task.plannerFields.pressureLevel = "someday";
@@ -1252,12 +1348,28 @@ function applyRevisionDate(state: AppState, task: Task, revision: CaptureRevisio
   if (revision.dateIntent === "deadline" && validDate(revision.dueDate)) {
     task.dueDate = revision.dueDate;
     task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
     task.dateIntent = { kind: "deadline", originalText: revision.summary, dueDate: revision.dueDate, confidence: revision.confidence };
     task.plannerFields.pressureLevel = "due";
     return `deadline set to ${revision.dueDate}`;
   }
 
   return undefined;
+}
+
+function applyRevisionTime(state: AppState, task: Task, revision: CaptureRevision): string | undefined {
+  if (!validTime(revision.scheduledTime)) return undefined;
+  task.scheduledDate ??= validDate(revision.scheduledDate) ? revision.scheduledDate : state.currentDate;
+  task.scheduledTime = revision.scheduledTime;
+  task.dueDate = undefined;
+  task.dateIntent = {
+    kind: task.scheduledDate === state.currentDate ? "today" : task.scheduledDate === addDays(state.currentDate, 1) ? "tomorrow" : "specific_date",
+    originalText: revision.summary,
+    scheduledDate: task.scheduledDate,
+    confidence: revision.confidence
+  };
+  task.plannerFields.pressureLevel = "scheduled";
+  return `scheduled for ${revision.scheduledTime}`;
 }
 
 function findProjectMention(state: AppState, message: string): AppState["projects"][number] | undefined {

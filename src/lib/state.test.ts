@@ -380,6 +380,50 @@ describe("state integration", () => {
     expect(afterFollowUp.captureSessions[0].messages.some((message) => /Updated Water plants/.test(message.content))).toBe(true);
   });
 
+  it("applies follow-up clock-time corrections to the existing task", async () => {
+    const afterCapture = await submitInbox("Add a task called Water plants today for 10 minutes.", fixtureInterpreter);
+    const session = afterCapture.captureSessions[0];
+    const task = afterCapture.tasks.find((candidate) => candidate.title === "Water plants");
+
+    const afterFollowUp = await addCaptureSessionMessage(session.id, "actually at 5pm");
+    const updated = afterFollowUp.tasks.find((candidate) => candidate.id === task!.id);
+
+    expect(afterFollowUp.tasks.filter((candidate) => candidate.title === "Water plants")).toHaveLength(1);
+    expect(updated?.scheduledDate).toBe("2026-06-01");
+    expect(updated?.scheduledTime).toBe("17:00");
+    expect(afterFollowUp.captureSessions[0].revisionEvents[0]).toMatchObject({
+      taskId: task!.id,
+      after: { scheduledTime: "17:00" }
+    });
+  });
+
+  it("uses explicit inbox remove and reschedule requests to mutate existing tasks", async () => {
+    const afterCapture = await submitInbox("I need to cut my nails", fixtureInterpreter);
+    const task = afterCapture.tasks.find((candidate) => candidate.title === "Cut nails");
+
+    expect(task).toBeDefined();
+
+    const afterMove = await submitInbox("actually cut nails at 5pm", fixtureInterpreter);
+    const moved = afterMove.tasks.find((candidate) => candidate.id === task!.id);
+
+    expect(afterMove.tasks.filter((candidate) => candidate.title === "Cut nails")).toHaveLength(1);
+    expect(moved?.scheduledDate).toBe("2026-06-01");
+    expect(moved?.scheduledTime).toBe("17:00");
+    expect(afterMove.inbox[0].actions[0]).toMatchObject({
+      type: "schedule_task",
+      status: "applied",
+      appliedEntityId: task!.id
+    });
+
+    const afterRemove = await submitInbox("remove cut nails", fixtureInterpreter);
+    expect(afterRemove.tasks.find((candidate) => candidate.id === task!.id)?.status).toBe("archived");
+    expect(afterRemove.inbox[0].actions[0]).toMatchObject({
+      type: "archive_task",
+      status: "applied",
+      appliedEntityId: task!.id
+    });
+  });
+
   it("uses structured AI revision output for natural follow-up corrections", async () => {
     const afterCapture = await submitInbox("Add a task called Water plants today for 10 minutes.", fixtureInterpreter);
     const session = afterCapture.captureSessions[0];
@@ -395,6 +439,7 @@ describe("state integration", () => {
       domainName: null,
       dateIntent: "someday",
       scheduledDate: null,
+      scheduledTime: null,
       dueDate: null,
       effortMinutes: null,
       priority: 2,
@@ -435,6 +480,7 @@ describe("state integration", () => {
       domainName: null,
       dateIntent: "tomorrow",
       scheduledDate: "2026-06-02",
+      scheduledTime: null,
       dueDate: null,
       effortMinutes: null,
       priority: null,

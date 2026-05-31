@@ -563,6 +563,12 @@ h1 {
   color: var(--rose);
 }
 
+.moveButton {
+  height: 34px;
+  padding: 0;
+  width: 34px;
+}
+
 .sideNav {
   background: var(--panel);
   border-right: 1px solid var(--line-strong);
@@ -633,6 +639,7 @@ h1 {
 
 .inboxPanel,
 .notDonePanel,
+.movePanel,
 .reviewPanel,
 .drawer {
   background: var(--panel);
@@ -646,7 +653,40 @@ h1 {
   max-height: min(760px, 92vh);
   max-width: 560px;
   overflow: auto;
-  width: min(560px, 100%);
+  padding: 12px;
+  width: min(520px, 100%);
+}
+
+.inboxComposer {
+  align-items: stretch;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 46px;
+}
+
+.inboxComposer textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.sendIconButton,
+.moveButton {
+  align-items: center;
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  color: #07100d;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.sendIconButton {
+  min-height: 46px;
+}
+
+.sendIconButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .activeNavItem {
@@ -944,7 +984,8 @@ h1 {
   margin-top: 6px;
 }
 
-.notDonePanel {
+.notDonePanel,
+.movePanel {
   max-width: 440px;
   width: min(440px, 100%);
 }
@@ -956,15 +997,16 @@ h1 {
   width: min(520px, 100%);
 }
 
-.inboxPanel h2,
 .notDonePanel h2,
+.movePanel h2,
 .reviewPanel h2,
 .drawer h2 {
   font-size: 1.45rem;
 }
 
 .notDonePanel select,
-.reviewPanel select {
+.reviewPanel select,
+.moveForm input {
   background: var(--bg-soft);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -976,6 +1018,12 @@ h1 {
 
 .notDonePanel textarea {
   margin-top: 12px;
+}
+
+.moveForm {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 .reviewStats,
