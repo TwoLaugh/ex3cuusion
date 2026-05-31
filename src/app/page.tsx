@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, Check, ChevronLeft, ChevronRight, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
+import { Archive, Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
 import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useState } from "react";
 import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
@@ -20,6 +20,7 @@ export default function Home() {
   const [inboxError, setInboxError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PlanItem | null>(null);
   const [notDoneItem, setNotDoneItem] = useState<PlanItem | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState("no_time");
   const [notDoneNote, setNotDoneNote] = useState("");
   const [clarificationDrafts, setClarificationDrafts] = useState<Record<string, string>>({});
@@ -193,6 +194,10 @@ export default function Home() {
           <Clock3 size={16} />
           {plan.loadLevel} - {state.currentTime} - {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
         </div>
+        <button className="reviewButton" onClick={() => setReviewOpen(true)} aria-label="Review day">
+          <ClipboardCheck size={16} />
+          Review
+        </button>
       </header>
 
       {activeView && <SecondaryPanel view={activeView} state={state} plan={plan} post={post} onClose={() => setActiveView(null)} />}
@@ -402,7 +407,104 @@ export default function Home() {
           </section>
         </div>
       )}
+
+      {reviewOpen && <ReviewDayDialog state={state} post={post} onClose={() => setReviewOpen(false)} />}
     </main>
+  );
+}
+
+function ReviewDayDialog({ state, post, onClose }: { state: AppState; post: PostFn; onClose: () => void }) {
+  const summary = useMemo(() => buildClientReviewSummary(state), [state]);
+  const existing = summary.existingReview;
+  const [energy, setEnergy] = useState(existing?.energy ?? "normal");
+  const [planFit, setPlanFit] = useState(existing?.planFit ?? (summary.deferredCount >= 2 ? "overplanned" : "realistic"));
+  const [note, setNote] = useState(existing?.note ?? "");
+  const [affectPlanning, setAffectPlanning] = useState(existing?.affectPlanning ?? true);
+
+  async function submitReview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await post("/api/review/daily", {
+      date: state.currentDate,
+      energy,
+      planFit,
+      note: note.trim() || undefined,
+      affectPlanning
+    });
+    onClose();
+  }
+
+  return (
+    <div className="overlay" role="dialog" aria-label="Daily review">
+      <section className="reviewPanel">
+        <button className="iconButton closeButton" onClick={onClose} aria-label="Close daily review">
+          <X size={18} />
+        </button>
+        <p className="eyebrow">Daily review</p>
+        <h2>{formatDate(state.currentDate)}</h2>
+        <div className="reviewStats">
+          <span>{summary.completedCount} done</span>
+          <span>{summary.partialCount} partial</span>
+          <span>{summary.deferredCount} deferred</span>
+          <span>{summary.blockedCount} blocked</span>
+          <span>{summary.skippedCount} skipped</span>
+        </div>
+        <ReviewList title="Done" items={summary.completedTitles} />
+        <ReviewList title="Needs calibration" items={[...summary.partialTitles, ...summary.deferredTitles, ...summary.blockedTitles, ...summary.skippedTitles]} />
+        <form className="reviewForm" onSubmit={submitReview}>
+          <label>
+            Energy
+            <select value={energy} onChange={(event) => setEnergy(event.target.value as typeof energy)} aria-label="Review energy">
+              <option value="low">low</option>
+              <option value="normal">normal</option>
+              <option value="high">high</option>
+            </select>
+          </label>
+          <label>
+            Plan fit
+            <select value={planFit} onChange={(event) => setPlanFit(event.target.value as typeof planFit)} aria-label="Review plan fit">
+              <option value="overplanned">overplanned</option>
+              <option value="realistic">realistic</option>
+              <option value="underfilled">underfilled</option>
+            </select>
+          </label>
+          <label className="reviewCheckbox">
+            <input type="checkbox" checked={affectPlanning} onChange={(event) => setAffectPlanning(event.target.checked)} />
+            Use this to tune future plans
+          </label>
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            maxLength={280}
+            placeholder="Optional planning note, not a journal..."
+            aria-label="Review note"
+          />
+          {summary.calibrationSignals.length > 0 && (
+            <div className="reviewSignals">
+              {summary.calibrationSignals.map((signal) => (
+                <span key={signal}>{signal}</span>
+              ))}
+            </div>
+          )}
+          <button className="sendButton" type="submit">
+            <Save size={16} />
+            Save review
+          </button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function ReviewList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="reviewList">
+      <h3>{title}</h3>
+      {items.length === 0 ? (
+        <p className="emptyPanel">Nothing here.</p>
+      ) : (
+        items.slice(0, 6).map((item) => <p key={item}>{item}</p>)
+      )}
+    </div>
   );
 }
 
@@ -1088,6 +1190,60 @@ function buildBacklogSummary(state: AppState, plan: DayPlan) {
     someday,
     text: `${thisWeek + nextWeek} dated backlog tasks outside this day, ${someday} soft items, ${blocked} blocked or waiting.`
   };
+}
+
+function buildClientReviewSummary(state: AppState) {
+  const date = state.currentDate;
+  const events = state.executionEvents.filter((event) => event.date === date);
+  const completions = state.completions.filter((event) => event.date === date);
+  const completedPlanIds = new Set([...events.filter((event) => event.type === "completed").map((event) => event.planItemId), ...completions.map((event) => event.planItemId)].filter(Boolean) as string[]);
+  const partialEvents = events.filter((event) => event.type === "worked_on" || event.type === "partially_completed");
+  const deferredEvents = events.filter((event) => event.type === "deferred");
+  const blockedEvents = events.filter((event) => event.type === "blocked" || event.type === "waiting_on");
+  const skippedEvents = events.filter((event) => ["skipped", "canceled", "marked_not_important"].includes(event.type));
+  const deferrals = state.deferrals.filter((entry) => entry.date === date);
+  const deferredPlanIds = new Set([...deferredEvents.map((event) => event.planItemId), ...deferrals.map((entry) => entry.planItemId)].filter(Boolean) as string[]);
+  const calibrationSignals = [];
+  const overloadCount = deferrals.filter((entry) => ["no_time", "overplanned"].includes(entry.reason)).length;
+  const lowEnergyCount = deferrals.filter((entry) => entry.reason === "low_energy").length;
+  const vagueCount = events.filter((event) => event.reason === "too_vague").length;
+  const blockedCount = blockedEvents.length;
+  if (overloadCount) calibrationSignals.push(`${overloadCount} time/load deferral${overloadCount === 1 ? "" : "s"}`);
+  if (lowEnergyCount) calibrationSignals.push(`${lowEnergyCount} low-energy deferral${lowEnergyCount === 1 ? "" : "s"}`);
+  if (vagueCount) calibrationSignals.push(`${vagueCount} vague item${vagueCount === 1 ? "" : "s"} need sharper next actions`);
+  if (blockedCount) calibrationSignals.push(`${blockedCount} blocked/waiting item${blockedCount === 1 ? "" : "s"}`);
+
+  return {
+    completedCount: completedPlanIds.size,
+    partialCount: partialEvents.length,
+    deferredCount: deferredPlanIds.size,
+    blockedCount: blockedEvents.length,
+    skippedCount: skippedEvents.length,
+    completedTitles: [...completedPlanIds].map((planItemId) => clientPlanTitleFromId(state, date, planItemId)),
+    partialTitles: partialEvents.map((event) => clientEventTitle(state, date, event)),
+    deferredTitles: [...deferredPlanIds].map((planItemId) => clientPlanTitleFromId(state, date, planItemId)),
+    blockedTitles: blockedEvents.map((event) => clientEventTitle(state, date, event)),
+    skippedTitles: skippedEvents.map((event) => clientEventTitle(state, date, event)),
+    calibrationSignals,
+    existingReview: state.dailyReviews.find((review) => review.date === date)
+  };
+}
+
+function clientEventTitle(state: AppState, date: string, event: AppState["executionEvents"][number]): string {
+  if (event.taskId) return state.tasks.find((task) => task.id === event.taskId)?.title ?? event.taskId;
+  if (event.taskIds?.[0]) return state.tasks.find((task) => task.id === event.taskIds?.[0])?.title ?? event.taskIds[0];
+  return event.planItemId ? clientPlanTitleFromId(state, date, event.planItemId) : "Untitled item";
+}
+
+function clientPlanTitleFromId(state: AppState, date: string, planItemId: string): string {
+  const prefix = `plan_${date}_`;
+  const entityId = planItemId.startsWith(prefix) ? planItemId.slice(prefix.length).replace(/_phase_\d+$/, "") : planItemId;
+  return (
+    state.tasks.find((task) => task.id === entityId)?.title ??
+    state.projects.find((project) => project.id === entityId)?.name ??
+    state.routines.find((routine) => routine.id === entityId)?.title ??
+    planItemId
+  );
 }
 
 function sortTasks(tasks: Task[]): Task[] {

@@ -8,6 +8,7 @@ import {
   applyStructureMutation,
   completePlanItem,
   confirmAiAction,
+  dailyReviewSummary,
   deferPlanItem,
   getState,
   recordPlanItemOutcome,
@@ -16,6 +17,7 @@ import {
   retreatDay,
   setClock,
   submitInbox,
+  submitDailyReview,
   updateProjectBlockSelection
 } from "./state";
 
@@ -193,6 +195,45 @@ describe("state integration", () => {
     const state = getState();
     expect(state.tasks.find((task) => task.id === firstTaskId)?.status).toBe("active");
     expect(state.executionEvents.some((event) => event.type === "partially_completed" && event.actualMinutes === 35)).toBe(true);
+  });
+
+  it("summarizes and stores a compact daily review for planner calibration", () => {
+    const plan = buildDayPlan(getState());
+    const routine = plan.items.find((item) => item.title === "Back rehab");
+    const project = plan.items.find((item) => item.title === "Diet App");
+    const message = plan.items.find((item) => item.title === "Message Will");
+
+    completePlanItem(routine!.id, 25);
+    recordPlanItemOutcome({
+      planItemId: project!.id,
+      type: "partially_completed",
+      reason: "too_vague",
+      note: "Need a sharper next action."
+    });
+    deferPlanItem(message!.id, "no_time");
+
+    const summary = dailyReviewSummary();
+    expect(summary).toMatchObject({ completedCount: 1, partialCount: 1, deferredCount: 1 });
+    expect(summary.calibrationSignals.some((signal) => signal.includes("time/load"))).toBe(true);
+
+    submitDailyReview({
+      energy: "low",
+      planFit: "overplanned",
+      note: "Too much hard-focus work.",
+      affectPlanning: true
+    });
+
+    const review = getState().dailyReviews[0];
+    expect(review).toMatchObject({
+      date: "2026-06-01",
+      energy: "low",
+      planFit: "overplanned",
+      completedCount: 1,
+      partialCount: 1,
+      deferredCount: 1
+    });
+    expect(review.capacityAdjustmentMinutes).toBeLessThan(0);
+    expect(review.note).toBe("Too much hard-focus work.");
   });
 
   it("turns blocked and waiting outcomes into task state the planner respects", () => {

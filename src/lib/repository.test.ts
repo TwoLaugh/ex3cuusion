@@ -35,6 +35,22 @@ describePostgres("postgres snapshot repository", () => {
         actualMinutes: 20,
         note: "Made useful progress."
       });
+      next.dailyReviews.push({
+        id: "review_postgres_roundtrip",
+        date: "2026-06-04",
+        createdAt: "2026-06-04T22:00:00.000Z",
+        energy: "low",
+        planFit: "overplanned",
+        note: "Reduce the next plan.",
+        affectPlanning: true,
+        capacityAdjustmentMinutes: -60,
+        completedCount: 1,
+        partialCount: 1,
+        deferredCount: 1,
+        blockedCount: 0,
+        skippedCount: 0,
+        calibrationSignals: ["review marked the day as overplanned"]
+      });
       next.inbox.push({
         id: "inbox_postgres_roundtrip",
         createdAt: "2026-06-04T09:00:00.000Z",
@@ -161,6 +177,10 @@ describePostgres("postgres snapshot repository", () => {
           id: "event_postgres_roundtrip",
           taskId: "task_postgres_roundtrip",
           actualMinutes: 20
+        });
+        expect(readFromNormalizedRows.dailyReviews[0]).toMatchObject({
+          id: "review_postgres_roundtrip",
+          capacityAdjustmentMinutes: -60
         });
         expect(readFromNormalizedRows.inbox[0].actions[0]).toMatchObject({
           id: "action_postgres_roundtrip",

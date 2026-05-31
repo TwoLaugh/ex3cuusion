@@ -53,6 +53,8 @@ export type ClarificationKind =
   | "split"
   | "next_action";
 export type ClarificationMode = "blocking" | "optional" | "batch" | "refinement";
+export type DailyReviewEnergy = "low" | "normal" | "high";
+export type DailyReviewPlanFit = "underfilled" | "realistic" | "overplanned";
 
 export interface Domain {
   id: string;
@@ -263,6 +265,23 @@ export interface ProjectBlockSelection {
   updatedAt: string;
 }
 
+export interface DailyReview {
+  id: string;
+  date: string;
+  createdAt: string;
+  energy: DailyReviewEnergy;
+  planFit: DailyReviewPlanFit;
+  note?: string;
+  affectPlanning: boolean;
+  capacityAdjustmentMinutes: number;
+  completedCount: number;
+  partialCount: number;
+  deferredCount: number;
+  blockedCount: number;
+  skippedCount: number;
+  calibrationSignals: string[];
+}
+
 export interface WeekPlanDay {
   date: string;
   plan: DayPlan;
@@ -416,6 +435,7 @@ export interface AppState {
   completions: CompletionEvent[];
   executionEvents: ExecutionEvent[];
   projectBlockSelections: ProjectBlockSelection[];
+  dailyReviews: DailyReview[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];
 }

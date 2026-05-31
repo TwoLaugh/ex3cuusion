@@ -1,5 +1,5 @@
 import { addMinutes, dayOfWeek, daysUntil, isDateInRange, maxTime, timeToMinutes } from "./dates";
-import type { AppState, DayPlan, LoadLevel, PlanItem, PlanItemStatus, Task } from "./types";
+import type { AppState, DayPlan, ExecutionEvent, LoadLevel, PlanItem, PlanItemStatus, Task } from "./types";
 
 type PlanCandidate = Omit<PlanItem, "startTime" | "endTime"> & {
   fixedStartTime?: string;
@@ -40,14 +40,34 @@ function isTaskPlannable(task: Task, date: string): boolean {
   return true;
 }
 
-function taskScore(task: Task, date: string): number {
+function taskScore(state: AppState, task: Task, date: string): number {
   const dueDistance = daysUntil(date, task.dueDate);
   const dueBoost = dueDistance <= 0 ? 25 : dueDistance <= 2 ? 16 : dueDistance <= 5 ? 8 : 0;
   const strictnessBoost = task.strictness === "strict" ? 8 : task.strictness === "normal" ? 4 : 0;
   const relationshipBoost = task.plannerSignals?.relationshipValue ?? 0;
   const momentumBoost = task.plannerSignals?.momentumValue ?? 0;
   const softPenalty = task.plannerFields.pressureLevel === "soft" ? -8 : 0;
-  return task.priority * 4 + task.importance * 3 + task.urgency * 4 + dueBoost + strictnessBoost + relationshipBoost + momentumBoost + softPenalty;
+  const vaguePenalty = recentEventsForTask(state, task.id)
+    .filter((event) => event.reason === "too_vague" || (event.type === "partially_completed" && !task.definitionOfDone))
+    .length * -45;
+  const notImportantPenalty = recentEventsForTask(state, task.id).filter((event) => event.reason === "not_important").length * -25;
+  const lowEnergySignals =
+    state.deferrals.filter((entry) => entry.reason === "low_energy").slice(-3).length +
+    (state.dailyReviews ?? []).filter((review) => review.affectPlanning && review.energy === "low").slice(-3).length;
+  const highEnergyPenalty = task.energy === "high" && lowEnergySignals >= 2 ? -12 : 0;
+  return (
+    task.priority * 4 +
+    task.importance * 3 +
+    task.urgency * 4 +
+    dueBoost +
+    strictnessBoost +
+    relationshipBoost +
+    momentumBoost +
+    softPenalty +
+    vaguePenalty +
+    notImportantPenalty +
+    highEnergyPenalty
+  );
 }
 
 function calculateCapacity(state: AppState): number {
@@ -58,10 +78,20 @@ function calculateCapacity(state: AppState): number {
   const overloadSignals = recentDeferrals.filter((entry) =>
     ["no_time", "overplanned", "low_energy"].includes(entry.reason)
   ).length;
+  const reviewAdjustment = Math.max(
+    -120,
+    Math.min(
+      45,
+      (state.dailyReviews ?? [])
+        .filter((review) => review.affectPlanning && review.date <= state.currentDate)
+        .slice(-5)
+        .reduce((sum, review) => sum + review.capacityAdjustmentMinutes, 0)
+    )
+  );
 
-  if (overloadSignals >= 3) return Math.max(90, clockAwareAvailable - 90);
-  if (overloadSignals >= 2) return Math.max(120, clockAwareAvailable - 60);
-  return clockAwareAvailable;
+  if (overloadSignals >= 3) return Math.max(90, clockAwareAvailable - 90 + reviewAdjustment);
+  if (overloadSignals >= 2) return Math.max(120, clockAwareAvailable - 60 + reviewAdjustment);
+  return Math.max(90, clockAwareAvailable + reviewAdjustment);
 }
 
 function loadLevel(total: number, available: number): LoadLevel {
@@ -101,7 +131,7 @@ export function buildDayPlan(state: AppState): DayPlan {
   const activeTasks = state.tasks.filter((task) => isTaskPlannable(task, date));
   const projectTasks = activeTasks
     .filter((task) => task.projectId && shouldAppearInProjectBlock(state, task))
-    .sort((a, b) => taskScore(b, date) - taskScore(a, date));
+    .sort((a, b) => taskScore(state, b, date) - taskScore(state, a, date));
 
   const tasksByProject = new Map<string, Task[]>();
   for (const task of projectTasks) {
@@ -120,7 +150,7 @@ export function buildDayPlan(state: AppState): DayPlan {
       todayCompletedTaskIdsByPlan.get(`plan_${date}_${project.id}`) ?? []
     ).filter((taskId) => isValidProjectBlockTask(state, project.id, taskId));
     const selectedTasks = state.tasks.filter((task) => selectedTaskIds.includes(task.id));
-    const minutes = Math.min(project.defaultBlockMinutes, selectedTasks.reduce((sum, task) => sum + task.effortMinutes, 0));
+    const minutes = Math.min(project.defaultBlockMinutes, selectedTasks.reduce((sum, task) => sum + effectiveEffortMinutes(state, task), 0));
     items.push({
       id: `plan_${date}_${project.id}`,
       type: "project_block",
@@ -160,17 +190,18 @@ export function buildDayPlan(state: AppState): DayPlan {
 
   const atomicTasks = activeTasks
     .filter((task) => !task.projectId || !shouldAppearInProjectBlock(state, task))
-    .sort((a, b) => taskScore(b, date) - taskScore(a, date));
+    .sort((a, b) => taskScore(state, b, date) - taskScore(state, a, date));
 
   for (const task of mergeTasks(atomicTasks, settledAtomicTasksForToday(state, date))) {
     const isRepeatingTask = task.repeatPolicy.type !== "none" && task.completionBehavior !== "keep_as_suggestion";
     const section = isRepeatingTask
       ? "routines"
-      : task.completionBehavior === "keep_as_suggestion" || task.strictness === "flexible" || taskScore(task, date) < 25
+      : task.completionBehavior === "keep_as_suggestion" || task.strictness === "flexible" || taskScore(state, task, date) < 25
         ? "soft_invitations"
         : "quick_tasks";
     const fixedStartTime = task.scheduledDate === date ? task.scheduledTime : undefined;
     const hardAnchor = fixedStartTime ? task.strictness === "strict" || /sleep|bed/i.test(task.title) : false;
+    const calibratedEffortMinutes = effectiveEffortMinutes(state, task);
     const baseCandidate: PlanCandidate = {
       id: `plan_${date}_${task.id}`,
       type: isRepeatingTask ? "routine" : section === "soft_invitations" ? "soft_invitation" : "atomic_task",
@@ -179,9 +210,9 @@ export function buildDayPlan(state: AppState): DayPlan {
       status: "planned",
       domainId: task.domainId,
       taskId: task.id,
-      estimatedMinutes: task.effortMinutes,
-      clockMinutes: task.effortMinutes,
-      blockingMinutes: blockingMinutesForTask(task),
+      estimatedMinutes: calibratedEffortMinutes,
+      clockMinutes: calibratedEffortMinutes,
+      blockingMinutes: blockingMinutesForTask(task, calibratedEffortMinutes),
       schedulingMode: task.scheduling?.mode ?? "exclusive",
       attentionLoad: task.scheduling?.attentionLoad ?? "full",
       canOverlap: task.scheduling?.canOverlap ?? false,
@@ -293,6 +324,30 @@ function mergeTasks(primary: Task[], secondary: Task[]): Task[] {
 
 function mergeTaskIds(primary: string[], secondary: string[]): string[] {
   return [...primary, ...secondary].filter((taskId, index, all) => all.indexOf(taskId) === index);
+}
+
+function recentEventsForTask(state: AppState, taskId: string): ExecutionEvent[] {
+  return state.executionEvents
+    .filter((event) => event.taskId === taskId || event.taskIds?.includes(taskId))
+    .slice(-5);
+}
+
+function effectiveEffortMinutes(state: AppState, task: Task): number {
+  const actuals = state.completions
+    .filter(
+      (event) =>
+        typeof event.actualMinutes === "number" &&
+        event.actualMinutes > 0 &&
+        (event.taskIds?.includes(task.id) || event.planItemId === `plan_${event.date}_${task.id}`)
+    )
+    .slice(-3)
+    .map((event) => event.actualMinutes as number);
+  if (!actuals.length) return task.effortMinutes;
+  const averageActual = actuals.reduce((sum, value) => sum + value, 0) / actuals.length;
+  if (averageActual > task.effortMinutes * 1.2 || averageActual < task.effortMinutes * 0.8) {
+    return Math.max(task.minMinutes ?? 5, Math.min(task.maxMinutes ?? 480, Math.round(averageActual)));
+  }
+  return task.effortMinutes;
 }
 
 function isItemCompleted(
@@ -459,11 +514,11 @@ function sortTime(time: string): number {
   return timeToMinutes(time);
 }
 
-function blockingMinutesForTask(task: Task): number {
-  if (!task.scheduling) return task.effortMinutes;
+function blockingMinutesForTask(task: Task, calibratedEffortMinutes = task.effortMinutes): number {
+  if (!task.scheduling) return calibratedEffortMinutes;
   if (task.scheduling.attentionLoad === "passive") return 0;
-  if (task.scheduling.attentionLoad === "partial") return Math.max(5, Math.round(task.effortMinutes * 0.45));
-  return task.effortMinutes;
+  if (task.scheduling.attentionLoad === "partial") return Math.max(5, Math.round(calibratedEffortMinutes * 0.45));
+  return calibratedEffortMinutes;
 }
 
 function expandPhasedTaskCandidate(base: PlanCandidate, task: Task): PlanCandidate[] {

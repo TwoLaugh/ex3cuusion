@@ -31,6 +31,118 @@ describe("buildDayPlan", () => {
     expect(plan.availableMinutes).toBe(210);
   });
 
+  it("uses daily review calibration to reduce future capacity", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-02";
+    state.currentTime = "08:30";
+    state.dailyReviews.push({
+      id: "review_low_energy",
+      date: "2026-06-01",
+      createdAt: "2026-06-01T22:00:00.000Z",
+      energy: "low",
+      planFit: "overplanned",
+      affectPlanning: true,
+      capacityAdjustmentMinutes: -75,
+      completedCount: 1,
+      partialCount: 1,
+      deferredCount: 2,
+      blockedCount: 0,
+      skippedCount: 0,
+      calibrationSignals: ["review marked the day as overplanned", "review marked low energy"]
+    });
+
+    const plan = buildDayPlan(state);
+
+    expect(plan.availableMinutes).toBe(225);
+  });
+
+  it("penalizes vague tasks after review-worthy partial progress", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+    state.projects = [];
+    state.routines = [];
+    state.tasks = [
+      {
+        ...state.tasks[0],
+        id: "task_vague",
+        title: "Fix product stuff",
+        projectId: undefined,
+        type: "atomic",
+        priority: 10,
+        importance: 10,
+        urgency: 10,
+        dueDate: "2026-06-01",
+        definitionOfDone: undefined
+      },
+      {
+        ...state.tasks[0],
+        id: "task_specific",
+        title: "Ship password reset regression test",
+        projectId: undefined,
+        type: "atomic",
+        priority: 7,
+        importance: 7,
+        urgency: 7,
+        dueDate: "2026-06-03",
+        definitionOfDone: "Regression test passes."
+      }
+    ];
+    state.executionEvents.push({
+      id: "event_vague",
+      date: "2026-05-31",
+      createdAt: "2026-05-31T17:00:00.000Z",
+      type: "partially_completed",
+      taskId: "task_vague",
+      planItemId: "plan_2026-05-31_task_vague",
+      reason: "too_vague",
+      note: "Couldn't tell what done meant."
+    }, {
+      id: "event_vague_again",
+      date: "2026-05-31",
+      createdAt: "2026-05-31T18:00:00.000Z",
+      type: "partially_completed",
+      taskId: "task_vague",
+      planItemId: "plan_2026-05-31_task_vague",
+      reason: "too_vague",
+      note: "Still too broad."
+    });
+
+    const plan = buildDayPlan(state);
+
+    expect(plan.items[0]?.title).toBe("Ship password reset regression test");
+  });
+
+  it("calibrates future estimates from actual completion time", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-02";
+    state.currentTime = "08:30";
+    state.projects = [];
+    state.routines = [];
+    state.tasks = [
+      {
+        ...state.tasks[2],
+        id: "task_daily_walk",
+        title: "Daily walk",
+        status: "active",
+        repeatPolicy: { type: "daily", carryover: "skip" },
+        completionBehavior: "repeatable",
+        effortMinutes: 20
+      }
+    ];
+    state.completions.push({
+      id: "completion_walk",
+      date: "2026-06-01",
+      planItemId: "plan_2026-06-01_task_daily_walk",
+      taskIds: ["task_daily_walk"],
+      actualMinutes: 45
+    });
+
+    const plan = buildDayPlan(state);
+
+    expect(plan.items.find((item) => item.title === "Daily walk")?.estimatedMinutes).toBe(45);
+  });
+
   it("uses the clock to avoid pretending a full workday remains at night", () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";

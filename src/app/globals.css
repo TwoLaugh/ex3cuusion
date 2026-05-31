@@ -60,7 +60,7 @@ button {
   align-items: center;
   display: grid;
   gap: 18px;
-  grid-template-columns: auto minmax(240px, 1fr) auto;
+  grid-template-columns: auto minmax(240px, 1fr) auto auto;
   margin: 0 auto;
   max-width: 1180px;
 }
@@ -633,6 +633,7 @@ h1 {
 
 .inboxPanel,
 .notDonePanel,
+.reviewPanel,
 .drawer {
   background: var(--panel);
   border: 1px solid var(--line-strong);
@@ -700,6 +701,19 @@ h1 {
   font-size: 0.78rem;
   font-weight: 700;
   text-transform: capitalize;
+}
+
+.reviewButton {
+  align-items: center;
+  background: rgba(139, 184, 255, 0.1);
+  border: 1px solid rgba(139, 184, 255, 0.2);
+  border-radius: 999px;
+  color: #c9dcff;
+  display: inline-flex;
+  font-weight: 800;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 13px;
 }
 
 .panelList {
@@ -935,13 +949,22 @@ h1 {
   width: min(440px, 100%);
 }
 
+.reviewPanel {
+  max-height: min(760px, 92vh);
+  max-width: 520px;
+  overflow: auto;
+  width: min(520px, 100%);
+}
+
 .inboxPanel h2,
 .notDonePanel h2,
+.reviewPanel h2,
 .drawer h2 {
   font-size: 1.45rem;
 }
 
-.notDonePanel select {
+.notDonePanel select,
+.reviewPanel select {
   background: var(--bg-soft);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -953,6 +976,74 @@ h1 {
 
 .notDonePanel textarea {
   margin-top: 12px;
+}
+
+.reviewStats,
+.reviewSignals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 12px 0;
+}
+
+.reviewStats span,
+.reviewSignals span {
+  background: rgba(107, 214, 184, 0.09);
+  border: 1px solid rgba(107, 214, 184, 0.2);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.reviewSignals span {
+  background: rgba(139, 184, 255, 0.09);
+  border-color: rgba(139, 184, 255, 0.2);
+  color: #c9dcff;
+}
+
+.reviewList {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.reviewList h3 {
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+
+.reviewList p {
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.reviewForm {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.reviewForm label {
+  color: var(--muted);
+  display: grid;
+  font-size: 0.82rem;
+  font-weight: 800;
+  gap: 5px;
+}
+
+.reviewCheckbox {
+  align-items: center;
+  display: flex !important;
+  gap: 8px !important;
+}
+
+.reviewCheckbox input {
+  accent-color: var(--accent);
+}
+
+.reviewForm textarea {
+  min-height: 96px;
 }
 
 textarea {
@@ -1258,7 +1349,7 @@ textarea {
   }
 
   .topbar {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto 1fr auto;
     gap: 12px;
   }
 
@@ -1278,8 +1369,13 @@ textarea {
   }
 
   .loadBadge {
-    grid-column: 1 / -1;
+    grid-column: 1 / 3;
     justify-self: start;
+  }
+
+  .reviewButton {
+    grid-column: 3;
+    justify-self: end;
   }
 
   .calendarScroll {

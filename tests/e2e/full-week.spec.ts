@@ -27,6 +27,16 @@ test("realistic full-week execution loop with time changes", async ({ page, requ
   await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Not done" }).click();
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("plan-item-Diet App")).toHaveClass(/deferred/);
+  await page.getByRole("button", { name: "Review day" }).click();
+  await expect(page.getByRole("dialog", { name: "Daily review" })).toBeVisible();
+  await expect(page.getByText("1 done")).toBeVisible();
+  await expect(page.getByText("1 deferred")).toBeVisible();
+  await page.getByLabel("Review energy").selectOption("low");
+  await page.getByLabel("Review plan fit").selectOption("overplanned");
+  await page.getByLabel("Review note").fill("Too much hard-focus product work today.");
+  await page.getByRole("button", { name: "Save review" }).click();
+  let debug = await (await request.get("/api/debug")).json();
+  expect(debug.dailyReviews[0]).toMatchObject({ energy: "low", planFit: "overplanned" });
 
   await page.getByRole("button", { name: "Next day" }).click();
   await expect(page.getByRole("heading", { name: /tuesday/i })).toBeVisible();
@@ -48,7 +58,7 @@ test("realistic full-week execution loop with time changes", async ({ page, requ
 
   await page.getByRole("button", { name: "Next day" }).click();
   await expect(page.getByRole("heading", { name: /thursday/i })).toBeVisible();
-  await expect(page.getByTestId("load-level")).toContainText(/240m|210m/);
+  await expect(page.getByTestId("load-level")).toContainText(/135m|165m|210m/);
   await page.getByTestId("plan-item-Back rehab").getByRole("button", { name: "Complete Back rehab" }).click();
   await page.getByTestId("plan-item-Diet App").getByRole("button", { name: "Open" }).click();
   await expect(page.getByRole("dialog", { name: /diet app project drawer/i })).toBeVisible();
@@ -59,7 +69,7 @@ test("realistic full-week execution loop with time changes", async ({ page, requ
   await page.getByRole("button", { name: "Add Finish auth bug to block" }).click();
   await page.getByRole("button", { name: "Complete Finish auth bug" }).click();
   await expect(page.getByRole("button", { name: "Undo complete Finish auth bug" })).toBeVisible();
-  let debug = await (await request.get("/api/debug")).json();
+  debug = await (await request.get("/api/debug")).json();
   expect(debug.tasks.find((task: { id: string; status: string }) => task.id === "task_auth_bug")?.status).toBe("completed");
   await page.getByRole("button", { name: "Undo complete Finish auth bug" }).click();
   debug = await (await request.get("/api/debug")).json();

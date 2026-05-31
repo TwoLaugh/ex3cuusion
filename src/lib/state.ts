@@ -11,6 +11,8 @@ import type {
   CaptureSession,
   ClarificationKind,
   ClarificationQuestion,
+  DailyReviewEnergy,
+  DailyReviewPlanFit,
   DeferralReason,
   ExecutionEvent,
   ExecutionEventType,
@@ -32,6 +34,30 @@ export type StructureMutation =
   | { entity: "routine"; action: "archive"; id: string };
 
 export type ProjectBlockSelectionAction = "add" | "remove" | "regenerate";
+
+export interface DailyReviewSummary {
+  date: string;
+  completedCount: number;
+  partialCount: number;
+  deferredCount: number;
+  blockedCount: number;
+  skippedCount: number;
+  completedTitles: string[];
+  partialTitles: string[];
+  deferredTitles: string[];
+  blockedTitles: string[];
+  skippedTitles: string[];
+  calibrationSignals: string[];
+  existingReview?: AppState["dailyReviews"][number];
+}
+
+export interface DailyReviewInput {
+  date?: string;
+  energy: DailyReviewEnergy;
+  planFit: DailyReviewPlanFit;
+  note?: string;
+  affectPlanning?: boolean;
+}
 
 function currentState(): AppState {
   return getRepository().read();
@@ -273,6 +299,41 @@ export function retreatDay(): AppState {
   const state = currentState();
   state.currentDate = addDays(state.currentDate, -1);
   state.currentTime = "08:30";
+  return getState();
+}
+
+export function dailyReviewSummary(date?: string): DailyReviewSummary {
+  return buildDailyReviewSummary(currentState(), date);
+}
+
+export function submitDailyReview(input: DailyReviewInput): AppState {
+  const state = currentState();
+  const date = input.date ?? state.currentDate;
+  const summary = buildDailyReviewSummary(state, date);
+  const affectPlanning = input.affectPlanning ?? true;
+  const capacityAdjustmentMinutes = affectPlanning ? dailyReviewCapacityAdjustment(input.energy, input.planFit, summary) : 0;
+  const review = {
+    id: state.dailyReviews.find((entry) => entry.date === date)?.id ?? nextId("review"),
+    date,
+    createdAt: timestampForState(state),
+    energy: input.energy,
+    planFit: input.planFit,
+    note: cleanText(input.note).slice(0, 280) || undefined,
+    affectPlanning,
+    capacityAdjustmentMinutes,
+    completedCount: summary.completedCount,
+    partialCount: summary.partialCount,
+    deferredCount: summary.deferredCount,
+    blockedCount: summary.blockedCount,
+    skippedCount: summary.skippedCount,
+    calibrationSignals: reviewCalibrationSignals(input.energy, input.planFit, summary)
+  };
+
+  state.dailyReviews = [
+    ...state.dailyReviews.filter((entry) => entry.date !== date),
+    review
+  ].sort((a, b) => a.date.localeCompare(b.date));
+
   return getState();
 }
 
@@ -1371,6 +1432,97 @@ function taskActionPatch(task: Task): Record<string, unknown> {
 
 function timestampForState(state: AppState): string {
   return new Date(`${state.currentDate}T${state.currentTime}:00.000Z`).toISOString();
+}
+
+function buildDailyReviewSummary(state: AppState, date = state.currentDate): DailyReviewSummary {
+  const events = state.executionEvents.filter((event) => event.date === date);
+  const completions = state.completions.filter((event) => event.date === date);
+  const completedPlanIds = new Set(
+    [...events.filter((event) => event.type === "completed").map((event) => event.planItemId), ...completions.map((event) => event.planItemId)].filter(
+      (planItemId): planItemId is string => Boolean(planItemId)
+    )
+  );
+  const partialEvents = events.filter((event) => event.type === "worked_on" || event.type === "partially_completed");
+  const deferredEvents = events.filter((event) => event.type === "deferred");
+  const blockedEvents = events.filter((event) => event.type === "blocked" || event.type === "waiting_on");
+  const skippedEvents = events.filter((event) => ["skipped", "canceled", "marked_not_important"].includes(event.type));
+  const deferrals = state.deferrals.filter((event) => event.date === date);
+  const deferredPlanIds = new Set(
+    [...deferredEvents.map((event) => event.planItemId), ...deferrals.map((event) => event.planItemId)].filter((planItemId): planItemId is string =>
+      Boolean(planItemId)
+    )
+  );
+
+  const completedTitles = [...completedPlanIds].map((planItemId) => planTitleFromId(state, date, planItemId));
+  const partialTitles = partialEvents.map((event) => eventTitle(state, date, event));
+  const deferredTitles = [...deferredPlanIds].map((planItemId) => planTitleFromId(state, date, planItemId));
+  const blockedTitles = blockedEvents.map((event) => eventTitle(state, date, event));
+  const skippedTitles = skippedEvents.map((event) => eventTitle(state, date, event));
+
+  return {
+    date,
+    completedCount: completedPlanIds.size,
+    partialCount: partialEvents.length,
+    deferredCount: deferredPlanIds.size,
+    blockedCount: blockedEvents.length,
+    skippedCount: skippedEvents.length,
+    completedTitles,
+    partialTitles,
+    deferredTitles,
+    blockedTitles,
+    skippedTitles,
+    calibrationSignals: summaryCalibrationSignals(deferrals, events),
+    existingReview: state.dailyReviews.find((review) => review.date === date)
+  };
+}
+
+function summaryCalibrationSignals(deferrals: AppState["deferrals"], events: ExecutionEvent[]): string[] {
+  const signals: string[] = [];
+  const overloadCount = deferrals.filter((entry) => ["no_time", "overplanned"].includes(entry.reason)).length;
+  const lowEnergyCount = deferrals.filter((entry) => entry.reason === "low_energy").length;
+  const vagueCount = events.filter((event) => event.reason === "too_vague").length;
+  const blockedCount = events.filter((event) => event.type === "blocked" || event.type === "waiting_on").length;
+  if (overloadCount) signals.push(`${overloadCount} time/load deferral${overloadCount === 1 ? "" : "s"}`);
+  if (lowEnergyCount) signals.push(`${lowEnergyCount} low-energy deferral${lowEnergyCount === 1 ? "" : "s"}`);
+  if (vagueCount) signals.push(`${vagueCount} vague item${vagueCount === 1 ? "" : "s"} need sharper next actions`);
+  if (blockedCount) signals.push(`${blockedCount} blocked/waiting item${blockedCount === 1 ? "" : "s"} should be pruned or converted to unblock actions`);
+  return signals;
+}
+
+function reviewCalibrationSignals(energy: DailyReviewEnergy, planFit: DailyReviewPlanFit, summary: DailyReviewSummary): string[] {
+  const signals = [...summary.calibrationSignals];
+  if (planFit === "overplanned") signals.push("review marked the day as overplanned");
+  if (planFit === "underfilled") signals.push("review marked the day as underfilled");
+  if (energy === "low") signals.push("review marked low energy");
+  return signals.filter((signal, index, all) => all.indexOf(signal) === index);
+}
+
+function dailyReviewCapacityAdjustment(energy: DailyReviewEnergy, planFit: DailyReviewPlanFit, summary: DailyReviewSummary): number {
+  let adjustment = 0;
+  if (planFit === "overplanned") adjustment -= 45;
+  if (planFit === "underfilled") adjustment += 15;
+  if (energy === "low") adjustment -= 30;
+  if (energy === "high" && planFit === "realistic") adjustment += 10;
+  if (summary.deferredCount >= 3) adjustment -= 20;
+  if (summary.partialCount >= 2) adjustment -= 10;
+  return Math.max(-90, Math.min(25, adjustment));
+}
+
+function eventTitle(state: AppState, date: string, event: ExecutionEvent): string {
+  if (event.taskId) return state.tasks.find((task) => task.id === event.taskId)?.title ?? event.taskId;
+  if (event.taskIds?.[0]) return state.tasks.find((task) => task.id === event.taskIds?.[0])?.title ?? event.taskIds[0];
+  return event.planItemId ? planTitleFromId(state, date, event.planItemId) : "Untitled item";
+}
+
+function planTitleFromId(state: AppState, date: string, planItemId: string): string {
+  const prefix = `plan_${date}_`;
+  const entityId = planItemId.startsWith(prefix) ? planItemId.slice(prefix.length).replace(/_phase_\d+$/, "") : planItemId;
+  return (
+    state.tasks.find((task) => task.id === entityId)?.title ??
+    state.projects.find((project) => project.id === entityId)?.name ??
+    state.routines.find((routine) => routine.id === entityId)?.title ??
+    planItemId
+  );
 }
 
 function taskIdsCompletedByPlanItem(item: ReturnType<typeof buildDayPlan>["items"][number], requestedTaskIds?: string[]) {

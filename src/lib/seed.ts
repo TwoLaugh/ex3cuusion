@@ -166,6 +166,7 @@ export function createSeedState(): AppState {
     completions: [],
     executionEvents: [],
     projectBlockSelections: [],
+    dailyReviews: [],
     inbox: [],
     captureSessions: []
   };

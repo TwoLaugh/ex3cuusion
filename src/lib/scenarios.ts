@@ -242,6 +242,7 @@ export function createRealisticCharacterState(): AppState {
     completions: [],
     executionEvents: [],
     projectBlockSelections: [],
+    dailyReviews: [],
     inbox: [],
     captureSessions: []
   };
