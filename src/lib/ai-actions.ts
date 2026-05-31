@@ -42,26 +42,7 @@ const aiActionSchema = z.object({
 
 type ParsedAiResponse = z.infer<typeof aiActionSchema>;
 type ParsedAiAction = ParsedAiResponse["actions"][number];
-type InterpretationMode = "default" | "day_rewrite";
-export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAiResponse & { model?: string; interpretationMode?: InterpretationMode; debugTrace?: AiDebugTrace }>;
-
-const dayRewriteSchema = z.object({
-  summary: z.string(),
-  changePlan: z.array(z.string()),
-  question: z.string().nullable(),
-  revisedDay: z.array(
-    z.object({
-      taskId: z.string().nullable(),
-      title: z.string(),
-      startTime: z.string().nullable(),
-      effortMinutes: z.number().int().min(5).max(480),
-      note: z.string().nullable()
-    })
-  ),
-  archivedTaskIds: z.array(z.string())
-});
-
-type DayRewrite = z.infer<typeof dayRewriteSchema>;
+export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }>;
 
 const captureRevisionSchema = z.object({
   summary: z.string(),
@@ -110,9 +91,7 @@ export async function interpretInboxInput(
 ): Promise<InboxEntry> {
   const entryId = nextId("inbox");
   const parsed = await interpreter(input, state);
-  const actions = parsed.actions.map((action) =>
-    buildAction(action, state, entryId, parsed.model, input, parsed.interpretationMode === "day_rewrite" ? "minimal" : "semantic")
-  );
+  const actions = parsed.actions.map((action) => buildAction(action, state, entryId, parsed.model, input));
 
   return {
     id: entryId,
@@ -151,60 +130,10 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
     maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 1)
   });
 
-  const dayRewrite = await defaultDayRewriteInterpreter(input, state, openai, model);
-  if (dayRewrite.actions.length > 0) return dayRewrite;
-
-  const actionResponse = await defaultActionInterpreter(input, state, openai, model);
-  return {
-    ...actionResponse,
-    debugTrace: mergeDebugTraces(dayRewrite.debugTrace, actionResponse.debugTrace)
-  };
-}
-
-async function defaultDayRewriteInterpreter(
-  input: string,
-  state: AppState,
-  openai: OpenAI,
-  model: string
-): Promise<ParsedAiResponse & { model?: string; interpretationMode: "day_rewrite"; debugTrace?: AiDebugTrace }> {
-  const instructions =
-    "You rewrite a single day's task schedule for a personal execution planner. " +
-    "You will receive only a simple current-day list: task IDs, titles, start times, and effort minutes, plus the user's request. " +
-    "First, silently inspect the request and the current day together. Decide what the user is really asking for, which existing tasks are affected, what should stay unchanged, and what should be added, moved, or removed. " +
-    "Then output the structured JSON. Include a concise changePlan list summarizing the intended edits, but do not include hidden reasoning or long chain-of-thought. " +
-    "Return the revised day list in the same simple form. Copy unchanged tasks exactly, including taskId. " +
-    "If the user asks to move or correct a time, keep the same taskId and change only startTime. " +
-    "If the user asks to remove, delete, cancel, archive, get rid of, or dedupe an existing task, put its taskId in archivedTaskIds and omit it from revisedDay. " +
-    "If the user asks to add a new task for today, include it in revisedDay with taskId null. " +
-    "Do not invent task IDs. Do not archive anything unless the user clearly asked for removal or dedupe. " +
-    "If the request cannot be represented as a same-day schedule edit or add/remove, leave revisedDay unchanged and use question only if one useful question is needed. " +
-    "Use HH:mm 24-hour startTime values, or null when the task should remain untimed. Output only the structured JSON.";
-  const modelInput =
-    `Current date: ${state.currentDate}\n` +
-    `User request: ${input}\n\n` +
-    `Current day JSON:\n${JSON.stringify(buildSimpleDayForModel(state), null, 2)}`;
-  const response = await openai.responses.parse({
-    model,
-    instructions,
-    input: [
-      {
-        role: "user",
-        content: modelInput
-      }
-    ],
-    text: {
-      format: zodTextFormat(dayRewriteSchema, "execution_day_rewrite")
-    }
-  });
-
-  if (!response.output_parsed) {
-    throw new Error("OpenAI response did not match the expected day rewrite schema");
-  }
-
-  return {
-    ...buildParsedActionsFromDayRewrite(response.output_parsed, state, `${model}:day-rewrite`),
-    debugTrace: debugTraceForCall("Day rewrite", model, instructions, modelInput, responseText(response), response.output_parsed)
-  };
+  // Single full-context interpreter. The model owns interpretation; deterministic
+  // code downstream only enforces well-formedness, validation, and safety. Do not
+  // reintroduce a second competing interpreter that races/shadows this one.
+  return defaultActionInterpreter(input, state, openai, model);
 }
 
 async function defaultActionInterpreter(input: string, state: AppState, openai: OpenAI, model: string): Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }> {
@@ -353,151 +282,6 @@ function buildInboxModelContext(state: AppState) {
       revisionEvents: session.revisionEvents.slice(-6)
     }))
   };
-}
-
-function buildSimpleDayForModel(state: AppState) {
-  const plan = buildDayPlan(state);
-  const taskRows = new Map<string, { taskId: string; title: string; startTime: string | null; endTime: string | null; effortMinutes: number }>();
-
-  for (const item of plan.items) {
-    const taskIds = [item.taskId, ...(item.selectedTaskIds ?? [])].filter((taskId): taskId is string => Boolean(taskId));
-    for (const taskId of taskIds) {
-      const task = state.tasks.find((candidate) => candidate.id === taskId);
-      if (!task || task.status === "archived") continue;
-      taskRows.set(task.id, {
-        taskId: task.id,
-        title: task.title,
-        startTime: task.scheduledTime ?? item.startTime ?? null,
-        endTime: item.endTime ?? null,
-        effortMinutes: task.effortMinutes
-      });
-    }
-  }
-
-  for (const task of state.tasks) {
-    if (task.status === "archived" || task.scheduledDate !== state.currentDate || taskRows.has(task.id)) continue;
-    taskRows.set(task.id, {
-      taskId: task.id,
-      title: task.title,
-      startTime: task.scheduledTime ?? null,
-      endTime: null,
-      effortMinutes: task.effortMinutes
-    });
-  }
-
-  return {
-    date: state.currentDate,
-    tasks: [...taskRows.values()].sort((left, right) => (left.startTime ?? "99:99").localeCompare(right.startTime ?? "99:99"))
-  };
-}
-
-export function buildParsedActionsFromDayRewrite(
-  rewrite: DayRewrite,
-  state: AppState,
-  model = "day-rewrite-fixture"
-): ParsedAiResponse & { model: string; interpretationMode: "day_rewrite" } {
-  const actions: ParsedAiAction[] = [];
-  const currentDayTaskIds = new Set(buildSimpleDayForModel(state).tasks.map((task) => task.taskId));
-  const archivedTaskIds = new Set(rewrite.archivedTaskIds);
-
-  for (const taskId of archivedTaskIds) {
-    const task = state.tasks.find((candidate) => candidate.id === taskId && candidate.status !== "archived");
-    if (!task) continue;
-    actions.push(
-      baseAction("archive_task", `Archive ${task.title}`, task.title, state, {
-        targetTaskId: task.id,
-        domainName: domainNameForTask(state, task),
-        projectName: projectNameForTask(state, task),
-        effortMinutes: task.effortMinutes,
-        energy: task.energy,
-        strictness: task.strictness,
-        priority: clampScore(task.priority),
-        importance: clampScore(task.importance),
-        urgency: clampScore(task.urgency),
-        completionBehavior: task.completionBehavior,
-        completionMode: task.completionMode ?? null,
-        tags: task.tags ?? null
-      })
-    );
-  }
-
-  for (const item of rewrite.revisedDay) {
-    const startTime = normalizeClockValue(item.startTime);
-    if (item.taskId) {
-      if (archivedTaskIds.has(item.taskId)) continue;
-      const task = state.tasks.find((candidate) => candidate.id === item.taskId && candidate.status !== "archived");
-      if (!task) continue;
-      const shouldSchedule = currentDayTaskIds.has(task.id) && startTime && (task.scheduledDate !== state.currentDate || task.scheduledTime !== startTime);
-      if (!shouldSchedule) continue;
-      actions.push(
-        baseAction("schedule_task", `Schedule ${task.title}`, task.title, state, {
-          targetTaskId: task.id,
-          domainName: domainNameForTask(state, task),
-          projectName: projectNameForTask(state, task),
-          scheduledDate: state.currentDate,
-          scheduledTime: startTime,
-          effortMinutes: task.effortMinutes,
-          energy: task.energy,
-          strictness: task.strictness,
-          priority: clampScore(task.priority),
-          importance: clampScore(task.importance),
-          urgency: clampScore(task.urgency),
-          completionBehavior: task.completionBehavior,
-          completionMode: task.completionMode ?? null,
-          tags: task.tags ?? null
-        })
-      );
-      continue;
-    }
-
-    if (!item.title.trim()) continue;
-    actions.push(
-      baseAction("create_task", `Add ${item.title.trim()}`, item.title.trim(), state, {
-        scheduledDate: state.currentDate,
-        scheduledTime: startTime,
-        effortMinutes: item.effortMinutes,
-        completionBehavior: "exhaust_once",
-        completionMode: "simple_done",
-        definitionOfDone: item.note,
-        tags: ["day_rewrite"]
-      })
-    );
-  }
-
-  if (rewrite.question?.trim()) {
-    actions.push(
-      baseAction("ask_clarification", "Clarify day change", "Clarify day change", state, {
-        question: rewrite.question.trim(),
-        clarificationKind: "next_action",
-        clarificationOptions: []
-      })
-    );
-  }
-
-  return {
-    model,
-    interpretationMode: "day_rewrite",
-    summary: rewrite.summary,
-    actions
-  };
-}
-
-function domainNameForTask(state: AppState, task: Task): string {
-  return state.domains.find((domain) => domain.id === task.domainId)?.name ?? findDomainName(state, /work/i);
-}
-
-function projectNameForTask(state: AppState, task: Task): string | null {
-  return state.projects.find((project) => project.id === task.projectId)?.name ?? null;
-}
-
-function clampScore(value: number): number {
-  return Math.max(1, Math.min(5, Math.round(value)));
-}
-
-function normalizeClockValue(value: string | null): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : null;
 }
 
 async function defaultRevisionInterpreter({
@@ -659,6 +443,10 @@ export async function fixtureRevisionInterpreter({
   return revision;
 }
 
+// DETERMINISTIC TEST DOUBLE — not production behavior. Its canned, phrase-keyed responses
+// exist only to exercise the state/apply/audit pipeline offline (unit tests + `eval:ai`
+// smoke). The live interpretation path (defaultInterpreter) must NOT mirror these phrases,
+// and the fixture must never be used as a model-quality signal. See AGENTS.md.
 export async function fixtureInterpreter(input: string, state: AppState): Promise<ParsedAiResponse & { model: string }> {
   const lower = input.toLowerCase();
   if (/stuff about the thing|vague house thing|maybe later/.test(lower)) {
@@ -1065,13 +853,12 @@ function buildAction(
   state: AppState,
   inboxItemId: string,
   model?: string,
-  sourceText = "",
-  normalization: "semantic" | "minimal" = "semantic"
+  sourceText = ""
 ): AiAction {
-  const action =
-    normalization === "minimal"
-      ? normalizeParsedActionShape(rawAction, state)
-      : applyClarificationPolicy(normalizeParsedAction(rawAction, state, sourceText), sourceText);
+  // The model decides intent (including whether to ask a clarification). Deterministic
+  // code only normalizes shape/dates and validates — it never rewrites the action type
+  // or overrides the model's clarification decision based on specific user phrases.
+  const action = normalizeParsedAction(rawAction, state, sourceText);
   const validationErrors = validateStructuredAction(action, state);
   const safety = classifyRisk(action, validationErrors);
   const domainId = findDomainId(state, action.domainName, "domain_work");
@@ -1139,58 +926,25 @@ function buildAction(
                       question: action.question ?? "What should this become?",
                       questionKind: action.clarificationKind ?? "next_action",
                       options: action.clarificationOptions ?? [],
-                      rationale: clarificationRationale(action, sourceText),
-                      materiality: clarificationMateriality(action, sourceText),
+                      rationale: clarificationRationale(action),
+                      materiality: clarificationMateriality(action),
                       draftActionType: "create_task",
                       draftAction: taskPayload(state, { ...action, type: "create_task" }, inboxItemId, projectId, sourceText)
                     }
   };
 }
 
-function applyClarificationPolicy(action: ParsedAiAction, sourceText: string): ParsedAiAction {
-  if (action.type !== "ask_clarification") return action;
-  if (isWorthAsking(action, sourceText)) return action;
-  const normalized = {
-    ...action,
-    type: "create_task" as const,
-    label: action.label.replace(/^Clarify/i, "Add") || `Add ${action.title}`,
-    question: null,
-    clarificationKind: null,
-    clarificationOptions: null,
-    completionBehavior: action.completionBehavior ?? "exhaust_once",
-    completionMode: action.completionMode ?? "simple_done",
-    definitionOfDone: action.definitionOfDone && !/\?|what counts|what should|include/i.test(action.definitionOfDone) ? action.definitionOfDone : null
-  };
-  if (/cut (my )?nails?|water plants|take bins out|buy milk|text|message|call/i.test(sourceText)) {
-    normalized.effortMinutes = Math.min(normalized.effortMinutes, 20);
-    normalized.energy = "low";
-    normalized.strictness = normalized.strictness === "flexible" ? "normal" : normalized.strictness;
-  }
-  return normalized;
-}
-
-function isWorthAsking(action: ParsedAiAction, sourceText: string): boolean {
+// Materiality/rationale are derived from the model's own clarificationKind and effort
+// estimate — never from matching specific user phrases. They are display metadata for a
+// clarification the model already decided to ask; they do not gate whether it is asked.
+function clarificationMateriality(action: ParsedAiAction): "low" | "medium" | "high" {
   const kind = action.clarificationKind ?? "next_action";
-  const text = `${sourceText} ${action.title} ${action.label}`.toLowerCase();
-  if (isObviousSimpleTask(text)) return false;
-  if (kind === "definition_of_done") return isBroadOutcomeWork(text);
-  if (kind === "completion_behavior") return /ideas?|suggestions?|things to do|activities|again|reusable|list/.test(text);
-  if (kind === "container_kind") return /category|project|area|list|bucket|for\s+\w+/.test(text);
-  if (kind === "repeat_policy") return /regular|routine|habit|every|daily|weekly|repeat/.test(text);
-  if (kind === "date") return /soon|later|sometime|whenever|this week|next week/.test(text) && /by|before|deadline|due|urgent/.test(text);
-  if (kind === "split") return isBroadOutcomeWork(text) || action.effortMinutes >= 90;
-  if (kind === "next_action") return /stuff|thing|sort|fix|organize|work on|deal with|life admin|backend|product/.test(text);
-  return false;
-}
-
-function clarificationMateriality(action: ParsedAiAction, sourceText: string): "low" | "medium" | "high" {
-  const text = `${sourceText} ${action.title}`.toLowerCase();
-  if (isBroadOutcomeWork(text) || action.effortMinutes >= 90) return "high";
-  if (/(ideas?|suggestions?|reusable|routine|every|daily|weekly)/.test(text)) return "medium";
+  if (kind === "definition_of_done" || kind === "split" || action.effortMinutes >= 90) return "high";
+  if (kind === "completion_behavior" || kind === "repeat_policy" || kind === "container_kind") return "medium";
   return "low";
 }
 
-function clarificationRationale(action: ParsedAiAction, sourceText: string): string {
+function clarificationRationale(action: ParsedAiAction): string {
   const kind = action.clarificationKind ?? "next_action";
   if (kind === "definition_of_done") return "The answer changes what completion means.";
   if (kind === "completion_behavior") return "The answer changes whether this is one-off, repeatable, or a reusable suggestion.";
@@ -1201,19 +955,12 @@ function clarificationRationale(action: ParsedAiAction, sourceText: string): str
   return "The answer changes the next concrete action.";
 }
 
-function isObviousSimpleTask(text: string): boolean {
-  return /cut (my )?nails?|water plants|take bins out|buy milk|wash cup|text \w+|message \w+|call \w+/.test(text) && !isBroadOutcomeWork(text);
-}
-
-function isBroadOutcomeWork(text: string): boolean {
-  return /clean (the )?(house|home)|sort|organize|fix|build|redesign|refactor|life admin|backend|product|garage|paperwork/.test(text);
-}
-
 function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceText = ""): ParsedAiAction {
+  // Structural normalization only: clean shapes, validate formats, and resolve relative
+  // date/time wording to concrete values. No branching on specific user phrases or task
+  // semantics — the model already decided the type, title, project, and clarification.
   const normalized = normalizeParsedActionShape(action, state);
   const actionSource = relevantSourceText(normalized, sourceText);
-  const combined = `${normalized.title} ${normalized.label} ${normalized.question ?? ""} ${actionSource}`.toLowerCase();
-  const definitionLooksLikeQuestion = Boolean(normalized.definitionOfDone && /\\?|what counts|what should|include/i.test(normalized.definitionOfDone));
 
   if (normalized.scheduledTime && !/^\d{2}:\d{2}$/.test(normalized.scheduledTime)) {
     normalized.scheduledTime = null;
@@ -1221,73 +968,6 @@ function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceTe
 
   applyRelativeDateHints(normalized, state, actionSource);
   clearInventedDateForBroadWeekWindow(normalized, actionSource);
-
-  if (normalized.type === "schedule_block" && /work on|diet app|product/.test(combined)) {
-    normalized.type = "create_task";
-    normalized.projectName ??= findProjectName(state, /diet app/i);
-    normalized.completionBehavior = "repeatable";
-    normalized.completionMode = "timebox";
-    normalized.definitionOfDone ??= "Spend the planned time making product progress.";
-    normalized.tags = mergeTags(normalized.tags, ["timebox", "product"]);
-  }
-
-  if (/sleep|bed/.test(combined)) {
-    normalized.type = "create_task";
-    normalized.title = "Sleep";
-    normalized.label = "Add sleep";
-    normalized.domainName = findDomainName(state, /health|recovery/i);
-    normalized.effortMinutes = Math.max(normalized.effortMinutes, 480);
-    normalized.energy = "low";
-    normalized.strictness = "strict";
-    normalized.priority = Math.max(normalized.priority, 5);
-    normalized.importance = Math.max(normalized.importance, 5);
-    normalized.urgency = Math.max(normalized.urgency, 5);
-    normalized.completionBehavior = "repeatable";
-    normalized.completionMode = "repeatable_checkoff";
-    if (/half 11|23:30/.test(combined)) {
-      normalized.scheduledDate ??= state.currentDate;
-      normalized.scheduledTime = "23:30";
-    }
-  }
-
-  if (/will/.test(combined) && /every friday|friday/.test(combined)) {
-    normalized.type = "create_routine";
-    normalized.title = "Message Will";
-    normalized.label = "Add Message Will Friday routine";
-    normalized.domainName = findDomainName(state, /social/i);
-    normalized.projectName = null;
-    normalized.recurrenceDays = [5];
-    normalized.effortMinutes = Math.min(normalized.effortMinutes, 15);
-    normalized.energy = "low";
-    normalized.strictness = "normal";
-  }
-
-  if (/clean (the )?(house|home)/.test(combined) && (normalized.type === "ask_clarification" || !normalized.definitionOfDone || definitionLooksLikeQuestion)) {
-    normalized.type = "ask_clarification";
-    normalized.title = "Clean house";
-    normalized.label = "Clarify clean house";
-    normalized.question = "What would count as enough cleaning for this task?";
-    normalized.clarificationKind = "definition_of_done";
-    normalized.clarificationOptions = ["Kitchen and bathroom", "One focused cleaning pass", "Split into rooms"];
-    normalized.completionBehavior = "exhaust_once";
-    normalized.completionMode = "progress_accumulating";
-    normalized.definitionOfDone = null;
-    normalized.tags = mergeTags(normalized.tags, ["home", "cleaning"]);
-  }
-
-  if (/emma/.test(combined) && /ideas?|things to do|activities/.test(combined)) {
-    normalized.type = "ask_clarification";
-    normalized.title = "Ideas for things to do with Emma";
-    normalized.label = "Clarify Emma ideas";
-    normalized.projectName ??= findProjectName(state, /emma/i);
-    normalized.question = "Should I keep this as a reusable Emma suggestion list?";
-    normalized.clarificationKind = "completion_behavior";
-    normalized.clarificationOptions = ["Reusable suggestion", "One-off task", "Dismiss"];
-    normalized.completionBehavior = "keep_as_suggestion";
-    normalized.completionMode = "suggestion_used";
-    normalized.strictness = "flexible";
-    normalized.tags = mergeTags(normalized.tags, ["relationship", "idea"]);
-  }
 
   return normalized;
 }
@@ -1385,61 +1065,11 @@ function deriveDateIntent(action: ParsedAiAction, state: AppState, sourceText: s
   return { kind: "none", originalText: sourceText || undefined, confidence: 0.35 };
 }
 
-function inferScheduling(action: ParsedAiAction, sourceText: string): SchedulingMetadata {
-  const text = `${action.title} ${action.label} ${sourceText} ${(action.tags ?? []).join(" ")}`.toLowerCase();
-  if (/laundry|washing|washer|dryer|hang.*dry|put.*away/.test(text)) {
-    return {
-      mode: "phased",
-      attentionLoad: "partial",
-      canOverlap: true,
-      overlapKinds: ["household", "passive_waiting"],
-      phases: [
-        {
-          id: "start",
-          title: "Start laundry",
-          kind: "active",
-          effortMinutes: 10,
-          attentionLoad: "partial",
-          canOverlap: false,
-          overlapKinds: ["household"]
-        },
-        {
-          id: "running",
-          title: "Laundry running",
-          kind: "passive",
-          effortMinutes: Math.max(45, Math.min(75, action.effortMinutes - 30)),
-          attentionLoad: "passive",
-          canOverlap: true,
-          overlapKinds: ["passive_waiting", "household"]
-        },
-        {
-          id: "finish",
-          title: "Hang or fold laundry",
-          kind: "return",
-          effortMinutes: 20,
-          attentionLoad: "partial",
-          canOverlap: false,
-          overlapKinds: ["household"]
-        }
-      ]
-    };
-  }
-  if (/ai.*run|ai_running|background.*ai|report draft|side.?work/.test(text)) {
-    return {
-      mode: "background",
-      attentionLoad: "passive",
-      canOverlap: true,
-      overlapKinds: ["ai_running", "computer", "passive_waiting"]
-    };
-  }
-  if (/cook|cooking|travel|commute|walk.*while|listen|audio|phone call/.test(text)) {
-    return {
-      mode: "concurrent",
-      attentionLoad: "partial",
-      canOverlap: true,
-      overlapKinds: /travel|commute/.test(text) ? ["travel", "phone", "audio"] : ["cooking", "audio", "phone"]
-    };
-  }
+function inferScheduling(): SchedulingMetadata {
+  // Default to an exclusive task. Overlap/phasing semantics (laundry phases, cook-while-X,
+  // background AI work) used to be guessed from keywords in the title — that was overfit to
+  // demo phrases. Reintroduce them as explicit model-owned schema fields if needed, not as
+  // keyword matching here.
   return {
     mode: "exclusive",
     attentionLoad: "full",
@@ -1546,7 +1176,7 @@ function taskPayload(
   const scheduledTime = action.scheduledTime && /^\d{2}:\d{2}$/.test(action.scheduledTime) ? action.scheduledTime : undefined;
   const relevantText = relevantSourceText(action, sourceText);
   const dateIntent = deriveDateIntent(action, state, relevantText);
-  const scheduling = inferScheduling(action, relevantText);
+  const scheduling = inferScheduling();
   return {
     title: action.title,
     type: projectId ? "project_task" : completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "atomic",
@@ -1559,12 +1189,11 @@ function taskPayload(
     completionMode,
     definitionOfDone: action.definitionOfDone ?? (projectId && completionMode === "outcome_done" ? `${action.title} is finished and verified.` : undefined),
     plannerFields: {
-      intentType: projectId ? "progress" : completionBehavior === "keep_as_suggestion" ? "idea" : inferIntentType(action.title),
+      intentType: projectId ? "progress" : completionBehavior === "keep_as_suggestion" ? "idea" : "obligation",
       pressureLevel: scheduledTime ? "scheduled" : dueDate ? "due" : action.strictness === "flexible" ? "soft" : "someday"
     },
     plannerSignals: {
-      cognitiveLoad: action.energy === "high" ? 7 : action.energy === "medium" ? 5 : 2,
-      relationshipValue: /will|emma|sam|leo/i.test(action.title) ? 5 : undefined
+      cognitiveLoad: action.energy === "high" ? 7 : action.energy === "medium" ? 5 : 2
     },
     tags: action.tags ?? [],
     fieldConfidence: {
@@ -1599,19 +1228,7 @@ function inferCompletionMode(action: ParsedAiAction, projectId: string | undefin
   if (action.completionMode) return action.completionMode;
   if (behavior === "keep_as_suggestion") return "suggestion_used";
   if (behavior === "repeatable") return "repeatable_checkoff";
-  if (/work on|spend|timebox/i.test(action.title)) return "timebox";
   return projectId ? "outcome_done" : "simple_done";
-}
-
-function inferIntentType(title: string): Task["plannerFields"]["intentType"] {
-  if (/message|call|text|sam|will|emma|leo/i.test(title)) return "relationship";
-  if (/clean|tidy|house|garage/i.test(title)) return "maintenance";
-  if (/nails|rehab|health/i.test(title)) return "health";
-  return "obligation";
-}
-
-function mergeTags(existing: string[] | null, additions: string[]): string[] {
-  return [...(existing ?? []), ...additions].filter((tag, index, all) => all.indexOf(tag) === index);
 }
 
 function findDomainName(state: AppState, pattern: RegExp): string {

@@ -417,7 +417,11 @@ async function runScenario(scenario) {
     }
   }
   const debug = await getDebug();
-  const failures = scenario.expects.flatMap((expectation) => expectation(debug));
+  // Fixture (non-live) mode is a SMOKE TEST only: it proves the inbox pipeline runs and
+  // applies/queues every action without error. It deliberately does NOT assert semantic
+  // outcomes, because the fixture's canned answers would just be grading themselves.
+  // Model-quality scenarios (scenario.expects) are asserted only against the live model.
+  const failures = live ? scenario.expects.flatMap((expectation) => expectation(debug)) : smokeFailures(debug);
   return {
     phase: scenario.phase,
     name: scenario.name,
@@ -615,7 +619,21 @@ function summarize(debug) {
   };
 }
 
+function smokeFailures(debug) {
+  const actions = (debug.inbox ?? []).flatMap((entry) => entry.actions ?? []);
+  const failed = actions.filter((action) => action.status === "failed");
+  if (failed.length) {
+    return [`Pipeline produced ${failed.length} failed action(s): ${failed.map((action) => `${action.type} (${action.skippedReason ?? "no reason"})`).join("; ")}`];
+  }
+  return [];
+}
+
 function printReport(results) {
+  console.log(
+    live
+      ? "\n=== AI evals: LIVE model quality run ==="
+      : "\n=== AI evals: FIXTURE SMOKE run (plumbing only — NOT a model-quality signal; run `npm run eval:ai:live` for quality) ==="
+  );
   const grouped = new Map();
   for (const result of results) {
     grouped.set(result.phase, [...(grouped.get(result.phase) ?? []), result]);

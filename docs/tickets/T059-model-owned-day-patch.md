@@ -1,10 +1,16 @@
 # T059: Simple Day-Rewrite Inbox
 
-Status: in progress.
+Status: superseded. The day-rewrite *insight* (model owns interpretation; deterministic code
+is validation/safety only) was kept; the day-rewrite *implementation* was removed. It ran a
+second, context-blind interpreter that raced and shadowed the full-context one, which caused
+bad inbox responses and duplicate tasks. There is now a single full-context interpreter
+(`defaultActionInterpreter`) and all phrase-specific deterministic handlers have been deleted.
+See `AGENTS.md` for the working agreement this enforces. Do not reintroduce a competing
+interpreter.
 
-## Goal
+## Goal (retained)
 
-Move current-day AI inbox edits away from brittle intent-specific deterministic handlers and toward a simple model-owned day rewrite.
+Move current-day AI inbox edits away from brittle intent-specific deterministic handlers and toward model-owned interpretation, with deterministic code limited to validation, formatting, and safety.
 
 ## Scope
 

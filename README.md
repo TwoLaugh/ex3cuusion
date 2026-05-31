@@ -100,13 +100,13 @@ npm run dev
 
 The V1 release gate is documented in `docs/release/v1-release-gate.md`.
 
-Fixture release checks:
+Structural / plumbing checks (no model — safe and free):
 
 ```bash
 npm run check:env
 npx tsc --noEmit
 npm run test
-npm run eval:ai
+npm run eval:ai      # FIXTURE SMOKE ONLY — proves the pipeline runs; not a quality signal
 npm run test:e2e
 npm run build
 ```
@@ -117,7 +117,10 @@ Or run the combined command:
 npm run release:check
 ```
 
-Live model evals are explicit because they use API credit:
+**AI quality is gated separately and is not covered by `release:check`.** `eval:ai` runs the
+deterministic fixture, so it can never tell you whether the *model* behaves well — it only
+proves the pipeline applies actions without error. Before shipping any change to AI behavior,
+run the live quality evals against the real model (these use API credit):
 
 ```bash
 npm run eval:ai:live
