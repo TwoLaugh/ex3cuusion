@@ -1,6 +1,6 @@
 # T054: Postgres AppState Repository
 
-Status: in progress. Snapshot repository and normalized write projection are implemented; normalized read-back is still pending.
+Status: implemented.
 
 ## Goal
 
@@ -26,5 +26,7 @@ Move the app from in-memory/file-backed state to a Postgres-backed repository wh
 - The first repository bridge stores full `AppState` snapshots in Postgres because current runtime IDs are stable product strings while the normalized schema uses UUID primary keys.
 - Runtime string IDs are projected into `external_id` columns on the normalized tables so the app can keep stable product IDs while Postgres owns UUID primary keys.
 - Current projection writes domains, containers, tasks, routines, execution events, inbox items, AI actions, capture sessions, messages, clarification questions, and revision events inside the same transaction as the snapshot.
+- `app_runtime_state` stores app-level date/time/capacity plus legacy deferral/completion arrays and entity ordering needed to reconstruct the current `AppState`.
+- Postgres reads now prefer normalized rows and fall back to the snapshot only when normalized runtime state is absent.
 - Normalized child rows are pruned when capture-session messages, questions, or revision events disappear from the current snapshot.
-- The next step for this ticket is normalized read-back, or an explicit decision that snapshots remain the runtime source of truth for V1 while relational tables serve analytics/admin/read-model surfaces.
+- The snapshot remains as a rollback/debug bridge, but it is no longer the primary read source when normalized projection is available.

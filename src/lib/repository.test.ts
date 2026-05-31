@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import pg from "pg";
+import { randomUUID } from "node:crypto";
 import { createSeedState } from "./seed";
 import { createPostgresSnapshotRepositoryForTests } from "./repository";
 
@@ -8,7 +9,9 @@ const describePostgres = process.env.DATABASE_URL ? describe : describe.skip;
 describePostgres("postgres snapshot repository", () => {
   it("resets, writes, and reads AppState through Postgres", async () => {
     const previousSnapshotId = process.env.EX3CUUSION_STATE_SNAPSHOT_ID;
+    const previousUserId = process.env.EX3CUUSION_LOCAL_USER_ID;
     process.env.EX3CUUSION_STATE_SNAPSHOT_ID = `test_${Date.now()}`;
+    process.env.EX3CUUSION_LOCAL_USER_ID = randomUUID();
     try {
       const repository = createPostgresSnapshotRepositoryForTests();
       const seed = repository.reset();
@@ -141,6 +144,30 @@ describePostgres("postgres snapshot repository", () => {
         );
         expect(childCounts.rows[0]).toMatchObject({ actions: 1, messages: 1, questions: 1, revisions: 1 });
 
+        await client.query("update app_state_snapshots set state_json = $1::jsonb where id = $2", [
+          JSON.stringify(createSeedState()),
+          process.env.EX3CUUSION_STATE_SNAPSHOT_ID
+        ]);
+        const readFromNormalizedRows = createPostgresSnapshotRepositoryForTests().read();
+        expect(readFromNormalizedRows.currentDate).toBe("2026-06-04");
+        expect(readFromNormalizedRows.tasks.find((task) => task.id === "task_postgres_roundtrip")).toMatchObject({
+          title: "Postgres roundtrip task",
+          domainId: "domain_product"
+        });
+        expect(readFromNormalizedRows.executionEvents[0]).toMatchObject({
+          id: "event_postgres_roundtrip",
+          taskId: "task_postgres_roundtrip",
+          actualMinutes: 20
+        });
+        expect(readFromNormalizedRows.inbox[0].actions[0]).toMatchObject({
+          id: "action_postgres_roundtrip",
+          pendingQuestionId: "question_postgres_roundtrip"
+        });
+        expect(readFromNormalizedRows.captureSessions[0].questions[0]).toMatchObject({
+          id: "question_postgres_roundtrip",
+          actionId: "action_postgres_roundtrip"
+        });
+
         readBack.captureSessions[0].messages = [];
         readBack.captureSessions[0].questions = [];
         readBack.captureSessions[0].revisionEvents = [];
@@ -162,6 +189,11 @@ describePostgres("postgres snapshot repository", () => {
         delete process.env.EX3CUUSION_STATE_SNAPSHOT_ID;
       } else {
         process.env.EX3CUUSION_STATE_SNAPSHOT_ID = previousSnapshotId;
+      }
+      if (previousUserId === undefined) {
+        delete process.env.EX3CUUSION_LOCAL_USER_ID;
+      } else {
+        process.env.EX3CUUSION_LOCAL_USER_ID = previousUserId;
       }
     }
   });

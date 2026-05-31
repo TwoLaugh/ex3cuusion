@@ -22,6 +22,13 @@ const client = new pg.Client({ connectionString: databaseUrl });
 try {
   await client.connect();
   if (command === "read") {
+    if (process.env.EX3CUUSION_READ_NORMALIZED_STATE !== "0") {
+      const projectedState = await readProjectedState(client);
+      if (projectedState) {
+        process.stdout.write(JSON.stringify(projectedState));
+        process.exit(0);
+      }
+    }
     const result = await client.query("select state_json from app_state_snapshots where id = $1", [snapshotId]);
     if (!result.rowCount) {
       process.stdout.write("");
@@ -55,7 +62,17 @@ try {
   }
 
   if (command === "delete") {
-    await client.query("delete from app_state_snapshots where id = $1", [snapshotId]);
+    await client.query("begin");
+    try {
+      await client.query("delete from app_state_snapshots where id = $1", [snapshotId]);
+      if (process.env.EX3CUUSION_PROJECT_NORMALIZED_STATE !== "0") {
+        await deleteProjectedState(client);
+      }
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
   }
 } finally {
   await client.end().catch(() => {});
@@ -74,14 +91,40 @@ function readStdin() {
 }
 
 async function projectState(client, state) {
-  const userId = process.env.EX3CUUSION_LOCAL_USER_ID ?? "00000000-0000-0000-0000-000000000001";
+  const userId = localUserId();
   await client.query(
     `
       insert into users (id, email, display_name, timezone)
-      values ($1, 'local@ex3cuusion.dev', 'Local User', 'Europe/London')
+      values ($1, $2, 'Local User', 'Europe/London')
       on conflict (id) do nothing
     `,
-    [userId]
+    [userId, localUserEmail(userId)]
+  );
+  await client.query(
+    `
+      insert into app_runtime_state (
+        user_id, current_day, current_clock, available_minutes, deferrals_json, completions_json, entity_order_json, updated_at
+      )
+      values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, now())
+      on conflict (user_id)
+      do update set
+        current_day = excluded.current_day,
+        current_clock = excluded.current_clock,
+        available_minutes = excluded.available_minutes,
+        deferrals_json = excluded.deferrals_json,
+        completions_json = excluded.completions_json,
+        entity_order_json = excluded.entity_order_json,
+        updated_at = now()
+    `,
+    [
+      userId,
+      state.currentDate,
+      state.currentTime,
+      state.availableMinutes,
+      JSON.stringify(state.deferrals ?? []),
+      JSON.stringify(state.completions ?? []),
+      JSON.stringify(entityOrder(state))
+    ]
   );
 
   const domainIds = new Map();
@@ -574,12 +617,497 @@ async function projectState(client, state) {
   await deleteProjectedRows(client, "domains", userId, (state.domains ?? []).map((domain) => domain.id));
 }
 
+async function readProjectedState(client) {
+  const userId = localUserId();
+  const runtime = await client.query("select * from app_runtime_state where user_id = $1", [userId]);
+  if (!runtime.rowCount) return null;
+
+  const runtimeRow = runtime.rows[0];
+  const order = runtimeRow.entity_order_json ?? {};
+
+  const domains = await client.query(
+    `
+      select external_id, name, weight
+      from domains
+      where user_id = $1 and external_id is not null
+    `,
+    [userId]
+  );
+  const projects = await client.query(
+    `
+      select
+        containers.external_id,
+        domains.external_id as domain_external_id,
+        containers.name,
+        containers.kind,
+        containers.planning_mode,
+        containers.status,
+        containers.priority_weight,
+        containers.default_block_minutes,
+        containers.context_note
+      from containers
+      left join domains on domains.id = containers.domain_id
+      where containers.user_id = $1 and containers.external_id is not null
+    `,
+    [userId]
+  );
+  const tasks = await client.query(
+    `
+      select
+        tasks.external_id,
+        domains.external_id as domain_external_id,
+        containers.external_id as container_external_id,
+        parent.external_id as parent_task_external_id,
+        tasks.source_inbox_item_external_id,
+        tasks.title,
+        tasks.description,
+        tasks.type,
+        tasks.status,
+        tasks.repeat_policy,
+        tasks.completion_behavior,
+        tasks.completion_mode,
+        tasks.definition_of_done,
+        tasks.planner_fields,
+        tasks.planner_signals,
+        tasks.tags,
+        tasks.field_confidence,
+        tasks.priority,
+        tasks.importance,
+        tasks.urgency,
+        tasks.due_on,
+        tasks.scheduled_for,
+        tasks.scheduled_time,
+        tasks.date_intent,
+        tasks.scheduling,
+        tasks.effort_minutes,
+        tasks.min_minutes,
+        tasks.max_minutes,
+        tasks.estimate_confidence,
+        tasks.energy,
+        tasks.strictness,
+        tasks.notes,
+        tasks.blocked_reason,
+        tasks.blocked_json,
+        tasks.waiting_json,
+        tasks.delegation_json,
+        tasks.completed_at,
+        tasks.last_completed_at,
+        tasks.source
+      from tasks
+      join domains on domains.id = tasks.domain_id
+      left join containers on containers.id = tasks.container_id
+      left join tasks parent on parent.id = tasks.parent_task_id
+      where tasks.user_id = $1 and tasks.external_id is not null
+    `,
+    [userId]
+  );
+  const routines = await client.query(
+    `
+      select
+        routine_templates.external_id,
+        domains.external_id as domain_external_id,
+        routine_templates.title,
+        routine_templates.recurrence,
+        routine_templates.default_effort_minutes,
+        routine_templates.energy,
+        routine_templates.strictness,
+        routine_templates.preferred_window,
+        routine_templates.active
+      from routine_templates
+      join domains on domains.id = routine_templates.domain_id
+      where routine_templates.user_id = $1 and routine_templates.external_id is not null
+    `,
+    [userId]
+  );
+  const executionEvents = await client.query(
+    `
+      select
+        external_id,
+        event_date,
+        type,
+        task_external_id,
+        task_external_ids,
+        plan_item_external_id,
+        reason,
+        note,
+        actual_minutes,
+        next_action,
+        blocked_json,
+        waiting_json,
+        delegation_json,
+        created_at
+      from execution_events
+      where user_id = $1 and external_id is not null
+    `,
+    [userId]
+  );
+  const inboxItems = await client.query(
+    `
+      select external_id, raw_text, assistant_summary, created_at
+      from inbox_items
+      where user_id = $1 and external_id is not null
+    `,
+    [userId]
+  );
+  const aiActions = await client.query(
+    `
+      select
+        external_id,
+        inbox_item_external_id,
+        capture_session_external_id,
+        pending_question_external_id,
+        action_type,
+        label,
+        risk_level,
+        status,
+        payload_json,
+        validation_errors,
+        applied_record_refs,
+        model,
+        skipped_reason,
+        created_at
+      from ai_actions
+      where user_id = $1 and external_id is not null
+    `,
+    [userId]
+  );
+  const captureSessions = await client.query(
+    `
+      select
+        id,
+        external_id,
+        inbox_item_external_id,
+        status,
+        source,
+        summary,
+        action_external_ids,
+        draft_action_external_ids,
+        applied_entity_external_ids,
+        answered_fields,
+        unresolved_fields,
+        created_at,
+        updated_at
+      from capture_sessions
+      where user_id = $1 and external_id is not null
+    `,
+    [userId]
+  );
+  const captureMessages = await client.query(
+    `
+      select
+        capture_sessions.external_id as session_external_id,
+        capture_messages.external_id,
+        capture_messages.role,
+        capture_messages.content,
+        capture_messages.created_at
+      from capture_messages
+      join capture_sessions on capture_sessions.id = capture_messages.session_id
+      where capture_sessions.user_id = $1 and capture_messages.external_id is not null
+    `,
+    [userId]
+  );
+  const clarificationQuestions = await client.query(
+    `
+      select
+        capture_sessions.external_id as session_external_id,
+        clarification_questions.external_id,
+        clarification_questions.action_external_id,
+        clarification_questions.question,
+        clarification_questions.kind,
+        clarification_questions.mode,
+        clarification_questions.status,
+        clarification_questions.options,
+        clarification_questions.materiality,
+        clarification_questions.rationale,
+        clarification_questions.answer,
+        clarification_questions.created_at,
+        clarification_questions.answered_at
+      from clarification_questions
+      join capture_sessions on capture_sessions.id = clarification_questions.session_id
+      where capture_sessions.user_id = $1 and clarification_questions.external_id is not null
+    `,
+    [userId]
+  );
+  const captureRevisionEvents = await client.query(
+    `
+      select
+        capture_sessions.external_id as session_external_id,
+        capture_revision_events.external_id,
+        capture_revision_events.source,
+        capture_revision_events.task_external_id,
+        capture_revision_events.action_external_id,
+        capture_revision_events.model,
+        capture_revision_events.confidence,
+        capture_revision_events.summary,
+        capture_revision_events.changes,
+        capture_revision_events.before_json,
+        capture_revision_events.after_json,
+        capture_revision_events.created_at
+      from capture_revision_events
+      join capture_sessions on capture_sessions.id = capture_revision_events.session_id
+      where capture_sessions.user_id = $1 and capture_revision_events.external_id is not null
+    `,
+    [userId]
+  );
+
+  const messagesBySession = groupBy(captureMessages.rows, (row) => row.session_external_id);
+  const questionsBySession = groupBy(clarificationQuestions.rows, (row) => row.session_external_id);
+  const revisionsBySession = groupBy(captureRevisionEvents.rows, (row) => row.session_external_id);
+  const sessionsByInbox = new Map(captureSessions.rows.map((row) => [row.inbox_item_external_id, row.external_id]));
+  const actionsByInbox = groupBy(aiActions.rows, (row) => row.inbox_item_external_id);
+
+  return {
+    currentDate: formatDateOnly(runtimeRow.current_day),
+    currentTime: formatTimeOnly(runtimeRow.current_clock),
+    availableMinutes: runtimeRow.available_minutes,
+    domains: sortRows(domains.rows, order.domains).map((row) => ({
+      id: row.external_id,
+      name: row.name,
+      weight: Number(row.weight)
+    })),
+    projects: sortRows(projects.rows, order.projects).map((row) => ({
+      id: row.external_id,
+      domainId: row.domain_external_id,
+      name: row.name,
+      kind: row.kind,
+      planningMode: row.planning_mode,
+      status: row.status,
+      priorityWeight: Number(row.priority_weight),
+      defaultBlockMinutes: row.default_block_minutes,
+      contextNote: row.context_note
+    })),
+    tasks: sortRows(tasks.rows, order.tasks).map((row) => omitUndefined({
+      id: row.external_id,
+      title: row.title,
+      description: row.description ?? undefined,
+      type: row.type,
+      domainId: row.domain_external_id,
+      projectId: row.container_external_id ?? undefined,
+      parentTaskId: row.parent_task_external_id ?? undefined,
+      sourceInboxItemId: row.source_inbox_item_external_id ?? undefined,
+      status: row.status,
+      repeatPolicy: row.repeat_policy,
+      completionBehavior: row.completion_behavior,
+      completionMode: row.completion_mode ?? undefined,
+      definitionOfDone: row.definition_of_done ?? undefined,
+      plannerFields: row.planner_fields,
+      plannerSignals: row.planner_signals ?? undefined,
+      tags: row.tags ?? undefined,
+      fieldConfidence: row.field_confidence ?? undefined,
+      priority: row.priority,
+      importance: row.importance,
+      urgency: row.urgency,
+      dueDate: row.due_on ? formatDateOnly(row.due_on) : undefined,
+      scheduledDate: row.scheduled_for ? formatDateOnly(row.scheduled_for) : undefined,
+      scheduledTime: row.scheduled_time ? formatTimeOnly(row.scheduled_time) : undefined,
+      dateIntent: row.date_intent ?? undefined,
+      scheduling: row.scheduling ?? undefined,
+      effortMinutes: row.effort_minutes,
+      minMinutes: row.min_minutes ?? undefined,
+      maxMinutes: row.max_minutes ?? undefined,
+      estimateConfidence: row.estimate_confidence === null ? undefined : Number(row.estimate_confidence),
+      energy: row.energy,
+      strictness: row.strictness,
+      notes: row.notes ?? undefined,
+      blockedReason: row.blocked_reason ?? undefined,
+      blocked: row.blocked_json ?? undefined,
+      waiting: row.waiting_json ?? undefined,
+      delegation: row.delegation_json ?? undefined,
+      completedAt: row.completed_at ? formatIso(row.completed_at) : undefined,
+      lastCompletedAt: row.last_completed_at ? formatIso(row.last_completed_at) : undefined,
+      source: row.source ?? undefined
+    })),
+    routines: sortRows(routines.rows, order.routines).map((row) => omitUndefined({
+      id: row.external_id,
+      title: row.title,
+      domainId: row.domain_external_id,
+      recurrence: row.recurrence,
+      defaultEffortMinutes: row.default_effort_minutes,
+      energy: row.energy,
+      strictness: row.strictness,
+      preferredWindow: row.preferred_window ?? undefined,
+      active: row.active
+    })),
+    deferrals: runtimeRow.deferrals_json ?? [],
+    completions: runtimeRow.completions_json ?? [],
+    executionEvents: sortRows(executionEvents.rows, order.executionEvents).map((row) => omitUndefined({
+      id: row.external_id,
+      date: formatDateOnly(row.event_date),
+      createdAt: formatIso(row.created_at),
+      type: row.type,
+      taskId: row.task_external_id ?? undefined,
+      taskIds: row.task_external_ids ?? undefined,
+      planItemId: row.plan_item_external_id ?? undefined,
+      reason: row.reason ?? undefined,
+      note: row.note ?? undefined,
+      actualMinutes: row.actual_minutes ?? undefined,
+      nextAction: row.next_action ?? undefined,
+      blocked: row.blocked_json ?? undefined,
+      waiting: row.waiting_json ?? undefined,
+      delegation: row.delegation_json ?? undefined
+    })),
+    inbox: sortRows(inboxItems.rows, order.inbox).map((row) => omitUndefined({
+      id: row.external_id,
+      createdAt: formatIso(row.created_at),
+      input: row.raw_text,
+      actions: sortRows(actionsByInbox.get(row.external_id) ?? [], order.aiActions).map((action) => omitUndefined({
+        id: action.external_id,
+        type: action.action_type,
+        label: action.label,
+        payload: action.payload_json ?? {},
+        safety: action.risk_level === "safe" ? "auto_apply" : "needs_confirmation",
+        status: action.status,
+        appliedEntityId: action.applied_record_refs?.appliedEntityId ?? undefined,
+        skippedReason: action.skipped_reason ?? undefined,
+        validationErrors: action.validation_errors ?? undefined,
+        model: action.model ?? undefined,
+        createdAt: action.created_at ? formatIso(action.created_at) : undefined,
+        captureSessionId: action.capture_session_external_id ?? undefined,
+        sourceMessageId: action.inbox_item_external_id ?? undefined,
+        pendingQuestionId: action.pending_question_external_id ?? undefined
+      })),
+      summary: row.assistant_summary,
+      captureSessionId: sessionsByInbox.get(row.external_id) ?? undefined
+    })),
+    captureSessions: sortRows(captureSessions.rows, order.captureSessions).map((row) => ({
+      id: row.external_id,
+      status: row.status,
+      source: row.source,
+      createdAt: formatIso(row.created_at),
+      updatedAt: formatIso(row.updated_at),
+      messages: sortRows(messagesBySession.get(row.external_id) ?? [], order.captureMessages).map((message) => ({
+        id: message.external_id,
+        role: message.role,
+        content: message.content,
+        createdAt: formatIso(message.created_at)
+      })),
+      questions: sortRows(questionsBySession.get(row.external_id) ?? [], order.clarificationQuestions).map((question) => omitUndefined({
+        id: question.external_id,
+        actionId: question.action_external_id,
+        question: question.question,
+        kind: question.kind,
+        mode: question.mode,
+        status: question.status,
+        options: question.options ?? undefined,
+        materiality: question.materiality ?? undefined,
+        rationale: question.rationale ?? undefined,
+        answer: question.answer ?? undefined,
+        createdAt: formatIso(question.created_at),
+        answeredAt: question.answered_at ? formatIso(question.answered_at) : undefined
+      })),
+      actionIds: row.action_external_ids ?? [],
+      draftActionIds: row.draft_action_external_ids ?? [],
+      appliedEntityIds: row.applied_entity_external_ids ?? [],
+      answeredFields: row.answered_fields ?? [],
+      revisionEvents: sortRows(revisionsBySession.get(row.external_id) ?? [], order.captureRevisionEvents).map((revision) => omitUndefined({
+        id: revision.external_id,
+        createdAt: formatIso(revision.created_at),
+        source: revision.source,
+        taskId: revision.task_external_id ?? undefined,
+        actionId: revision.action_external_id ?? undefined,
+        model: revision.model ?? undefined,
+        confidence: revision.confidence === null ? undefined : Number(revision.confidence),
+        summary: revision.summary,
+        changes: revision.changes ?? [],
+        before: revision.before_json ?? undefined,
+        after: revision.after_json ?? undefined
+      })),
+      unresolvedFields: row.unresolved_fields ?? [],
+      summary: row.summary
+    }))
+  };
+}
+
+async function deleteProjectedState(client) {
+  const userId = localUserId();
+  await client.query("delete from app_runtime_state where user_id = $1", [userId]);
+  await deleteProjectedRows(client, "execution_events", userId, []);
+  await deleteProjectedRows(client, "ai_actions", userId, []);
+  await deleteProjectedRows(client, "capture_sessions", userId, []);
+  await deleteProjectedRows(client, "inbox_items", userId, []);
+  await deleteProjectedRows(client, "tasks", userId, []);
+  await deleteProjectedRows(client, "routine_templates", userId, []);
+  await deleteProjectedRows(client, "containers", userId, []);
+  await deleteProjectedRows(client, "domains", userId, []);
+}
+
 function inboxStatus(entry) {
   if ((entry.actions ?? []).some((action) => action.status === "failed")) return "failed";
   if ((entry.actions ?? []).some((action) => action.type === "ask_clarification" && action.status === "proposed")) return "needs_clarification";
   if ((entry.actions ?? []).some((action) => action.status === "proposed")) return "proposed";
   if ((entry.actions ?? []).length && (entry.actions ?? []).every((action) => action.status === "applied")) return "applied";
   return "received";
+}
+
+function localUserId() {
+  return process.env.EX3CUUSION_LOCAL_USER_ID ?? "00000000-0000-0000-0000-000000000001";
+}
+
+function localUserEmail(userId) {
+  return userId === "00000000-0000-0000-0000-000000000001" ? "local@ex3cuusion.dev" : `local+${userId}@ex3cuusion.dev`;
+}
+
+function entityOrder(state) {
+  return {
+    domains: (state.domains ?? []).map((entry) => entry.id),
+    projects: (state.projects ?? []).map((entry) => entry.id),
+    tasks: (state.tasks ?? []).map((entry) => entry.id),
+    routines: (state.routines ?? []).map((entry) => entry.id),
+    executionEvents: (state.executionEvents ?? []).map((entry) => entry.id),
+    inbox: (state.inbox ?? []).map((entry) => entry.id),
+    aiActions: (state.inbox ?? []).flatMap((entry) => (entry.actions ?? []).map((action) => action.id)),
+    captureSessions: (state.captureSessions ?? []).map((entry) => entry.id),
+    captureMessages: (state.captureSessions ?? []).flatMap((entry) => (entry.messages ?? []).map((message) => message.id)),
+    clarificationQuestions: (state.captureSessions ?? []).flatMap((entry) => (entry.questions ?? []).map((question) => question.id)),
+    captureRevisionEvents: (state.captureSessions ?? []).flatMap((entry) => (entry.revisionEvents ?? []).map((revision) => revision.id))
+  };
+}
+
+function groupBy(rows, keyFn) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = keyFn(row);
+    if (!key) continue;
+    const existing = grouped.get(key) ?? [];
+    existing.push(row);
+    grouped.set(key, existing);
+  }
+  return grouped;
+}
+
+function sortRows(rows, orderedExternalIds) {
+  if (!Array.isArray(orderedExternalIds)) return [...rows].sort((a, b) => String(a.external_id).localeCompare(String(b.external_id)));
+  const positions = new Map(orderedExternalIds.map((id, index) => [id, index]));
+  return [...rows].sort((a, b) => {
+    const aPosition = positions.get(a.external_id) ?? Number.MAX_SAFE_INTEGER;
+    const bPosition = positions.get(b.external_id) ?? Number.MAX_SAFE_INTEGER;
+    if (aPosition !== bPosition) return aPosition - bPosition;
+    return String(a.external_id).localeCompare(String(b.external_id));
+  });
+}
+
+function omitUndefined(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+}
+
+function formatDateOnly(value) {
+  if (value instanceof Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return String(value).slice(0, 10);
+}
+
+function formatTimeOnly(value) {
+  if (value instanceof Date) return value.toISOString().slice(11, 16);
+  return String(value).slice(0, 5);
+}
+
+function formatIso(value) {
+  if (value instanceof Date) return value.toISOString();
+  return new Date(value).toISOString();
 }
 
 function jsonOrNull(value) {
