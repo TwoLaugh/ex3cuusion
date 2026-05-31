@@ -91,7 +91,8 @@ describe("interpretInboxInput", () => {
           tags: null,
           question: "Trim or file?",
           clarificationKind: "next_action",
-          clarificationOptions: ["Trim", "File"]
+          clarificationOptions: ["Trim", "File"],
+          schedulingMode: null
         }
       ]
     }));
@@ -133,7 +134,8 @@ describe("interpretInboxInput", () => {
           tags: null,
           question: null,
           clarificationKind: null,
-          clarificationOptions: null
+          clarificationOptions: null,
+          schedulingMode: null
         }
       ]
     }));
@@ -179,7 +181,8 @@ describe("interpretInboxInput", () => {
             tags: ["home"],
             question: "What would count as enough cleaning for this task?",
             clarificationKind: "definition_of_done",
-            clarificationOptions: ["Kitchen and bathroom", "One focused pass"]
+            clarificationOptions: ["Kitchen and bathroom", "One focused pass"],
+            schedulingMode: null
           }
         ]
       })
@@ -263,7 +266,8 @@ describe("interpretInboxInput", () => {
             tags: null,
             question: null,
             clarificationKind: null,
-            clarificationOptions: null
+            clarificationOptions: null,
+            schedulingMode: null
           },
           {
             type: "create_task",
@@ -287,7 +291,8 @@ describe("interpretInboxInput", () => {
             tags: null,
             question: null,
             clarificationKind: null,
-            clarificationOptions: null
+            clarificationOptions: null,
+            schedulingMode: null
           }
         ]
       })

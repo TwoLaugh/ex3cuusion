@@ -35,7 +35,8 @@ const aiActionSchema = z.object({
       tags: z.array(z.string()).nullable(),
       question: z.string().nullable(),
       clarificationKind: z.enum(["definition_of_done", "completion_behavior", "container_kind", "repeat_policy", "date", "split", "next_action"]).nullable(),
-      clarificationOptions: z.array(z.string()).nullable()
+      clarificationOptions: z.array(z.string()).nullable(),
+      schedulingMode: z.enum(["exclusive", "concurrent", "background"]).nullable()
     })
   )
 });
@@ -150,7 +151,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "For an explicit, ordinary, well-understood task, return create_task with sensible defaults and do not ask a question. " +
     "For broad outcome work with no clear finish line — a request that names a result or a whole space but no concrete action or stopping point, such as tidying or cleaning an entire space, sorting or organizing a broad area, or open-ended 'sort out' / 'deal with' work — return ask_clarification with clarificationKind 'definition_of_done' before creating, even when you could guess a reasonable scope. Prefer asking once here over silently creating a vague task. " +
     "For ask_clarification actions: title must be the canonical future task title, not the question text. question must contain the user-facing question. definitionOfDone must be null. " +
-    "For a request to collect reusable ideas or suggestions — a list the user would draw from repeatedly rather than complete once — use ask_clarification with completionBehavior keep_as_suggestion and completionMode suggestion_used, asking whether to keep it as a reusable suggestion list. " +
+    "For a request to collect reusable ideas or suggestions — a list the user would draw from repeatedly rather than complete once — use ask_clarification with completionBehavior keep_as_suggestion and completionMode suggestion_used, asking whether to keep it as a reusable suggestion list. Such a list is never 'done', so do not frame it as clarificationKind definition_of_done; use completion_behavior. " +
     "For time-boxed work (wording like 'work on X for N hours/minutes'), return create_task with completionBehavior repeatable, completionMode timebox, the stated effort in minutes, and the matching existing project if one exists. " +
     "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
     "Interpret colloquial clock times into 24-hour HH:mm (for example an evening 'half past eleven' is 23:30) unless the user clearly means another time. " +
@@ -159,6 +160,8 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "For deadline wording such as 'by <day>' or 'before <day>', set dueDate, not scheduledDate. For execution wording such as 'on <day>' or 'today', set scheduledDate. " +
     "For explicit recurring habits, return create_routine with recurrenceDays when known, mapping weekday names to 0-6 with Sunday as 0. " +
     "For sleep or bed time, return create_task titled 'Sleep', not schedule_block. " +
+    "Set schedulingMode on every create_task: 'exclusive' for normal focused work (the default), 'concurrent' for a light-attention activity the user does while something else runs, and 'background' for work that proceeds largely unattended. " +
+    "When the user describes doing one thing WHILE another runs — for example automated or passive work running while they do a hands-on activity — return TWO create_task actions, each with its own effort: the hands-on activity as 'concurrent' and the unattended one as 'background'. Do not merge them into a single combined task. " +
     "Use existing domain/project names and target task IDs when they fit. Return only actions that help choose, schedule, split, defer, prioritize, or prune work. " +
     "projectName must be null unless it exactly refers to an existing project/container from the provided list. " +
     "For archive_task and schedule_task, targetTaskId is required and must be an existing task ID. " +
@@ -709,6 +712,7 @@ export async function fixtureInterpreter(input: string, state: AppState): Promis
           urgency: 3,
           completionBehavior: "exhaust_once",
           completionMode: "simple_done",
+          schedulingMode: "concurrent",
           tags: ["cooking", "concurrent"]
         }),
         baseAction("create_task", "Add AI report run", "Run AI report draft", state, {
@@ -722,6 +726,7 @@ export async function fixtureInterpreter(input: string, state: AppState): Promis
           urgency: 2,
           completionBehavior: "exhaust_once",
           completionMode: "progress_accumulating",
+          schedulingMode: "background",
           tags: ["ai_running", "background", "concurrent"]
         })
       ]
@@ -842,6 +847,7 @@ function baseAction(
     tags: null,
     clarificationKind: null,
     clarificationOptions: null,
+    schedulingMode: null,
     ...overrides
   };
 }
@@ -936,6 +942,10 @@ function buildAction(
 // estimate — never from matching specific user phrases. They are display metadata for a
 // clarification the model already decided to ask; they do not gate whether it is asked.
 function clarificationMateriality(action: ParsedAiAction): "low" | "medium" | "high" {
+  // A question about whether to keep something as a reusable suggestion list is optional by
+  // nature and must never block — regardless of which clarificationKind the model tagged it
+  // with. Keyed on the model's own keep_as_suggestion signal, not on phrases.
+  if (action.completionBehavior === "keep_as_suggestion" || action.completionMode === "suggestion_used") return "medium";
   const kind = action.clarificationKind ?? "next_action";
   if (kind === "definition_of_done" || kind === "split" || action.effortMinutes >= 90) return "high";
   if (kind === "completion_behavior" || kind === "repeat_policy" || kind === "container_kind") return "medium";
@@ -1063,16 +1073,20 @@ function deriveDateIntent(action: ParsedAiAction, state: AppState, sourceText: s
   return { kind: "none", originalText: sourceText || undefined, confidence: 0.35 };
 }
 
-function inferScheduling(): SchedulingMetadata {
-  // Default to an exclusive task. Overlap/phasing semantics (laundry phases, cook-while-X,
-  // background AI work) used to be guessed from keywords in the title — that was overfit to
-  // demo phrases. Reintroduce them as explicit model-owned schema fields if needed, not as
-  // keyword matching here.
-  return {
-    mode: "exclusive",
-    attentionLoad: "full",
-    canOverlap: false
-  };
+function buildScheduling(action: ParsedAiAction): SchedulingMetadata {
+  // Overlap semantics are now model-owned via action.schedulingMode (the model is told to
+  // split "do X while Y" into two tasks and tag them). Deterministic code only maps the
+  // chosen mode onto the planner's attention/overlap fields — it does NOT guess from keywords.
+  switch (action.schedulingMode) {
+    case "concurrent":
+      // Light-attention activity that can run alongside a passive/background task.
+      return { mode: "concurrent", attentionLoad: "partial", canOverlap: true, overlapKinds: [] };
+    case "background":
+      // Runs largely unattended (e.g. a process working while the user does something else).
+      return { mode: "background", attentionLoad: "passive", canOverlap: true, overlapKinds: [] };
+    default:
+      return { mode: "exclusive", attentionLoad: "full", canOverlap: false };
+  }
 }
 
 function relevantSourceText(action: ParsedAiAction, sourceText: string): string {
@@ -1174,7 +1188,7 @@ function taskPayload(
   const scheduledTime = action.scheduledTime && /^\d{2}:\d{2}$/.test(action.scheduledTime) ? action.scheduledTime : undefined;
   const relevantText = relevantSourceText(action, sourceText);
   const dateIntent = deriveDateIntent(action, state, relevantText);
-  const scheduling = inferScheduling();
+  const scheduling = buildScheduling(action);
   return {
     title: action.title,
     type: projectId ? "project_task" : completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "atomic",

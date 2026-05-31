@@ -168,11 +168,21 @@ function staticScenarios() {
         routineExists(/will/i),
         routineHasWeeklyDay(/will/i, 5)
       ]
+    },
+    {
+      phase: "static",
+      name: "do-X-while-Y splits into overlapping tasks",
+      steps: [
+        setTime("2026-06-01", "18:00"),
+        inbox("AI can run the report while I cook dinner tonight")
+      ],
+      expects: [
+        // Behavior-focused, title-agnostic: the model should split "do X while Y" into two
+        // tasks and tag overlap via the model-owned schedulingMode field.
+        anyTaskWithSchedulingMode("concurrent"),
+        anyTaskWithSchedulingMode("background")
+      ]
     }
-    // NOTE: a "background AI side-work preserves overlap semantics" scenario lived here. It
-    // asserted keyword-inferred scheduling.mode (concurrent/background) — overfit to demo
-    // phrases and since deleted. Reintroduce as a model-owned schema field, then re-add a
-    // scenario that exercises it. See docs/release/v1-release-gate.md.
   ];
 }
 
@@ -452,6 +462,13 @@ function taskField(title, field, value) {
     if (!task) return [`Expected task ${matcherLabel(title)} to exist for ${field}.`];
     return task[field] === value ? [] : [`Expected ${matcherLabel(title)} ${field}=${JSON.stringify(value)}, got ${JSON.stringify(task[field])}.`];
   };
+}
+
+function anyTaskWithSchedulingMode(mode) {
+  return (debug) =>
+    debug.tasks.some((task) => task.status !== "archived" && task.scheduling?.mode === mode)
+      ? []
+      : [`Expected a task with scheduling.mode "${mode}".`];
 }
 
 function taskNestedField(title, path, value) {
