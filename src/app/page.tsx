@@ -610,12 +610,14 @@ function InboxSession({
   sendFollowUp: (sessionId: string) => Promise<void>;
   post: PostFn;
 }) {
-  const pendingQuestions = session?.questions.filter((question) => question.status === "pending") ?? [];
+  const entryActions = Array.isArray(entry.actions) ? entry.actions : [];
+  const sessionQuestions = Array.isArray(session?.questions) ? session.questions : [];
+  const sessionMessages = Array.isArray(session?.messages) ? session.messages : [];
+  const pendingQuestions = sessionQuestions.filter((question) => question.status === "pending");
   const pendingQuestionText = new Set(pendingQuestions.map((question) => question.question));
-  const visibleMessages =
-    session?.messages.slice(1).filter((message) => !(message.role === "assistant" && pendingQuestionText.has(message.content))) ?? [];
-  const appliedActions = entry.actions.filter((action) => action.status === "applied" && action.type !== "ask_clarification");
-  const proposedActions = entry.actions.filter(
+  const visibleMessages = sessionMessages.slice(1).filter((message) => !(message.role === "assistant" && pendingQuestionText.has(message.content)));
+  const appliedActions = entryActions.filter((action) => action.status === "applied" && action.type !== "ask_clarification");
+  const proposedActions = entryActions.filter(
     (action) => action.status === "proposed" && action.safety === "needs_confirmation" && action.type !== "ask_clarification"
   );
 
@@ -700,11 +702,12 @@ function InboxSession({
 }
 
 function actionSummary(action: AppState["inbox"][number]["actions"][number]): string {
-  if (action.type === "create_task") return `Task: ${String(action.payload.title ?? action.label)}`;
-  if (action.type === "schedule_task") return `Moved: ${String(action.payload.title ?? action.label)}`;
-  if (action.type === "archive_task") return `Removed: ${String(action.payload.title ?? action.label)}`;
-  if (action.type === "create_routine") return `Routine: ${String(action.payload.title ?? action.label)}`;
-  if (action.type === "create_project") return `Project: ${String(action.payload.name ?? action.payload.title ?? action.label)}`;
+  const payload = action.payload ?? {};
+  if (action.type === "create_task") return `Task: ${String(payload.title ?? action.label)}`;
+  if (action.type === "schedule_task") return `Moved: ${String(payload.title ?? action.label)}`;
+  if (action.type === "archive_task") return `Removed: ${String(payload.title ?? action.label)}`;
+  if (action.type === "create_routine") return `Routine: ${String(payload.title ?? action.label)}`;
+  if (action.type === "create_project") return `Project: ${String(payload.name ?? payload.title ?? action.label)}`;
   return action.label;
 }
 
