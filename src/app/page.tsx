@@ -21,6 +21,9 @@ export default function Home() {
   const [selected, setSelected] = useState<PlanItem | null>(null);
   const [notDoneItem, setNotDoneItem] = useState<PlanItem | null>(null);
   const [moveItem, setMoveItem] = useState<PlanItem | null>(null);
+  const [moveDateDraft, setMoveDateDraft] = useState("");
+  const [moveTimeDraft, setMoveTimeDraft] = useState("");
+  const [moveError, setMoveError] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState("no_time");
   const [notDoneNote, setNotDoneNote] = useState("");
@@ -74,6 +77,16 @@ export default function Home() {
     const refreshed = plan.items.find((item) => item.id === selected.id);
     if (refreshed && refreshed !== selected) setSelected(refreshed);
   }, [plan, selected]);
+
+  useEffect(() => {
+    if (!moveItem) {
+      setMoveError(null);
+      return;
+    }
+    setMoveDateDraft(plan?.date ?? "");
+    setMoveTimeDraft(isClockTime(moveItem.startTime) ? moveItem.startTime : "");
+    setMoveError(null);
+  }, [moveItem, plan?.date]);
 
   if (!payload || !plan || !state) {
     return <main className="loading">Building today...</main>;
@@ -143,17 +156,29 @@ export default function Home() {
   async function submitMove(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!moveItem?.taskId) return;
-    const formData = new FormData(event.currentTarget);
+    const scheduledTime = normalizeMoveTime(moveTimeDraft);
+    if (moveTimeDraft.trim() && !scheduledTime) {
+      setMoveError("Use HH:mm");
+      return;
+    }
     await post("/api/structure", {
       entity: "task",
       action: "update",
       id: moveItem.taskId,
       patch: {
-        scheduledDate: fieldText(formData, "scheduledDate"),
-        scheduledTime: fieldText(formData, "scheduledTime")
+        scheduledDate: moveDateDraft,
+        scheduledTime: scheduledTime ?? ""
       }
     });
     setMoveItem(null);
+  }
+
+  function nudgeMoveTime(minutes: number) {
+    const fallbackTime = state?.currentTime ?? "08:30";
+    const normalized = normalizeMoveTime(moveTimeDraft || (isClockTime(moveItem?.startTime ?? "") ? moveItem!.startTime : fallbackTime));
+    const base = normalized ?? fallbackTime;
+    setMoveTimeDraft(fromMinutes((toMinutes(base) + minutes + 24 * 60) % (24 * 60)));
+    setMoveError(null);
   }
 
   return (
@@ -433,8 +458,28 @@ export default function Home() {
             <p className="eyebrow">Move task</p>
             <h2>{moveItem.title}</h2>
             <form className="moveForm" onSubmit={submitMove}>
-              <input name="scheduledDate" type="date" defaultValue={plan.date} aria-label="Move date" />
-              <input name="scheduledTime" type="time" defaultValue={isClockTime(moveItem.startTime) ? moveItem.startTime : ""} aria-label="Move time" />
+              <input name="scheduledDate" type="date" value={moveDateDraft} onChange={(event) => setMoveDateDraft(event.target.value)} aria-label="Move date" />
+              <div className="moveTimeRow">
+                <button type="button" className="timeNudge" onClick={() => nudgeMoveTime(-15)} aria-label="Move 15 minutes earlier">
+                  -15
+                </button>
+                <input
+                  name="scheduledTime"
+                  type="text"
+                  inputMode="numeric"
+                  value={moveTimeDraft}
+                  onChange={(event) => {
+                    setMoveTimeDraft(event.target.value);
+                    setMoveError(null);
+                  }}
+                  placeholder="17:30"
+                  aria-label="Move time"
+                />
+                <button type="button" className="timeNudge" onClick={() => nudgeMoveTime(15)} aria-label="Move 15 minutes later">
+                  +15
+                </button>
+              </div>
+              {moveError && <p className="errorMessage">{moveError}</p>}
               <button className="sendButton" type="submit">
                 <Clock3 size={16} />
                 Move
@@ -1433,6 +1478,22 @@ function assignOverlapLanes(items: PlanItem[], currentTime?: string) {
 
 function isClockTime(value: string): boolean {
   return /^\d{2}:\d{2}$/.test(value);
+}
+
+function normalizeMoveTime(value: string): string | undefined {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+
+  const colon = trimmed.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (colon) return `${colon[1].padStart(2, "0")}:${colon[2]}`;
+
+  const meridiem = trimmed.match(/^(1[0-2]|0?[1-9])(?:[.:]([0-5]\d))?\s*(am|pm)$/);
+  if (!meridiem) return undefined;
+  let hours = Number(meridiem[1]);
+  const minutes = meridiem[2] ?? "00";
+  if (meridiem[3] === "pm" && hours !== 12) hours += 12;
+  if (meridiem[3] === "am" && hours === 12) hours = 0;
+  return `${String(hours).padStart(2, "0")}:${minutes}`;
 }
 
 function toMinutes(time: string): number {

@@ -1026,6 +1026,20 @@ h1 {
   margin-top: 14px;
 }
 
+.moveTimeRow {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 54px minmax(0, 1fr) 54px;
+}
+
+.timeNudge {
+  background: rgba(139, 184, 255, 0.1);
+  border: 1px solid rgba(139, 184, 255, 0.2);
+  border-radius: 8px;
+  color: var(--ink);
+  font-weight: 800;
+}
+
 .reviewStats,
 .reviewSignals {
   display: flex;
