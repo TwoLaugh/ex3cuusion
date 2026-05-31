@@ -398,9 +398,9 @@ export default function Home() {
               </p>
             )}
             <div className="inboxLog">
-              {state.inbox.map((entry) => (
+              {state.inbox.map((entry, index) => (
                 <InboxSession
-                  key={entry.id}
+                  key={`${entry.id}_${index}`}
                   entry={entry}
                   session={state.captureSessions.find((session) => session.id === entry.captureSessionId)}
                   clarificationDrafts={clarificationDrafts}
