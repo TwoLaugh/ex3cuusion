@@ -26,7 +26,7 @@ npm run db:up
 npm run db:migrate
 $env:DATABASE_URL='postgres://ex3cuusion:ex3cuusion@127.0.0.1:54329/ex3cuusion'
 $env:EX3CUUSION_STATE_REPOSITORY='postgres'
-$env:EX3CUUSION_STATE_SNAPSHOT_ID='release_gate'
+$env:EX3CUUSION_LOCAL_USER_ID='00000000-0000-0000-0000-000000000058'
 npm run test:e2e
 ```
 
@@ -51,7 +51,7 @@ npm run eval:ai:live
 | Audit/debug | T014 | Implemented | `/api/debug`, AI activity panel, planner/test assertions. |
 | Android V1 decision | T015 | Decided | Wrap/reuse web for V1 if needed; native launcher belongs to V2. |
 | V2 proactive hygiene | T020 | Deferred | Explicitly V2. Not required for V1 completion. |
-| Postgres durability | T053, T054 | Implemented | Migrations, normalized projection/readback, snapshot bridge, Postgres-backed tests. |
+| Postgres durability | T053, T054 | Implemented | Migrations, normalized projection/readback, Postgres-backed tests. |
 
 ## HLD Acceptance
 
@@ -72,7 +72,7 @@ npm run eval:ai:live
 - AI review/proactive structure hygiene is deferred to V2.
 - Delegation exists as structured metadata, but V1 does not optimize around delegated work yet.
 - Mobile web is usable, not a final Android-native interaction design.
-- Postgres repository still preserves a snapshot bridge alongside normalized tables.
+- Postgres repository is single-user/local and keyed by `EX3CUUSION_LOCAL_USER_ID`; auth/multiple users remain V3.
 
 ## Secret Hygiene
 

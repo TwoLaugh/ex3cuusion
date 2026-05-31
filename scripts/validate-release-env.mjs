@@ -26,6 +26,10 @@ if (process.env.EX3CUUSION_STATE_REPOSITORY === "postgres" && !process.env.DATAB
   failures.push("EX3CUUSION_STATE_REPOSITORY=postgres requires DATABASE_URL.");
 }
 
+if (process.env.EX3CUUSION_LOCAL_USER_ID && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(process.env.EX3CUUSION_LOCAL_USER_ID)) {
+  failures.push("EX3CUUSION_LOCAL_USER_ID must be a UUID when set.");
+}
+
 if (process.env.OPENAI_API_KEY && !process.env.OPENAI_API_KEY.startsWith("sk-")) {
   warnings.push("OPENAI_API_KEY is set but does not look like an OpenAI key.");
 }

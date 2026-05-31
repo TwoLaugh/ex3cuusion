@@ -2,19 +2,17 @@ import { describe, expect, it } from "vitest";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { createSeedState } from "./seed";
-import { createPostgresSnapshotRepositoryForTests } from "./repository";
+import { createPostgresRepositoryForTests } from "./repository";
 
 const describePostgres = process.env.DATABASE_URL ? describe : describe.skip;
 
-describePostgres("postgres snapshot repository", () => {
-  it("resets, writes, and reads AppState through Postgres", async () => {
-    const previousSnapshotId = process.env.EX3CUUSION_STATE_SNAPSHOT_ID;
+describePostgres("postgres repository", () => {
+  it("resets, writes, and reads AppState through normalized Postgres tables", async () => {
     const previousUserId = process.env.EX3CUUSION_LOCAL_USER_ID;
     const testUserId = randomUUID();
-    process.env.EX3CUUSION_STATE_SNAPSHOT_ID = `test_${Date.now()}`;
     process.env.EX3CUUSION_LOCAL_USER_ID = testUserId;
     try {
-      const repository = createPostgresSnapshotRepositoryForTests();
+      const repository = createPostgresRepositoryForTests();
       const seed = repository.reset();
       expect(seed.tasks.some((task) => task.title === "Finish auth bug")).toBe(true);
 
@@ -124,7 +122,7 @@ describePostgres("postgres snapshot repository", () => {
       });
 
       repository.write(next);
-      const readBack = repository.read();
+      const readBack = createPostgresRepositoryForTests().read();
 
       expect(readBack.currentDate).toBe("2026-06-04");
       expect(readBack.tasks.some((task) => task.id === "task_postgres_roundtrip")).toBe(true);
@@ -163,11 +161,7 @@ describePostgres("postgres snapshot repository", () => {
         );
         expect(childCounts.rows[0]).toMatchObject({ actions: 1, messages: 1, questions: 1, revisions: 1 });
 
-        await client.query("update app_state_snapshots set state_json = $1::jsonb where id = $2", [
-          JSON.stringify(createSeedState()),
-          process.env.EX3CUUSION_STATE_SNAPSHOT_ID
-        ]);
-        const readFromNormalizedRows = createPostgresSnapshotRepositoryForTests().read();
+        const readFromNormalizedRows = createPostgresRepositoryForTests().read();
         expect(readFromNormalizedRows.currentDate).toBe("2026-06-04");
         expect(readFromNormalizedRows.tasks.find((task) => task.id === "task_postgres_roundtrip")).toMatchObject({
           title: "Postgres roundtrip task",
@@ -209,11 +203,6 @@ describePostgres("postgres snapshot repository", () => {
         await client.end();
       }
     } finally {
-      if (previousSnapshotId === undefined) {
-        delete process.env.EX3CUUSION_STATE_SNAPSHOT_ID;
-      } else {
-        process.env.EX3CUUSION_STATE_SNAPSHOT_ID = previousSnapshotId;
-      }
       if (previousUserId === undefined) {
         delete process.env.EX3CUUSION_LOCAL_USER_ID;
       } else {

@@ -4,7 +4,6 @@ import { existsSync, readFileSync } from "node:fs";
 loadLocalEnv();
 
 const command = process.argv[2];
-const snapshotId = process.env.EX3CUUSION_STATE_SNAPSHOT_ID ?? "default";
 const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
@@ -22,18 +21,11 @@ const client = new pg.Client({ connectionString: databaseUrl });
 try {
   await client.connect();
   if (command === "read") {
-    if (process.env.EX3CUUSION_READ_NORMALIZED_STATE !== "0") {
-      const projectedState = await readProjectedState(client);
-      if (projectedState) {
-        process.stdout.write(JSON.stringify(projectedState));
-        process.exit(0);
-      }
-    }
-    const result = await client.query("select state_json from app_state_snapshots where id = $1", [snapshotId]);
-    if (!result.rowCount) {
-      process.stdout.write("");
+    const projectedState = await readProjectedState(client);
+    if (projectedState) {
+      process.stdout.write(JSON.stringify(projectedState));
     } else {
-      process.stdout.write(JSON.stringify(result.rows[0].state_json));
+      process.stdout.write("");
     }
   }
 
@@ -42,18 +34,7 @@ try {
     const state = JSON.parse(stateJson);
     await client.query("begin");
     try {
-      await client.query(
-        `
-          insert into app_state_snapshots (id, state_json, updated_at)
-          values ($1, $2::jsonb, now())
-          on conflict (id)
-          do update set state_json = excluded.state_json, updated_at = now()
-        `,
-        [snapshotId, stateJson]
-      );
-      if (process.env.EX3CUUSION_PROJECT_NORMALIZED_STATE !== "0") {
-        await projectState(client, state);
-      }
+      await projectState(client, state);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback");
@@ -64,10 +45,7 @@ try {
   if (command === "delete") {
     await client.query("begin");
     try {
-      await client.query("delete from app_state_snapshots where id = $1", [snapshotId]);
-      if (process.env.EX3CUUSION_PROJECT_NORMALIZED_STATE !== "0") {
-        await deleteProjectedState(client);
-      }
+      await deleteProjectedState(client);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback");

@@ -27,4 +27,4 @@ Make project blocks behave like focused work sessions with individual selected s
 - Selected subtasks can be completed and undone individually without completing the whole block.
 - Selected subtasks can be removed, added back from backlog, or regenerated to planner defaults.
 - Block-level completion is stored separately from child task completion.
-- Manual block selections persist through AppState and the Postgres snapshot repository.
+- Manual block selections persist through AppState and the normalized Postgres repository.

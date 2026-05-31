@@ -71,10 +71,10 @@ To run app state through Postgres instead of memory/file storage:
 
 ```text
 EX3CUUSION_STATE_REPOSITORY=postgres
-EX3CUUSION_STATE_SNAPSHOT_ID=local
+EX3CUUSION_LOCAL_USER_ID=00000000-0000-0000-0000-000000000001
 ```
 
-This uses the normalized Postgres projection/readback plus a snapshot bridge while V1 stays single-user/local.
+This uses the normalized Postgres projection/readback. For isolated local state, set `EX3CUUSION_LOCAL_USER_ID` to a different UUID.
 
 Stop the database with:
 

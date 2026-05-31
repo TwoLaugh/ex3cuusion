@@ -27,7 +27,7 @@ For durable local state, set:
 ```text
 DATABASE_URL=postgres://ex3cuusion:ex3cuusion@127.0.0.1:54329/ex3cuusion
 EX3CUUSION_STATE_REPOSITORY=postgres
-EX3CUUSION_STATE_SNAPSHOT_ID=local
+EX3CUUSION_LOCAL_USER_ID=00000000-0000-0000-0000-000000000001
 ```
 
 For deterministic tests and fixture AI behavior:
@@ -70,14 +70,14 @@ npm run eval:ai:live
 ```bash
 $env:DATABASE_URL='postgres://ex3cuusion:ex3cuusion@127.0.0.1:54329/ex3cuusion'
 $env:EX3CUUSION_STATE_REPOSITORY='postgres'
-$env:EX3CUUSION_STATE_SNAPSHOT_ID='local_test'
+$env:EX3CUUSION_LOCAL_USER_ID='00000000-0000-0000-0000-000000000099'
 npm run test:e2e
 ```
 
 ## Reset Local State
 
 - In-memory state resets with `POST /api/state`, which the test harness uses.
-- Postgres state can use a new `EX3CUUSION_STATE_SNAPSHOT_ID` for a clean local snapshot.
+- Postgres state can use a new `EX3CUUSION_LOCAL_USER_ID` UUID for an isolated local state bucket.
 - Stop Postgres with `npm run db:down`.
 
 ## Current V1 Surfaces

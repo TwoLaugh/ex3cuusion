@@ -27,4 +27,4 @@ Close the execution loop so completion, partial completion, deferrals, blockers,
 - Planner capacity now reads daily review calibration alongside deferral history.
 - Planner scoring penalizes repeatedly vague tasks and lightly accounts for low-energy patterns.
 - Future estimates can calibrate from actual completion minutes.
-- Daily reviews persist through AppState and the Postgres snapshot projection.
+- Daily reviews persist through AppState and the normalized Postgres repository.

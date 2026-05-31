@@ -51,7 +51,7 @@ class FileAppStateRepository implements AppStateRepository {
   }
 }
 
-class PostgresSnapshotAppStateRepository implements AppStateRepository {
+class PostgresAppStateRepository implements AppStateRepository {
   private readonly scriptPath = path.join(process.cwd(), "scripts", "pg-state-repository.mjs");
   private state?: AppState;
 
@@ -109,13 +109,13 @@ export function setRepositoryForTests(repository: AppStateRepository) {
   globalStore.__ex3cuusionRepository = repository;
 }
 
-export function createPostgresSnapshotRepositoryForTests(): AppStateRepository {
-  return new PostgresSnapshotAppStateRepository();
+export function createPostgresRepositoryForTests(): AppStateRepository {
+  return new PostgresAppStateRepository();
 }
 
 function buildDefaultRepository(): AppStateRepository {
   if (process.env.EX3CUUSION_STATE_REPOSITORY === "postgres") {
-    return new PostgresSnapshotAppStateRepository();
+    return new PostgresAppStateRepository();
   }
   if (process.env.EX3CUUSION_STATE_FILE) {
     return new FileAppStateRepository(process.env.EX3CUUSION_STATE_FILE);
