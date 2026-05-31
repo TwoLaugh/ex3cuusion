@@ -100,13 +100,13 @@ npm run dev
 
 The V1 release gate is documented in `docs/release/v1-release-gate.md`.
 
-Fixture release checks:
+Structural / plumbing checks (no model — safe and free):
 
 ```bash
 npm run check:env
 npx tsc --noEmit
 npm run test
-npm run eval:ai
+npm run eval:ai      # FIXTURE SMOKE ONLY — proves the pipeline runs; not a quality signal
 npm run test:e2e
 npm run build
 ```
@@ -117,9 +117,30 @@ Or run the combined command:
 npm run release:check
 ```
 
-Live model evals are explicit because they use API credit:
+**AI quality is gated separately and is not covered by `release:check`.** `eval:ai` runs the
+deterministic fixture, so it can never tell you whether the *model* behaves well — it only
+proves the pipeline applies actions without error.
+
+Measure real model behavior with the quality harness (uses API credit). It runs each scenario
+against the live model `QUALITY_SAMPLES` times (default 3) and judges each response against a
+natural-language rubric with an LLM judge, reporting a **pass-rate** per scenario rather than a
+single brittle pass/fail:
+
+```bash
+npm run eval:quality              # dev set (you may tune the prompt against these)
+npm run eval:quality:heldout      # held-out set — DO NOT tune against; checks generalization
+QUALITY_SAMPLES=10 npm run eval:quality   # more samples = tighter confidence
+```
+
+The older single-shot scenario suite (exact-match) is still available, but treat it as
+secondary — it is noisy under model non-determinism:
 
 ```bash
 npm run eval:ai:live
 ```
+
+Rules of thumb: add new behaviors as **realistic, varied** rubric scenarios in
+`scripts/quality/dev-scenarios.mjs`; keep `scripts/quality/heldout-scenarios.mjs` sacred (never
+tune toward it); do not chase a single failed sample with a phrase-specific code/prompt hack —
+that is the overfitting `AGENTS.md` exists to prevent.
 

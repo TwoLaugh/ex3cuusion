@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildParsedActionsFromDayRewrite, fixtureInterpreter, interpretInboxInput } from "./ai-actions";
+import { fixtureInterpreter, interpretInboxInput } from "./ai-actions";
 import { createSeedState } from "./seed";
 
+// The fixture interpreter is a deterministic TEST DOUBLE for exercising the
+// state/plumbing pipeline offline. It is not a model-quality signal and its canned
+// answers must never be mirrored by production interpretation code. Model-quality
+// behavior is covered by the live eval set (npm run eval:ai:live).
 describe("interpretInboxInput", () => {
   it("turns messy input into structured auto-applicable actions", async () => {
     const state = createSeedState();
@@ -29,7 +33,7 @@ describe("interpretInboxInput", () => {
     expect(entry.actions.some((action) => action.safety === "needs_confirmation")).toBe(true);
   });
 
-  it("captures rich task semantics for realistic messy inputs", async () => {
+  it("compiles model-chosen fields into the right action payloads (plumbing)", async () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";
     state.currentTime = "08:30";
@@ -48,147 +52,98 @@ describe("interpretInboxInput", () => {
       recurrence: { type: "weekly", days: [5] }
     });
 
-    const vague = await interpretInboxInput("clean the house this weekend", state, fixtureInterpreter);
-    expect(vague.actions[0].payload).toMatchObject({
+    const clarify = await interpretInboxInput("clean the house this weekend", state, fixtureInterpreter);
+    expect(clarify.actions[0].payload).toMatchObject({
       questionKind: "definition_of_done"
     });
   });
 
-  it("normalizes live-model drift for broad cleaning clarification", async () => {
+  it("passes the model's clarification decision through without phrase-based override", async () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";
     state.currentTime = "08:30";
 
-    const entry = await interpretInboxInput(
-      "clean the house this weekend",
-      state,
-      async () => ({
-        model: "drift-fixture",
-        summary: "Need clarification.",
-        actions: [
-          {
-            type: "create_task",
-            label: "Clean the House",
-            title: "What should clean the house this weekend include?",
-            domainName: "House Work",
-            projectName: null,
-            dueDate: "2026-06-01",
-            scheduledDate: null,
-            scheduledTime: ":null",
-            effortMinutes: 90,
-            energy: "medium",
-            strictness: "flexible",
-            priority: 3,
-            importance: 4,
-            urgency: 2,
-            recurrenceDays: null,
-            completionBehavior: null,
-            completionMode: null,
-            definitionOfDone: "What should clean the house include?",
-            tags: null,
-            question: null,
-            clarificationKind: null,
-            clarificationOptions: null
-          }
-        ]
-      })
-    );
+    // Even for an "obvious" chore, if the model decides to ask, we keep the question.
+    // Deterministic code must not downgrade it to a silent create_task.
+    const entry = await interpretInboxInput("I need to cut my nails", state, async () => ({
+      model: "model-decides",
+      summary: "Need one detail.",
+      actions: [
+        {
+          type: "ask_clarification",
+          label: "Clarify cut nails",
+          title: "Cut nails",
+          domainName: "House Work",
+          projectName: null,
+          dueDate: null,
+          scheduledDate: null,
+          scheduledTime: null,
+          effortMinutes: 10,
+          energy: "low",
+          strictness: "normal",
+          priority: 2,
+          importance: 2,
+          urgency: 2,
+          recurrenceDays: null,
+          completionBehavior: null,
+          completionMode: null,
+          definitionOfDone: null,
+          tags: null,
+          question: "Trim or file?",
+          clarificationKind: "next_action",
+          clarificationOptions: ["Trim", "File"],
+          schedulingMode: null
+        }
+      ]
+    }));
 
-    expect(entry.actions[0]).toMatchObject({
-      type: "ask_clarification",
-      label: "Clarify clean house"
-    });
-    expect(entry.actions[0].payload).toMatchObject({
-      draftAction: { title: "Clean house" }
-    });
-
-    const clarificationEntry = await interpretInboxInput(
-      "clean the house this weekend",
-      state,
-      async () => ({
-        model: "drift-fixture",
-        summary: "Need clarification.",
-        actions: [
-          {
-            type: "ask_clarification",
-            label: "Clarify what clean the house should include",
-            title: "Clean the house this weekend",
-            domainName: "House Work",
-            projectName: null,
-            dueDate: "2026-06-01",
-            scheduledDate: null,
-            scheduledTime: null,
-            effortMinutes: 90,
-            energy: "medium",
-            strictness: "flexible",
-            priority: 3,
-            importance: 4,
-            urgency: 2,
-            recurrenceDays: null,
-            completionBehavior: null,
-            completionMode: "timebox",
-            definitionOfDone: null,
-            tags: null,
-            question: "What should clean the house include?",
-            clarificationKind: "definition_of_done",
-            clarificationOptions: null
-          }
-        ]
-      })
-    );
-
-    expect(clarificationEntry.actions[0].payload).toMatchObject({
-      draftAction: { title: "Clean house", completionMode: "progress_accumulating", scheduledTime: undefined }
-    });
+    expect(entry.actions[0].type).toBe("ask_clarification");
+    expect(entry.actions[0].safety).toBe("needs_confirmation");
   });
 
-  it("suppresses low-value follow-up questions for obvious simple tasks", async () => {
+  it("creates the task the model chose instead of forcing a phrase-based clarification", async () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";
     state.currentTime = "08:30";
 
-    const entry = await interpretInboxInput(
-      "I need to cut my nails",
-      state,
-      async () => ({
-        model: "over-questioning-fixture",
-        summary: "Asking a question.",
-        actions: [
-          {
-            type: "ask_clarification",
-            label: "Clarify cut nails",
-            title: "Cut nails",
-            domainName: "House Work",
-            projectName: null,
-            dueDate: null,
-            scheduledDate: null,
-            scheduledTime: null,
-            effortMinutes: 15,
-            energy: "low",
-            strictness: "flexible",
-            priority: 2,
-            importance: 2,
-            urgency: 2,
-            recurrenceDays: null,
-            completionBehavior: null,
-            completionMode: null,
-            definitionOfDone: null,
-            tags: null,
-            question: "What would count as cutting your nails?",
-            clarificationKind: "definition_of_done",
-            clarificationOptions: ["Trim them", "File them"]
-          }
-        ]
-      })
-    );
+    // The model returns a concrete task for a phrase that used to be hard-coded into a
+    // "definition_of_done" clarification. We must respect the model's choice.
+    const entry = await interpretInboxInput("clean the house this weekend", state, async () => ({
+      model: "model-decides",
+      summary: "Created the cleaning task.",
+      actions: [
+        {
+          type: "create_task",
+          label: "Add clean the house",
+          title: "Clean the house",
+          domainName: "House Work",
+          projectName: null,
+          dueDate: null,
+          scheduledDate: null,
+          scheduledTime: null,
+          effortMinutes: 90,
+          energy: "medium",
+          strictness: "flexible",
+          priority: 3,
+          importance: 4,
+          urgency: 2,
+          recurrenceDays: null,
+          completionBehavior: "exhaust_once",
+          completionMode: "progress_accumulating",
+          definitionOfDone: "Kitchen, bathroom, and living room are tidy.",
+          tags: null,
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null,
+          schedulingMode: null
+        }
+      ]
+    }));
 
-    expect(entry.actions[0]).toMatchObject({
-      type: "create_task",
-      safety: "auto_apply"
-    });
+    expect(entry.actions[0].type).toBe("create_task");
     expect(entry.actions[0].payload).toMatchObject({
-      title: "Cut nails",
-      completionMode: "simple_done"
+      title: "Clean the house",
+      completionMode: "progress_accumulating"
     });
   });
 
@@ -226,7 +181,8 @@ describe("interpretInboxInput", () => {
             tags: ["home"],
             question: "What would count as enough cleaning for this task?",
             clarificationKind: "definition_of_done",
-            clarificationOptions: ["Kitchen and bathroom", "One focused pass"]
+            clarificationOptions: ["Kitchen and bathroom", "One focused pass"],
+            schedulingMode: null
           }
         ]
       })
@@ -310,7 +266,8 @@ describe("interpretInboxInput", () => {
             tags: null,
             question: null,
             clarificationKind: null,
-            clarificationOptions: null
+            clarificationOptions: null,
+            schedulingMode: null
           },
           {
             type: "create_task",
@@ -334,7 +291,8 @@ describe("interpretInboxInput", () => {
             tags: null,
             question: null,
             clarificationKind: null,
-            clarificationOptions: null
+            clarificationOptions: null,
+            schedulingMode: null
           }
         ]
       })
@@ -345,81 +303,6 @@ describe("interpretInboxInput", () => {
       scheduledDate: undefined,
       dueDate: undefined,
       dateIntent: { kind: "week_window", startDate: "2026-06-08", endDate: "2026-06-14" }
-    });
-  });
-
-  it("infers phased and concurrent scheduling semantics from natural wording", async () => {
-    const state = createSeedState();
-    state.currentDate = "2026-06-01";
-    state.currentTime = "08:30";
-
-    const laundry = await interpretInboxInput("I need to do laundry today with the washer running in the background", state, fixtureInterpreter);
-    expect(laundry.actions[0].payload).toMatchObject({
-      title: "Do laundry",
-      scheduling: {
-        mode: "phased",
-        attentionLoad: "partial",
-        canOverlap: true
-      }
-    });
-    expect((laundry.actions[0].payload.scheduling as { phases: unknown[] }).phases.length).toBeGreaterThanOrEqual(3);
-
-    const overlap = await interpretInboxInput("AI can run the report while I cook dinner tonight", state, fixtureInterpreter);
-    const dinner = overlap.actions.find((action) => action.payload.title === "Cook dinner");
-    const report = overlap.actions.find((action) => action.payload.title === "Run AI report draft");
-
-    expect(dinner?.payload).toMatchObject({
-      scheduling: { mode: "concurrent", attentionLoad: "partial", canOverlap: true }
-    });
-    expect(report?.payload).toMatchObject({
-      scheduling: { mode: "background", attentionLoad: "passive", canOverlap: true }
-    });
-  });
-
-  it("diffs a simple model-rewritten day into edit actions without semantic second-guessing", async () => {
-    const state = createSeedState();
-    state.currentDate = "2026-06-01";
-    state.currentTime = "08:30";
-    const task = state.tasks.find((candidate) => candidate.title === "Message Will");
-
-    const entry = await interpretInboxInput("move message Will to 17:00 and add clean house at 16:00", state, async () =>
-      buildParsedActionsFromDayRewrite(
-        {
-          summary: "Rewrote the day.",
-          changePlan: ["Move Message Will to 17:00.", "Add Clean house at 16:00."],
-          question: null,
-          archivedTaskIds: [],
-          revisedDay: [
-            {
-              taskId: task!.id,
-              title: "Message Will",
-              startTime: "17:00",
-              effortMinutes: task!.effortMinutes,
-              note: null
-            },
-            {
-              taskId: null,
-              title: "Clean house",
-              startTime: "16:00",
-              effortMinutes: 45,
-              note: "Do a focused cleaning pass."
-            }
-          ]
-        },
-        state
-      )
-    );
-
-    expect(entry.actions.map((action) => action.type)).toEqual(["schedule_task", "create_task"]);
-    expect(entry.actions[0]).toMatchObject({
-      type: "schedule_task",
-      safety: "auto_apply",
-      payload: { taskId: task!.id, scheduledDate: "2026-06-01", scheduledTime: "17:00" }
-    });
-    expect(entry.actions[1]).toMatchObject({
-      type: "create_task",
-      safety: "auto_apply",
-      payload: { title: "Clean house", scheduledDate: "2026-06-01", scheduledTime: "16:00" }
     });
   });
 

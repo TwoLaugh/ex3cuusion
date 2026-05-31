@@ -15,6 +15,8 @@
     "release:check": "npm run check:env && npx tsc --noEmit && npm run test && npm run eval:ai && npm run test:e2e && npm run build",
     "eval:ai": "node scripts/run-ai-evals.mjs",
     "eval:ai:live": "node scripts/run-ai-evals.mjs --live",
+    "eval:quality": "node scripts/run-ai-quality.mjs",
+    "eval:quality:heldout": "node scripts/run-ai-quality.mjs --heldout",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "node scripts/run-pg-migrations.mjs",

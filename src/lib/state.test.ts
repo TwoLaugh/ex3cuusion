@@ -430,7 +430,8 @@ describe("state integration", () => {
           tags: ["personal"],
           question: null,
           clarificationKind: null,
-          clarificationOptions: null
+          clarificationOptions: null,
+          schedulingMode: null
         }
       ]
     }));
@@ -472,7 +473,8 @@ describe("state integration", () => {
           tags: ["personal"],
           question: null,
           clarificationKind: null,
-          clarificationOptions: null
+          clarificationOptions: null,
+          schedulingMode: null
         }
       ]
     }));
@@ -522,7 +524,8 @@ describe("state integration", () => {
           tags: ["duplicate"],
           question: null,
           clarificationKind: null,
-          clarificationOptions: null
+          clarificationOptions: null,
+          schedulingMode: null
         }
       ]
     }));
@@ -565,7 +568,8 @@ describe("state integration", () => {
           tags: ["errand"],
           question: null,
           clarificationKind: null,
-          clarificationOptions: null
+          clarificationOptions: null,
+          schedulingMode: null
         }
       ]
     }));

@@ -129,7 +129,7 @@ function staticScenarios() {
       ],
       expects: [
         pendingQuestionKind("definition_of_done"),
-        latestDraftTitle("Clean house")
+        latestDraftTitleMatches(/clean/i)
       ]
     },
     {
@@ -154,7 +154,7 @@ function staticScenarios() {
       ],
       expects: [
         pendingQuestionKind("completion_behavior"),
-        latestDraftTitle("Ideas for things to do with Emma")
+        latestDraftTitleMatches(/emma/i)
       ]
     },
     {
@@ -165,21 +165,22 @@ function staticScenarios() {
         inbox("message Will every Friday")
       ],
       expects: [
-        routineExists(/message will/i),
-        routineHasWeeklyDay(/message will/i, 5)
+        routineExists(/will/i),
+        routineHasWeeklyDay(/will/i, 5)
       ]
     },
     {
       phase: "static",
-      name: "background AI side-work preserves overlap semantics",
+      name: "do-X-while-Y splits into overlapping tasks",
       steps: [
         setTime("2026-06-01", "18:00"),
         inbox("AI can run the report while I cook dinner tonight")
       ],
       expects: [
-        taskNestedField("Cook dinner", ["scheduling", "mode"], "concurrent"),
-        taskNestedField("Run AI report draft", ["scheduling", "mode"], "background"),
-        taskNestedField("Run AI report draft", ["scheduling", "attentionLoad"], "passive")
+        // Behavior-focused, title-agnostic: the model should split "do X while Y" into two
+        // tasks and tag overlap via the model-owned schedulingMode field.
+        anyTaskWithSchedulingMode("concurrent"),
+        anyTaskWithSchedulingMode("background")
       ]
     }
   ];
@@ -251,7 +252,10 @@ function clarificationPolicyScenarios() {
         inbox("ideas for things to do with Emma")
       ],
       expects: [
-        pendingQuestionKind("completion_behavior"),
+        // Accept either kind: "keep as a reusable suggestion list" is legitimately framed as
+        // a completion_behavior question OR a container_kind question. The behavior is what
+        // matters (ask, optionally, how to store a reusable idea), not the label.
+        either([pendingQuestionKind("completion_behavior"), pendingQuestionKind("container_kind")]),
         questionMateriality("medium"),
         clarificationDecision("optional")
       ]
@@ -417,7 +421,11 @@ async function runScenario(scenario) {
     }
   }
   const debug = await getDebug();
-  const failures = scenario.expects.flatMap((expectation) => expectation(debug));
+  // Fixture (non-live) mode is a SMOKE TEST only: it proves the inbox pipeline runs and
+  // applies/queues every action without error. It deliberately does NOT assert semantic
+  // outcomes, because the fixture's canned answers would just be grading themselves.
+  // Model-quality scenarios (scenario.expects) are asserted only against the live model.
+  const failures = live ? scenario.expects.flatMap((expectation) => expectation(debug)) : smokeFailures(debug);
   return {
     phase: scenario.phase,
     name: scenario.name,
@@ -454,6 +462,13 @@ function taskField(title, field, value) {
     if (!task) return [`Expected task ${matcherLabel(title)} to exist for ${field}.`];
     return task[field] === value ? [] : [`Expected ${matcherLabel(title)} ${field}=${JSON.stringify(value)}, got ${JSON.stringify(task[field])}.`];
   };
+}
+
+function anyTaskWithSchedulingMode(mode) {
+  return (debug) =>
+    debug.tasks.some((task) => task.status !== "archived" && task.scheduling?.mode === mode)
+      ? []
+      : [`Expected a task with scheduling.mode "${mode}".`];
 }
 
 function taskNestedField(title, path, value) {
@@ -505,6 +520,16 @@ function latestDraftTitle(title) {
     const action = debug.inbox[0]?.actions[0];
     const draftTitle = action?.payload?.draftAction?.title;
     return draftTitle === title ? [] : [`Expected latest draft title "${title}", got ${JSON.stringify(draftTitle)}.`];
+  };
+}
+
+// Behavior-based title check. Assertions should verify the model captured the right thing,
+// not that it phrased the title with an exact string — exact-title asserts were part of the
+// old teaching-to-the-test (they only passed because the prompt dictated the title verbatim).
+function latestDraftTitleMatches(pattern) {
+  return (debug) => {
+    const draftTitle = debug.inbox[0]?.actions[0]?.payload?.draftAction?.title;
+    return draftTitle && pattern.test(draftTitle) ? [] : [`Expected latest draft title to match ${pattern}, got ${JSON.stringify(draftTitle)}.`];
   };
 }
 
@@ -615,7 +640,21 @@ function summarize(debug) {
   };
 }
 
+function smokeFailures(debug) {
+  const actions = (debug.inbox ?? []).flatMap((entry) => entry.actions ?? []);
+  const failed = actions.filter((action) => action.status === "failed");
+  if (failed.length) {
+    return [`Pipeline produced ${failed.length} failed action(s): ${failed.map((action) => `${action.type} (${action.skippedReason ?? "no reason"})`).join("; ")}`];
+  }
+  return [];
+}
+
 function printReport(results) {
+  console.log(
+    live
+      ? "\n=== AI evals: LIVE model quality run ==="
+      : "\n=== AI evals: FIXTURE SMOKE run (plumbing only — NOT a model-quality signal; run `npm run eval:ai:live` for quality) ==="
+  );
   const grouped = new Map();
   for (const result of results) {
     grouped.set(result.phase, [...(grouped.get(result.phase) ?? []), result]);

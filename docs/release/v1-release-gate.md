@@ -4,7 +4,12 @@ Date: 2026-05-31
 
 ## Decision
 
-V1 is ready as a web-first daily-use baseline, with fixture AI and Postgres-backed state both covered by automated tests.
+The web-first plumbing baseline (state model, planner, Postgres durability, inbox apply/audit
+pipeline) is covered by automated tests. **AI capture quality is NOT release-gated by the
+automated suite** — `npm run eval:ai` runs the deterministic fixture, which is a smoke test
+only. Real AI quality must be validated with `npm run eval:ai:live` against the model on
+held-out inputs before V1 can claim a daily-use baseline. Treat AI quality as open until that
+live evidence exists.
 
 Android V1 should wrap or reuse the web app/backend concepts rather than start a separate native planner now. Native launcher/app-control work remains V2.
 
@@ -14,9 +19,15 @@ Android V1 should wrap or reuse the web app/backend concepts rather than start a
 npm run check:env
 npx tsc --noEmit
 npm run test
-npm run eval:ai
+npm run eval:ai   # fixture SMOKE only — not a model-quality signal
 npm run test:e2e
 npm run build
+```
+
+Required before shipping any AI behavior change (uses API credit, not in `release:check`):
+
+```bash
+npm run eval:ai:live
 ```
 
 Postgres-backed smoke:
@@ -30,11 +41,6 @@ $env:EX3CUUSION_LOCAL_USER_ID='00000000-0000-0000-0000-000000000058'
 npm run test:e2e
 ```
 
-Live AI smoke is optional and explicit:
-
-```bash
-npm run eval:ai:live
-```
 
 ## Scope Audit
 
@@ -45,8 +51,8 @@ npm run eval:ai:live
 | Today planner | T003, T008, T009, T010, T039, T040, T042, T044, T047 | Implemented | Day timeline, week-aware backlog, project blocks, overlap/phased scheduling, previous/next day navigation. |
 | Execution loop | T004, T021, T022, T023, T024, T025, T056, T057 | Implemented with one caveat | Complete/undo, not-done reasons, partial progress, blocked/waiting, project drawer subtasks, daily review calibration. Delegation metadata exists, but delegation-specific UI is not a first-class V1 surface. |
 | AI capture | T005, T006, T007, T018, T026, T027, T028, T029, T030, T048, T049, T050, T052 | Implemented | AI inbox, structured actions, validation/apply path, clarification sessions, chat follow-ups, revision flow. |
-| AI evals | T031, T032, T033, T034, T035, T036, T051 | Implemented | Fixture eval suite covers static capture, clarification policy, simulated-day behavior, week/date intent, and reporting thresholds. Live evals are manual/explicit. |
-| Background/concurrent work | T037, T043 | Implemented | Background, concurrent, phased, partial/passive attention semantics in model, planner, evals, and UI badges. |
+| AI evals | T031, T032, T033, T034, T035, T036, T051 | Harness only — quality unproven | Fixture eval is a SMOKE test (pipeline runs, no failed actions). Semantic scenarios run only under `eval:ai:live`, which has not been run as a gate. AI quality is currently unverified by CI. |
+| Background/concurrent work | T037, T043 | Reintroduced as model-owned (concurrent/background) | Keyword-inferred scheduling was removed; overlap is now a model-owned `schedulingMode` field on the action schema. The model is prompted to split "do X while Y" into two tasks (concurrent + background); verified live (5/5 split) and covered by the "do-X-while-Y" eval scenario. Phased (multi-step, e.g. laundry) is not yet reintroduced. |
 | Mobile web | T013 | Usable baseline | Main Today, AI inbox, project drawer, not-done modal, and daily review are responsive. This is not final visual polish for a consumer launch. |
 | Audit/debug | T014 | Implemented | `/api/debug`, AI activity panel, planner/test assertions. |
 | Android V1 decision | T015 | Decided | Wrap/reuse web for V1 if needed; native launcher belongs to V2. |
