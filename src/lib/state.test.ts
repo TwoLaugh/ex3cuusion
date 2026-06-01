@@ -42,6 +42,48 @@ describe("state integration", () => {
     expect(plan.items.some((item) => item.title === "Message Will")).toBe(true);
   });
 
+  it("groups multiple related tasks under a work block created in the same message (T062)", async () => {
+    const base = {
+      targetTaskId: null,
+      domainName: "Job Work",
+      projectName: null as string | null,
+      dueDate: null,
+      scheduledDate: null,
+      scheduledTime: null,
+      effortMinutes: 30,
+      energy: "medium" as const,
+      strictness: "normal" as const,
+      priority: 3,
+      importance: 3,
+      urgency: 3,
+      recurrenceDays: null,
+      completionBehavior: null,
+      completionMode: null,
+      definitionOfDone: null,
+      tags: null,
+      question: null,
+      clarificationKind: null,
+      clarificationOptions: null,
+      schedulingMode: null
+    };
+    const after = await submitInbox("launch prep: write copy, design banner", async () => ({
+      model: "grouping-fixture",
+      summary: "Grouped under Launch Prep.",
+      actions: [
+        { ...base, type: "create_project" as const, label: "Create Launch Prep", title: "Launch Prep" },
+        { ...base, type: "create_task" as const, label: "Add Write copy", title: "Write copy", projectName: "Launch Prep" },
+        { ...base, type: "create_task" as const, label: "Add Design banner", title: "Design banner", projectName: "Launch Prep" }
+      ]
+    }));
+
+    const project = after.projects.find((candidate) => candidate.name === "Launch Prep");
+    expect(project).toBeDefined();
+    const copy = after.tasks.find((task) => task.title === "Write copy");
+    const banner = after.tasks.find((task) => task.title === "Design banner");
+    expect(copy?.projectId).toBe(project!.id);
+    expect(banner?.projectId).toBe(project!.id);
+  });
+
   it("records AI changes and undoes them (auto-apply with undo)", async () => {
     const before = getState();
     const beforeTaskCount = before.tasks.length;

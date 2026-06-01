@@ -17,6 +17,15 @@ export const devScenarios = [
     minPassRate: 0.6
   },
   {
+    id: "multi-task-grouping",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "for the Q3 launch: draft the announcement, line up the email sequence, and brief the design team",
+    rubric:
+      "Several tasks that clearly belong to one piece of work (a launch). GOOD: group them under a single project/work-block — a create_project (or an existing project) — with the individual tasks attached to that project (their projectId set), not unrelated flat tasks. Acceptable to also schedule a block. BAD: flat tasks with no shared project, or merging everything into one task.",
+    minPassRate: 0.6
+  },
+  {
     id: "obvious-simple",
     date: "2026-06-01",
     time: "08:30",

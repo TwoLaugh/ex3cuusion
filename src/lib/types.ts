@@ -359,6 +359,9 @@ export interface AiAction {
   captureSessionId?: string;
   sourceMessageId?: string;
   pendingQuestionId?: string;
+  // Intended project/work-block name for a create_task whose project may be created in the same
+  // batch (T062 grouping). Resolved to a real projectId at apply time, after create_project runs.
+  pendingProjectName?: string;
 }
 
 export interface InboxEntry {

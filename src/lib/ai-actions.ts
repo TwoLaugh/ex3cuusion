@@ -153,6 +153,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "For ask_clarification actions: title must be the canonical future task title, not the question text. question must contain the user-facing question. definitionOfDone must be null. " +
     "For a request to collect reusable ideas or suggestions — a list the user would draw from repeatedly rather than complete once — use ask_clarification with completionBehavior keep_as_suggestion and completionMode suggestion_used, asking whether to keep it as a reusable suggestion list. Such a list is never 'done', so do not frame it as clarificationKind definition_of_done; use completion_behavior. " +
     "For time-boxed work (wording like 'work on X for N hours/minutes'), return create_task with completionBehavior repeatable, completionMode timebox, the stated effort in minutes, and the matching existing project if one exists. " +
+    "When the user lists several tasks that clearly belong to one piece of work, project, or session, group them: return a create_project for the work block (or reuse an existing project by its exact name) and a create_task for each item with projectName set to that same work-block name — not several unrelated flat tasks. Do NOT group unrelated errands (e.g. milk, bins, call dentist); leave those as separate simple tasks. " +
     "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
     "Interpret colloquial clock times into 24-hour HH:mm (for example an evening 'half past eleven' is 23:30) unless the user clearly means another time. " +
     "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; set scheduledDate and dueDate to null and keep the date intent as a week-level window unless the user names a specific day or deadline. " +
@@ -871,6 +872,11 @@ function buildAction(
   const normalizedType = action.type;
   const status: AiAction["status"] = validationErrors.length > 0 && safety === "auto_apply" ? "failed" : "proposed";
 
+  // Capture the model's intended project name from the RAW action (normalization nulls
+  // projectName when the project does not exist yet — which is exactly the same-batch grouping
+  // case). Resolved to a projectId at apply time, after any create_project in the batch runs.
+  const pendingProjectName = normalizedType === "create_task" ? cleanNullableString(rawAction.projectName) ?? undefined : undefined;
+
   return {
     id: nextId("action"),
     type: normalizedType,
@@ -878,6 +884,7 @@ function buildAction(
     safety,
     status,
     validationErrors,
+    pendingProjectName,
     model,
     createdAt: timestampForState(state),
     payload:

@@ -657,7 +657,10 @@ export async function submitInbox(input: string, interpreter?: AiInterpreter): P
     session.actionIds.push(action.id);
   }
 
-  for (const action of entry.actions) {
+  // Apply create_project before create_task so tasks can link to a work-block created in the
+  // same message (T062 grouping). Display order (entry.actions) is preserved separately.
+  const applyOrder = [...entry.actions].sort((left, right) => applyRank(left) - applyRank(right));
+  for (const action of applyOrder) {
     applyAutoAction(state, action, input);
     recordAppliedEntity(session, action);
   }
@@ -886,6 +889,29 @@ export function rejectAiAction(actionId: string, reason?: string): AppState {
   return getState();
 }
 
+function applyRank(action: AiAction): number {
+  // create_project must run before create_task so same-batch tasks can link to it (T062).
+  return action.type === "create_project" ? 0 : 1;
+}
+
+// Resolve a create_task's intended project name to a real projectId at apply time — covers a
+// work-block created earlier in the same batch (T062 grouping).
+function linkPendingProject(state: AppState, action: AiAction, payload: Omit<Task, "id">): void {
+  if (payload.projectId || !action.pendingProjectName) return;
+  const target = action.pendingProjectName.toLowerCase();
+  const project = state.projects.find(
+    (candidate) =>
+      candidate.status !== "completed" &&
+      (candidate.name.toLowerCase() === target ||
+        candidate.name.toLowerCase().includes(target) ||
+        target.includes(candidate.name.toLowerCase()))
+  );
+  if (!project) return;
+  payload.projectId = project.id;
+  payload.type = "project_task";
+  payload.domainId = project.domainId;
+}
+
 function applyAutoAction(state: AppState, action: AiAction, sourceText?: string) {
   if (action.status === "failed") return;
   if (action.safety !== "auto_apply") {
@@ -902,6 +928,7 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
 
   if (action.type === "create_task") {
     const payload = action.payload as Omit<Task, "id">;
+    linkPendingProject(state, action, payload);
     const existing = state.tasks.find(
       (task) =>
         task.title.toLowerCase() === payload.title.toLowerCase() &&
