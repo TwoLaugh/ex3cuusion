@@ -73,7 +73,75 @@ export function getState(): AppState {
 
 export function resetState(): AppState {
   getRepository().reset();
+  clearChangeHistory();
   return getState();
+}
+
+// --- AI change history & undo (T061) -------------------------------------------------------
+// Apply model: auto-apply with undo. Before any AI operation mutates state we snapshot the
+// prior state; undo restores it. History is kept OUTSIDE AppState so it never leaks into the
+// model context or state serialization. In-memory/per-process (not persisted to Postgres yet).
+
+interface ChangeHistoryEntry {
+  id: string;
+  source: string;
+  summary: string;
+  createdAt: string;
+  snapshot: AppState;
+}
+
+const MAX_CHANGE_HISTORY = 50;
+const globalHistoryStore = globalThis as typeof globalThis & { __ex3cuusionChangeHistory?: ChangeHistoryEntry[] };
+
+function changeHistory(): ChangeHistoryEntry[] {
+  globalHistoryStore.__ex3cuusionChangeHistory ??= [];
+  return globalHistoryStore.__ex3cuusionChangeHistory;
+}
+
+function clearChangeHistory(): void {
+  globalHistoryStore.__ex3cuusionChangeHistory = [];
+}
+
+function changeTimestamp(state: AppState): string {
+  return new Date(`${state.currentDate}T${state.currentTime}:00.000Z`).toISOString();
+}
+
+// Snapshot the current state BEFORE an AI operation mutates it, so the operation is reversible.
+function recordChange(source: string, summary: string): void {
+  const state = currentState();
+  const history = changeHistory();
+  history.push({ id: nextId("history"), source, summary, createdAt: changeTimestamp(state), snapshot: structuredClone(state) });
+  while (history.length > MAX_CHANGE_HISTORY) history.shift();
+}
+
+export interface ChangeHistoryItem {
+  id: string;
+  source: string;
+  summary: string;
+  createdAt: string;
+}
+
+export function listChangeHistory(): ChangeHistoryItem[] {
+  return changeHistory()
+    .map((entry) => ({ id: entry.id, source: entry.source, summary: entry.summary, createdAt: entry.createdAt }))
+    .reverse();
+}
+
+// Restore the snapshot captured before the given change (or the most recent change), undoing it
+// and any later changes (LIFO rewind).
+export function undoChange(id?: string): AppState {
+  const history = changeHistory();
+  if (!history.length) return getState();
+  const index = id ? history.findIndex((entry) => entry.id === id) : history.length - 1;
+  if (index < 0) return getState();
+  replaceState(structuredClone(history[index].snapshot));
+  history.splice(index);
+  return getState();
+}
+
+function summarizeInbox(input: string): string {
+  const trimmed = input.trim();
+  return `Inbox: ${trimmed.length > 60 ? `${trimmed.slice(0, 57)}...` : trimmed}`;
 }
 
 export function loadRealisticCharacterScenario(): AppState {
@@ -565,6 +633,7 @@ export function recordPlanItemOutcome(input: {
 }
 
 export async function submitInbox(input: string, interpreter?: AiInterpreter): Promise<AppState> {
+  recordChange("inbox", summarizeInbox(input));
   const state = currentState();
   const entry = await interpretInboxInput(input, state, interpreter);
   const session = buildCaptureSession(state, input, entry);
@@ -612,6 +681,7 @@ export function answerCaptureQuestion(sessionId: string, questionId: string, ans
   const action = findAction(state, question.actionId);
   if (!action || action.type !== "ask_clarification") return getState();
 
+  recordChange("clarification", `Answered: ${answer.length > 50 ? `${answer.slice(0, 47)}...` : answer}`);
   question.status = "answered";
   question.answer = answer;
   question.answeredAt = timestampForState(state);
@@ -651,6 +721,7 @@ export async function addCaptureSessionMessage(sessionId: string, message: strin
   const trimmed = message.trim();
   if (!session || !trimmed || session.status === "dismissed") return getState();
 
+  recordChange("capture", `Capture follow-up: ${trimmed.length > 50 ? `${trimmed.slice(0, 47)}...` : trimmed}`);
   session.messages.push({
     id: nextId("message"),
     role: "user",

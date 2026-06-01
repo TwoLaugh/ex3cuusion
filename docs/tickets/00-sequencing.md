@@ -97,3 +97,29 @@ Tickets: T053, T054, T055, T056, T057, T058.
 
 Outcome: the web-first V1 has durable storage, manual correction paths, project block execution, planner learning, and release hygiene.
 
+### M6: Multi-Altitude AI Organizer (day -> week -> backlog)
+
+Goal: move the AI from a day-level command interpreter to a multi-altitude organizer that
+structures work on capture, plans and rebalances full weeks, grooms a durable backlog, and keeps
+the system organized over time.
+
+Apply model: **auto-apply with undo** (decided). Larger reorganizations are applied immediately
+but are fully reversible (T061), rather than gated behind confirm-before-apply.
+
+Execution order:
+
+1. T060 - Live current time (foundation; unblocks correct day/week reasoning)
+2. T061 - AI change history and undo (foundation; prerequisite for auto-applied reorgs)
+3. T062 - Multi-task capture to work-block grouping
+4. T063 - Week-level planning actions
+5. T064 - Backlog grooming actions
+6. T065 - Week + backlog reasoning altitude (ties the new actions into the one interpreter)
+7. T066 - Proactive structure / hygiene organizer (extends T020)
+8. T067 - Week & backlog quality evals (continuous; each feature lands with its rubric scenarios)
+
+Dependencies: T061 precedes T063, T064, and T066. T065 follows T063 and T064. T067 runs
+alongside -- every feature ticket adds its quality scenarios as it lands.
+
+Outcome: the AI structures work on capture, plans full weeks, grooms the backlog, and keeps the
+system organized -- every change reversible, every behavior measured by the quality harness.
+

@@ -1528,3 +1528,47 @@ textarea {
     width: 30px;
   }
 }
+
+/* T061: recent AI changes / undo strip */
+.changeHistory {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid var(--border, #2a2a2a);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.changeHistoryTitle {
+  font-weight: 600;
+  opacity: 0.7;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.changeRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.changeSummary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.undoButton {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #2a2a2a);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+}
+.undoButton:hover {
+  background: rgba(127, 127, 127, 0.15);
+}

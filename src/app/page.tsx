@@ -31,11 +31,45 @@ export default function Home() {
   const [clarificationDrafts, setClarificationDrafts] = useState<Record<string, string>>({});
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [todayIndex, setTodayIndex] = useState<number | null>(null);
+  const [history, setHistory] = useState<{ id: string; source: string; summary: string; createdAt: string }[]>([]);
 
   async function refresh() {
     const response = await fetch("/api/state", { cache: "no-store" });
     setPayload(await response.json());
   }
+
+  // Anchor the app to the user's real local time on load. Manual day navigation (prev/next)
+  // still works afterwards; we deliberately do not auto-tick, so navigating away from today is
+  // not yanked back. (A guarded live-tick while viewing today is a follow-up.)
+  async function syncClock() {
+    const { date, time } = localNowParts();
+    await post("/api/time", { date, time });
+  }
+
+  // Undo an AI change (auto-apply-with-undo, T061). post() updates the plan/state; the
+  // [payload] effect below refreshes the change list.
+  async function undoChange(id: string) {
+    try {
+      await post("/api/history", { id });
+    } catch {
+      // ignore — list refresh will reflect actual state
+    }
+  }
+
+  // Keep the recent-AI-changes list in sync after any state change.
+  useEffect(() => {
+    if (!payload) return;
+    let active = true;
+    fetch("/api/history")
+      .then((response) => (response.ok ? response.json() : { history: [] }))
+      .then((data) => {
+        if (active) setHistory(data.history ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [payload]);
 
   async function post(url: string, body: Record<string, unknown> = {}) {
     const response = await fetch(url, {
@@ -51,7 +85,9 @@ export default function Home() {
   }
 
   useEffect(() => {
-    refresh();
+    syncClock().catch(() => {
+      void refresh();
+    });
     setTodayIndex(systemWeekdayIndex());
   }, []);
 
@@ -397,6 +433,19 @@ export default function Home() {
               <p className="errorMessage" role="alert">
                 {inboxError}
               </p>
+            )}
+            {history.length > 0 && (
+              <div className="changeHistory">
+                <span className="changeHistoryTitle">Recent AI changes</span>
+                {history.slice(0, 5).map((change) => (
+                  <div key={change.id} className="changeRow">
+                    <span className="changeSummary">{change.summary}</span>
+                    <button className="undoButton" onClick={() => undoChange(change.id)} aria-label={`Undo ${change.summary}`}>
+                      Undo
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
             <div className="inboxLog">
               {state.inbox.map((entry, index) => (
@@ -1589,6 +1638,18 @@ function weekDots(dateOnly: string, todayIndex: number | null) {
 function systemWeekdayIndex() {
   const jsDay = new Date().getDay();
   return (jsDay + 6) % 7;
+}
+
+// Real local wall-clock now, as the app's date/time format. Used to anchor the app to the
+// user's actual current time on load (the in-memory state would otherwise stay frozen at
+// whatever time the server process first created it).
+function localNowParts() {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return {
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`
+  };
 }
 
 function labelForSection(section: PlanItem["section"]): string {
