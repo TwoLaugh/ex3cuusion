@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
-import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { Dispatch, DragEvent, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 
@@ -35,6 +35,27 @@ export default function Home() {
   // True while the view should track real "today" (T068). Manual day navigation turns it off so
   // the live tick does not yank the user back; the "Today" control turns it back on.
   const followingTodayRef = useRef(true);
+  const dragItemRef = useRef<PlanItem | null>(null);
+
+  // Drag a timeline block to a new time (T081): map the drop Y to a 15-min slot and reschedule via
+  // the same structure mutation the Move dialog uses.
+  function rescheduleByDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const item = dragItemRef.current;
+    dragItemRef.current = null;
+    if (!item?.taskId || !plan || !timeline) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const raw = timeline.startMinutes + (event.clientY - rect.top) / pixelsPerMinute;
+    const snapped = Math.max(0, Math.min(24 * 60 - 5, Math.round(raw / 15) * 15));
+    const hh = String(Math.floor(snapped / 60)).padStart(2, "0");
+    const mm = String(snapped % 60).padStart(2, "0");
+    void post("/api/structure", {
+      entity: "task",
+      action: "update",
+      id: item.taskId,
+      patch: { scheduledDate: plan.date, scheduledTime: `${hh}:${mm}` }
+    });
+  }
 
   async function refresh() {
     const response = await fetch("/api/state", { cache: "no-store" });
@@ -344,7 +365,12 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <div className="calendarGrid" style={{ height: timeline?.height }}>
+          <div
+            className="calendarGrid"
+            style={{ height: timeline?.height }}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={rescheduleByDrop}
+          >
             {timeline?.hours.map((hour) => <div className="hourLine" key={hour.time} style={{ top: hour.top }} />)}
             {timeline?.items.map(({ item, top, height, left, width, laneCount }) => (
               <article
@@ -355,6 +381,10 @@ export default function Home() {
                 }`}
                 key={item.id}
                 data-testid={`plan-item-${item.title}`}
+                draggable={Boolean(item.taskId)}
+                onDragStart={() => {
+                  dragItemRef.current = item;
+                }}
                 style={{ top, height, left: `${left}%`, width: `${width}%` }}
               >
                 <div className="blockContent">
@@ -1735,6 +1765,7 @@ function buildTimeline(items: PlanItem[], currentTime?: string) {
   return {
     height,
     hours,
+    startMinutes,
     unscheduled,
     items: scheduledWithLanes.map(({ item, lane, laneCount }) => {
       const itemStart = absoluteStartMinutes(item, currentTime);

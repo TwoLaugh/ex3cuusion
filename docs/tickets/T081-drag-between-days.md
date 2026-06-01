@@ -1,6 +1,14 @@
 # T081: Drag-Between-Days (Week / Timeline)
 
-Status: planned (UI polish).
+Status: implemented (Today timeline; week-grid drag still a follow-up).
+
+## Implementation
+
+- Today timeline blocks are draggable; dropping on the calendar grid maps the drop Y to a 15-min
+  slot and reschedules the task via the same /api/structure mutation the Move dialog uses
+  (timeline now exposes startMinutes). Drag gesture needs browser confirmation; the reschedule
+  call path is already verified.
+- Follow-up: drag a task between DAYS on the week view (this covered the Today timeline).
 
 ## Goal
 
