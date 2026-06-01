@@ -344,17 +344,10 @@ function reconcileFoldersFromLegacy(state: AppState): void {
     }
   }
 
-  // Block selections: the planner reads/writes projectBlockSelections; mirror them onto the canonical
-  // folderBlockSelections (projectId -> folderId, same ids) so block-selection edits (including
-  // clearing them on regenerate) survive the re-derivation below.
-  if (state.projectBlockSelections !== undefined) {
-    state.folderBlockSelections = state.projectBlockSelections.map((selection) => ({
-      date: selection.date,
-      folderId: selection.projectId,
-      selectedTaskIds: selection.selectedTaskIds,
-      updatedAt: selection.updatedAt
-    }));
-  }
+  // Block selections (T088 2c-A): folderBlockSelections is now canonical (the planner/state
+  // block-selection path reads/writes it). projectBlockSelections is derived FROM it at the end of
+  // deriveStructureFromFolders for back-compat; we no longer mirror the legacy field back onto it
+  // here (that would clobber folder-block edits on the next read).
 
   // Task placement: projectId ?? domainId is the legacy signal. When it points at an existing folder
   // and disagrees with folderId, the task was moved via legacy fields, so retarget folderId. (The

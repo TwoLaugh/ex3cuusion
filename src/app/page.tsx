@@ -152,13 +152,18 @@ export default function Home() {
       .map((taskId) => state.tasks.find((task) => task.id === taskId))
       .filter((task): task is AppState["tasks"][number] => Boolean(task));
   }, [state, selected]);
-  const selectedProject = selected?.projectId ? state?.projects.find((project) => project.id === selected.projectId) : undefined;
+  const selectedFolder = selected?.folderId ? state?.folders?.find((folder) => folder.id === selected.folderId) : undefined;
   const selectedTask = selected?.taskId ? state?.tasks.find((task) => task.id === selected.taskId) : undefined;
   const selectedBacklog = useMemo(() => {
-    if (!state || !selected?.projectId) return [];
+    if (!state || !selected?.folderId) return [];
     const selectedIds = new Set(selected.selectedTaskIds ?? []);
     return state.tasks
-      .filter((task) => task.projectId === selected.projectId && !selectedIds.has(task.id) && !["archived", "blocked", "waiting"].includes(task.status))
+      .filter(
+        (task) =>
+          clientBlockFolderId(state, task) === selected.folderId &&
+          !selectedIds.has(task.id) &&
+          !["archived", "blocked", "waiting"].includes(task.status)
+      )
       .sort((a, b) => b.priority + b.importance + b.urgency - (a.priority + a.importance + a.urgency));
   }, [state, selected]);
   const timeline = useMemo(() => (plan ? buildTimeline(plan.items, state?.currentTime) : null), [plan, state?.currentTime]);
@@ -422,24 +427,24 @@ export default function Home() {
         ))}
       </section>
 
-      {selected && selected.type === "project_block" && (
-        <div className="drawer" role="dialog" aria-label={`${selected.title} project drawer`}>
-          <button className="iconButton closeButton" onClick={() => setSelected(null)} aria-label="Close project drawer">
+      {selected && selected.type === "folder_block" && (
+        <div className="drawer" role="dialog" aria-label={`${selected.title} folder drawer`}>
+          <button className="iconButton closeButton" onClick={() => setSelected(null)} aria-label="Close folder drawer">
             <X size={18} />
           </button>
-          <p className="eyebrow">Project block</p>
+          <p className="eyebrow">Focus block</p>
           <h2>{selected.title}</h2>
           <p className="drawerNote">{selected.reason}</p>
-          {selectedProject && (
+          {selectedFolder && (
             <div className="drawerStats">
-              <span>{selectedProject.defaultBlockMinutes}m block</span>
+              <span>{selectedFolder.defaultBlockMinutes ?? 30}m block</span>
               <span>
                 {selectedTasks.filter((task) => isTaskCompletedToday(task, state.currentDate)).length}/{selectedTasks.length} selected done
               </span>
             </div>
           )}
           <div className="drawerActions">
-            <button onClick={() => post("/api/project-block-selection", { planItemId: selected.id, action: "regenerate" })}>
+            <button onClick={() => post("/api/folder-block-selection", { planItemId: selected.id, action: "regenerate" })}>
               Regenerate selection
             </button>
           </div>
@@ -465,7 +470,7 @@ export default function Home() {
                   </div>
                   <button
                     className="subtaskRemove"
-                    onClick={() => post("/api/project-block-selection", { planItemId: selected.id, action: "remove", taskId: task.id })}
+                    onClick={() => post("/api/folder-block-selection", { planItemId: selected.id, action: "remove", taskId: task.id })}
                     aria-label={`Remove ${task.title} from block`}
                   >
                     Remove
@@ -474,14 +479,14 @@ export default function Home() {
               );
             })}
           </div>
-          <h3>Project backlog</h3>
+          <h3>Folder backlog</h3>
           <div className="subtasks backlogSubtasks">
-            {selectedBacklog.length === 0 && <p className="emptyPanel">No extra active project tasks.</p>}
+            {selectedBacklog.length === 0 && <p className="emptyPanel">No extra active tasks in this block.</p>}
             {selectedBacklog.slice(0, 6).map((task) => (
               <div className="subtaskRow" key={task.id}>
                 <button
                   className="subtaskCheck"
-                  onClick={() => post("/api/project-block-selection", { planItemId: selected.id, action: "add", taskId: task.id })}
+                  onClick={() => post("/api/folder-block-selection", { planItemId: selected.id, action: "add", taskId: task.id })}
                   aria-label={`Add ${task.title} to block`}
                 >
                   <Plus size={15} />
@@ -498,7 +503,7 @@ export default function Home() {
         </div>
       )}
 
-      {selected && selected.type !== "project_block" && (
+      {selected && selected.type !== "folder_block" && (
         <div className="drawer" role="dialog" aria-label={`${selected.title} details`}>
           <button className="iconButton closeButton" onClick={() => setSelected(null)} aria-label="Close details">
             <X size={18} />
@@ -1700,6 +1705,20 @@ function projectName(state: AppState, projectId: string): string {
   return state.projects.find((project) => project.id === projectId)?.name ?? "Project";
 }
 
+// Client mirror of planner.blockFolderId (T088 2c-A): nearest ancestor-or-self folder (walking
+// task.folderId up via parentFolderId, cycle-guarded) whose canBlock === true and not archived.
+function clientBlockFolderId(state: AppState, task: AppState["tasks"][number]): string | undefined {
+  const folders = state.folders ?? [];
+  let current = task.folderId ? folders.find((folder) => folder.id === task.folderId) : undefined;
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.canBlock === true && current.status !== "archived") return current.id;
+    current = current.parentFolderId ? folders.find((folder) => folder.id === current!.parentFolderId) : undefined;
+  }
+  return undefined;
+}
+
 function PlanItemActions({
   item,
   post,
@@ -1733,7 +1752,7 @@ function PlanItemActions({
           <Clock3 size={15} />
         </button>
       )}
-      {item.type === "project_block" ? (
+      {item.type === "folder_block" ? (
         <button onClick={() => setSelected(item)}>Open</button>
       ) : (
         item.taskId && (

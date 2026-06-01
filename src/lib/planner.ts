@@ -127,36 +127,38 @@ export function buildDayPlan(state: AppState): DayPlan {
   const activeTasks = state.tasks.filter(
     (task) => (isTaskPlannable(task, date) || completedOnDate(task, date)) && !hasActiveChildren(state, task.id)
   );
-  const projectTasks = activeTasks
-    .filter((task) => task.projectId && shouldAppearInProjectBlock(state, task))
+  const blockTasks = activeTasks
+    .filter((task) => shouldAppearInProjectBlock(state, task))
     .sort((a, b) => taskScore(state, b, date) - taskScore(state, a, date));
 
-  const tasksByProject = new Map<string, Task[]>();
-  for (const task of projectTasks) {
-    const list = tasksByProject.get(task.projectId ?? "") ?? [];
+  const tasksByFolder = new Map<string, Task[]>();
+  for (const task of blockTasks) {
+    const folderId = blockFolderId(state, task);
+    if (!folderId) continue;
+    const list = tasksByFolder.get(folderId) ?? [];
     list.push(task);
-    tasksByProject.set(task.projectId ?? "", list);
+    tasksByFolder.set(folderId, list);
   }
 
-  for (const [projectId, tasks] of tasksByProject) {
-    const project = state.projects.find((item) => item.id === projectId);
-    if (!project || project.status !== "active") continue;
+  for (const [folderId, tasks] of tasksByFolder) {
+    const folder = (state.folders ?? []).find((item) => item.id === folderId);
+    if (!folder || folder.status === "archived") continue;
+    const defaultBlockMinutes = folder.defaultBlockMinutes ?? 30;
     const selected = tasks.slice(0, 3);
-    const override = projectBlockSelectionOverride(state, date, project.id);
+    const override = folderBlockSelectionOverride(state, date, folder.id);
     const selectedTaskIds = mergeTaskIds(
       override ?? selected.map((task) => task.id),
-      todayCompletedTaskIdsByPlan.get(`plan_${date}_${project.id}`) ?? []
-    ).filter((taskId) => isValidProjectBlockTask(state, project.id, taskId));
+      todayCompletedTaskIdsByPlan.get(`plan_${date}_${folder.id}`) ?? []
+    ).filter((taskId) => isValidBlockTask(state, folder.id, taskId));
     const selectedTasks = state.tasks.filter((task) => selectedTaskIds.includes(task.id));
-    const minutes = Math.min(project.defaultBlockMinutes, selectedTasks.reduce((sum, task) => sum + effectiveEffortMinutes(state, task), 0));
+    const minutes = Math.min(defaultBlockMinutes, selectedTasks.reduce((sum, task) => sum + effectiveEffortMinutes(state, task), 0));
     items.push({
-      id: `plan_${date}_${project.id}`,
-      type: "project_block",
-      title: project.name,
+      id: `plan_${date}_${folder.id}`,
+      type: "folder_block",
+      title: folder.name,
       section: "main_blocks",
       status: "planned",
-      domainId: project.domainId,
-      projectId: project.id,
+      folderId: folder.id,
       selectedTaskIds,
       estimatedMinutes: minutes,
       reason: override
@@ -165,21 +167,21 @@ export function buildDayPlan(state: AppState): DayPlan {
     });
   }
 
-  for (const project of settledProjectsForToday(state, date, items)) {
-    const taskIds = todayCompletedTaskIdsByPlan.get(`plan_${date}_${project.id}`) ?? settledOutcomeTaskIds(state, date, `plan_${date}_${project.id}`);
+  for (const folder of settledBlockFoldersForToday(state, date, items)) {
+    const defaultBlockMinutes = folder.defaultBlockMinutes ?? 30;
+    const taskIds = todayCompletedTaskIdsByPlan.get(`plan_${date}_${folder.id}`) ?? settledOutcomeTaskIds(state, date, `plan_${date}_${folder.id}`);
     const selectedTasks = state.tasks.filter((task) => taskIds.includes(task.id));
     const minutes = Math.min(
-      project.defaultBlockMinutes,
-      selectedTasks.reduce((sum, task) => sum + task.effortMinutes, 0) || project.defaultBlockMinutes
+      defaultBlockMinutes,
+      selectedTasks.reduce((sum, task) => sum + task.effortMinutes, 0) || defaultBlockMinutes
     );
     items.push({
-      id: `plan_${date}_${project.id}`,
-      type: "project_block",
-      title: project.name,
+      id: `plan_${date}_${folder.id}`,
+      type: "folder_block",
+      title: folder.name,
       section: "main_blocks",
       status: "planned",
-      domainId: project.domainId,
-      projectId: project.id,
+      folderId: folder.id,
       selectedTaskIds: taskIds,
       estimatedMinutes: minutes,
       reason: "Kept visible because it was touched today."
@@ -187,7 +189,7 @@ export function buildDayPlan(state: AppState): DayPlan {
   }
 
   const atomicTasks = activeTasks
-    .filter((task) => !task.projectId || !shouldAppearInProjectBlock(state, task))
+    .filter((task) => !shouldAppearInProjectBlock(state, task))
     .sort((a, b) => taskScore(state, b, date) - taskScore(state, a, date));
 
   for (const task of mergeTasks(atomicTasks, settledAtomicTasksForToday(state, date))) {
@@ -292,13 +294,19 @@ function settledOutcomeTaskIds(state: AppState, date: string, planItemId: string
   );
 }
 
-function settledProjectsForToday(state: AppState, date: string, existingItems: PlanCandidate[]): AppState["projects"] {
-  const existingProjectIds = new Set(existingItems.flatMap((item) => (item.projectId ? [item.projectId] : [])));
+function settledBlockFoldersForToday(state: AppState, date: string, existingItems: PlanCandidate[]): NonNullable<AppState["folders"]> {
+  const existingFolderIds = new Set(existingItems.flatMap((item) => (item.folderId ? [item.folderId] : [])));
   const settledPlanIds = new Set([
     ...state.completions.filter((event) => event.date === date).map((event) => event.planItemId),
     ...state.executionEvents.filter((event) => event.date === date && event.planItemId).map((event) => event.planItemId as string)
   ]);
-  return state.projects.filter((project) => settledPlanIds.has(`plan_${date}_${project.id}`) && !existingProjectIds.has(project.id));
+  return (state.folders ?? []).filter(
+    (folder) =>
+      folder.canBlock === true &&
+      folder.status !== "archived" &&
+      settledPlanIds.has(`plan_${date}_${folder.id}`) &&
+      !existingFolderIds.has(folder.id)
+  );
 }
 
 function settledAtomicTasksForToday(state: AppState, date: string): Task[] {
@@ -355,7 +363,7 @@ function isItemCompleted(
   blockCompletionPlanIdsSet: Set<string>
 ): boolean {
   if (!completed.has(item.id)) return false;
-  if (item.type !== "project_block") return true;
+  if (item.type !== "folder_block") return true;
   if (blockCompletionPlanIdsSet.has(item.id)) return true;
   const selectedTaskIds = item.selectedTaskIds ?? [];
   if (!selectedTaskIds.length) return true;
@@ -363,24 +371,38 @@ function isItemCompleted(
   return selectedTaskIds.every((taskId) => completedTaskIds.has(taskId));
 }
 
-function projectBlockSelectionOverride(state: AppState, date: string, projectId: string): string[] | undefined {
-  return state.projectBlockSelections?.find((selection) => selection.date === date && selection.projectId === projectId)?.selectedTaskIds;
+function folderBlockSelectionOverride(state: AppState, date: string, folderId: string): string[] | undefined {
+  return state.folderBlockSelections?.find((selection) => selection.date === date && selection.folderId === folderId)?.selectedTaskIds;
 }
 
-function isValidProjectBlockTask(state: AppState, projectId: string, taskId: string): boolean {
+function isValidBlockTask(state: AppState, folderId: string, taskId: string): boolean {
   const task = state.tasks.find((entry) => entry.id === taskId);
-  if (!task || task.projectId !== projectId || task.status === "archived") return false;
+  if (!task || task.status === "archived" || blockFolderId(state, task) !== folderId) return false;
   if (task.status === "blocked" && !task.blocked?.unblockAction) return false;
   if (task.status === "waiting" && !task.waiting?.followUpDate) return false;
   return true;
 }
 
+// T088 (2c-A): a task's block folder = the NEAREST ancestor-or-self folder (walk task.folderId up
+// via parentFolderId) whose canBlock === true and status !== "archived". Cycle-guarded with a Set.
+// If none exists the task is atomic. Nested canBlock subfolders form their own blocks, so a block
+// gathers its entire subtree MINUS any deeper blockable subfolders (each task resolves to its own
+// nearest blockable ancestor).
+export function blockFolderId(state: AppState, task: Task): string | undefined {
+  const folders = state.folders ?? [];
+  let current = task.folderId ? folders.find((folder) => folder.id === task.folderId) : undefined;
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.canBlock === true && current.status !== "archived") return current.id;
+    current = current.parentFolderId ? folders.find((folder) => folder.id === current!.parentFolderId) : undefined;
+  }
+  return undefined;
+}
+
 function shouldAppearInProjectBlock(state: AppState, task: Task): boolean {
-  if (!task.projectId) return false;
-  const project = state.projects.find((item) => item.id === task.projectId);
-  if (!project) return false;
   if (task.completionBehavior === "keep_as_suggestion") return false;
-  return !["suggestion_pool", "relationship"].includes(project.planningMode);
+  return blockFolderId(state, task) !== undefined;
 }
 
 function scheduleItems(items: PlanCandidate[], currentTime: string): PlanItem[] {

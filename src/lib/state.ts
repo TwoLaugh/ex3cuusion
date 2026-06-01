@@ -1,7 +1,7 @@
 import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, schedulingForMode, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
-import { buildDayPlan, hasActiveChildren } from "./planner";
+import { blockFolderId, buildDayPlan, hasActiveChildren } from "./planner";
 import { getRepository } from "./repository";
 import { createRealisticCharacterState } from "./scenarios";
 import type {
@@ -42,7 +42,7 @@ export type StructureMutation =
     }
   | { entity: "task"; action: "archive"; id: string };
 
-export type ProjectBlockSelectionAction = "add" | "remove" | "regenerate";
+export type BlockSelectionAction = "add" | "remove" | "regenerate";
 
 export interface DailyReviewSummary {
   date: string;
@@ -522,25 +522,26 @@ export function submitDailyReview(input: DailyReviewInput): AppState {
   return getState();
 }
 
-export function updateProjectBlockSelection(input: {
+export function updateFolderBlockSelection(input: {
   planItemId: string;
   taskId?: string;
-  action: ProjectBlockSelectionAction;
+  action: BlockSelectionAction;
 }): AppState {
-  recordChange("block_selection", "Project block change");
+  recordChange("block_selection", "Folder block change");
   const state = currentState();
   const plan = buildDayPlan(state);
   const item = plan.items.find((entry) => entry.id === input.planItemId);
-  if (!item || item.type !== "project_block" || !item.projectId) return getState();
+  if (!item || item.type !== "folder_block" || !item.folderId) return getState();
+  const folderId = item.folderId;
 
-  state.projectBlockSelections ??= [];
-  const existing = state.projectBlockSelections.find(
-    (selection) => selection.date === state.currentDate && selection.projectId === item.projectId
+  state.folderBlockSelections ??= [];
+  const existing = state.folderBlockSelections.find(
+    (selection) => selection.date === state.currentDate && selection.folderId === folderId
   );
 
   if (input.action === "regenerate") {
-    state.projectBlockSelections = state.projectBlockSelections.filter(
-      (selection) => !(selection.date === state.currentDate && selection.projectId === item.projectId)
+    state.folderBlockSelections = state.folderBlockSelections.filter(
+      (selection) => !(selection.date === state.currentDate && selection.folderId === folderId)
     );
     return getState();
   }
@@ -548,7 +549,7 @@ export function updateProjectBlockSelection(input: {
   const currentSelection = existing?.selectedTaskIds ?? item.selectedTaskIds ?? [];
   let nextSelection = currentSelection;
 
-  if (input.action === "add" && input.taskId && isSelectableProjectTask(state, item.projectId, input.taskId)) {
+  if (input.action === "add" && input.taskId && isSelectableBlockTask(state, folderId, input.taskId)) {
     nextSelection = [...currentSelection, input.taskId].filter((taskId, index, all) => all.indexOf(taskId) === index);
   }
 
@@ -560,9 +561,9 @@ export function updateProjectBlockSelection(input: {
     existing.selectedTaskIds = nextSelection;
     existing.updatedAt = timestampForState(state);
   } else {
-    state.projectBlockSelections.push({
+    state.folderBlockSelections.push({
       date: state.currentDate,
-      projectId: item.projectId,
+      folderId,
       selectedTaskIds: nextSelection,
       updatedAt: timestampForState(state)
     });
@@ -578,7 +579,7 @@ export function completePlanItem(planItemId: string, actualMinutes?: number, com
   const item = plan.items.find((entry) => entry.id === planItemId);
   if (!item) return getState();
 
-  if (item.type === "project_block" && !completedTaskIds?.length) {
+  if (item.type === "folder_block" && !completedTaskIds?.length) {
     const existing = state.completions.find(
       (event) => event.date === state.currentDate && event.planItemId === planItemId && (!event.taskIds || event.taskIds.length === 0)
     );
@@ -605,7 +606,7 @@ export function completePlanItem(planItemId: string, actualMinutes?: number, com
     return getState();
   }
 
-  if (item.type === "project_block" && completedTaskIds?.length) {
+  if (item.type === "folder_block" && completedTaskIds?.length) {
     for (const taskId of completedTaskIds) {
       if (removeTaskCompletion(state, planItemId, taskId)) {
         restoreTasksForUndoneCompletion(state, [taskId]);
@@ -1830,9 +1831,9 @@ function validProjectId(state: AppState, value: unknown): string | undefined {
   return typeof value === "string" && state.projects.some((project) => project.id === value && project.status === "active") ? value : undefined;
 }
 
-function isSelectableProjectTask(state: AppState, projectId: string, taskId: string): boolean {
+function isSelectableBlockTask(state: AppState, folderId: string, taskId: string): boolean {
   const task = state.tasks.find((entry) => entry.id === taskId);
-  if (!task || task.projectId !== projectId || task.status === "archived") return false;
+  if (!task || task.status === "archived" || blockFolderId(state, task) !== folderId) return false;
   if (task.status === "blocked" && !task.blocked?.unblockAction) return false;
   if (task.status === "waiting" && !task.waiting?.followUpDate) return false;
   return true;

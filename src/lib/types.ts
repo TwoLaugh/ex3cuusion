@@ -1,7 +1,7 @@
 export type Energy = "low" | "medium" | "high";
 export type Strictness = "flexible" | "normal" | "strict";
 export type TaskStatus = "active" | "scheduled" | "completed" | "deferred" | "blocked" | "waiting" | "archived";
-export type PlanItemType = "routine" | "atomic_task" | "project_block" | "soft_invitation";
+export type PlanItemType = "routine" | "atomic_task" | "folder_block" | "soft_invitation";
 export type PlanItemStatus = "planned" | "completed" | "deferred" | "unscheduled";
 export type LoadLevel = "light" | "normal" | "heavy" | "overloaded";
 export type ContainerKind = "project" | "area" | "person" | "list" | "idea_pool" | "maintenance";
@@ -227,7 +227,7 @@ export interface PlanItem {
   startTime: string;
   endTime: string;
   domainId?: string;
-  projectId?: string;
+  folderId?: string;
   taskId?: string;
   routineId?: string;
   selectedTaskIds?: string[];

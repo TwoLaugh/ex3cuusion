@@ -23,7 +23,7 @@ import {
   setClock,
   submitInbox,
   submitDailyReview,
-  updateProjectBlockSelection
+  updateFolderBlockSelection
 } from "./state";
 
 describe("state integration", () => {
@@ -476,18 +476,18 @@ describe("state integration", () => {
     expect(buildDayPlan(getState()).items.find((item) => item.id === project!.id)?.status).toBe("completed");
   });
 
-  it("lets project block selection change without completing child tasks", () => {
+  it("lets folder block selection change without completing child tasks", () => {
     let plan = buildDayPlan(getState());
     let project = plan.items.find((item) => item.title === "Diet App");
     const originalSelected = project!.selectedTaskIds ?? [];
     expect(originalSelected).toContain("task_auth_bug");
 
-    updateProjectBlockSelection({ planItemId: project!.id, action: "remove", taskId: "task_auth_bug" });
+    updateFolderBlockSelection({ planItemId: project!.id, action: "remove", taskId: "task_auth_bug" });
     plan = buildDayPlan(getState());
     project = plan.items.find((item) => item.title === "Diet App");
     expect(project!.selectedTaskIds).not.toContain("task_auth_bug");
 
-    updateProjectBlockSelection({ planItemId: project!.id, action: "add", taskId: "task_auth_bug" });
+    updateFolderBlockSelection({ planItemId: project!.id, action: "add", taskId: "task_auth_bug" });
     plan = buildDayPlan(getState());
     project = plan.items.find((item) => item.title === "Diet App");
     expect(project!.selectedTaskIds).toContain("task_auth_bug");
@@ -500,8 +500,8 @@ describe("state integration", () => {
     completePlanItem(project!.id);
     expect(buildDayPlan(getState()).items.find((item) => item.id === project!.id)?.status).toBe("planned");
 
-    updateProjectBlockSelection({ planItemId: project!.id, action: "regenerate" });
-    expect(getState().projectBlockSelections).toEqual([]);
+    updateFolderBlockSelection({ planItemId: project!.id, action: "regenerate" });
+    expect(getState().folderBlockSelections).toEqual([]);
   });
 
   it("completion events do not exhaust repeatable suggestions", () => {
