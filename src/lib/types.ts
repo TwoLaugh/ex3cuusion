@@ -457,8 +457,8 @@ export interface AppState {
   dailyReviews: DailyReview[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];
-  // Local date of the last auto-triggered organizer pass (T069); guards once-per-day runs.
+  // Local date of the last guarded organizer pass (T069); used only by the explicit auto route.
   lastAutoOrganizeDate?: string;
-  // When false, the once-per-day auto organizer (T069) is disabled (T074). Default (undefined) = on.
+  // Reserved for the guarded auto organizer route. The client uses an explicit button by default.
   autoOrganizeEnabled?: boolean;
 }

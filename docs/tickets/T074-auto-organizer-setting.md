@@ -1,32 +1,25 @@
-# T074: Auto-Organizer Enable/Disable Setting
+# T074: Explicit Organizer Control
 
-Status: implemented.
+Status: revised.
 
-Follow-up to T069 (auto organizer runs once/day with no user control).
+The first implementation added an auto-organizer enable/disable setting. After dogfooding, the
+better V1 behavior is simpler: do not auto-run the organizer; provide an explicit button.
 
 ## Implementation
 
-- `AppState.autoOrganizeEnabled` (default undefined = on); `maybeRunDailyOrganizer` no-ops when
-  `false`. `setAutoOrganizeEnabled` + `POST /api/settings`. A checkbox in Planning preferences
-  toggles it.
-- Verified: unit test (disabled → daily pass no-ops; enabled → it runs). tsc + 54 unit tests
-  green. (HTTP re-run skipped this round due to host resource pressure; the settings route is a
-  thin passthrough to the tested setter.)
+- Removed the client-side page-load call to `POST /api/organizer { auto: true }`.
+- Kept the AI inbox "Tidy up" button.
+- Added an explicit "Run tidy-up" button in Planning preferences.
+- The backend guarded auto route remains available for future scheduling experiments, but it is not
+  used by the V1 UI.
 
 ## Goal
 
-Let the user turn the once-per-day auto organizer on or off.
-
-## Scope
-
-- `AppState` setting (e.g. `autoOrganizeEnabled`, default true).
-- `maybeRunDailyOrganizer` respects it (no-op when disabled).
-- A way to set it (endpoint / structure setting), surfaced in Planning preferences.
+Make organizer actions intentional. No API spend and no real state mutation should happen merely
+because the user opened the app.
 
 ## Acceptance Criteria
 
-- Disabling it stops the on-open auto pass; enabling resumes it. Default on.
-
-## Notes
-
-Backend setting + wiring is functional; the toggle control in Planning preferences is light UI.
+- Loading the app only syncs the clock.
+- User-visible tidy-up buttons run the organizer on demand.
+- The resulting organizer pass is still undoable.

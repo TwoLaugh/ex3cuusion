@@ -119,7 +119,7 @@ Execution order:
 
 Follow-ups:
 - T068 - Guarded live clock tick (keep today current / roll midnight without yanking navigation)
-- T069 - Scheduled / auto-triggered organizer (once-per-day maintenance pass on app open)
+- T069 - Guarded organizer endpoint (manual button by default; no page-load auto-run)
 
 ### M7: User Control Parity (everything the AI can do, the user can too)
 
@@ -136,7 +136,7 @@ timeline drag-to-reschedule) tracked separately as UI improvements.
 ### M8: Functional Hardening & Deferred Features
 
 1. T073 - Undo coverage for ALL mutations (manual edits, plan outcomes, reviews, block selection)
-2. T074 - Auto-organizer enable/disable setting
+2. T074 - Explicit organizer control
 3. T075 - Phased multi-step scheduling (reintroduce, model-owned + manual)
 4. T076 - Multi-level task hierarchy (extends single-level T071)
 5. T077 - Undo/history persistence (Postgres/file, survives restart)

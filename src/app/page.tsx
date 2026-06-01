@@ -106,11 +106,9 @@ export default function Home() {
   }
 
   useEffect(() => {
-    // Sync to real local time, then run the once-per-day auto organizer (T069).
-    syncClock()
-      .catch(() => refresh())
-      .then(() => post("/api/organizer", { auto: true }))
-      .catch(() => {});
+    syncClock().catch(() => {
+      void refresh();
+    });
     setTodayIndex(systemWeekdayIndex());
   }, []);
 
@@ -332,7 +330,17 @@ export default function Home() {
         </button>
       </header>
 
-      {activeView && <SecondaryPanel view={activeView} state={state} plan={plan} post={post} onClose={() => setActiveView(null)} />}
+      {activeView && (
+        <SecondaryPanel
+          view={activeView}
+          state={state}
+          plan={plan}
+          post={post}
+          onClose={() => setActiveView(null)}
+          runOrganizer={runOrganizer}
+          organizerRunning={sending}
+        />
+      )}
 
       <section className="calendarTimeline" aria-label="Timed day plan">
         <div className="calendarScroll">
@@ -957,13 +965,17 @@ function SecondaryPanel({
   state,
   plan,
   post,
-  onClose
+  onClose,
+  runOrganizer,
+  organizerRunning
 }: {
   view: SecondaryView;
   state: AppState;
   plan: DayPlan;
   post: PostFn;
   onClose: () => void;
+  runOrganizer: () => Promise<void>;
+  organizerRunning: boolean;
 }) {
   const taskGroups = buildTaskGroups(state, plan);
   const projectSummaries = buildProjectSummaries(state);
@@ -1397,15 +1409,10 @@ function SecondaryPanel({
           </article>
           <article>
             <h2>Automation</h2>
-            <label className="settingToggle">
-              <input
-                type="checkbox"
-                defaultChecked={state.autoOrganizeEnabled !== false}
-                onChange={(event) => post("/api/settings", { autoOrganizeEnabled: event.target.checked })}
-                aria-label="Run a daily tidy-up automatically"
-              />
-              Run a conservative tidy-up automatically once a day
-            </label>
+            <p>Run a conservative tidy-up only when you ask for it.</p>
+            <button className="tidyButton" onClick={runOrganizer} disabled={organizerRunning} aria-label="Run a tidy-up maintenance pass">
+              {organizerRunning ? "Tidying..." : "Run tidy-up"}
+            </button>
           </article>
         </div>
       )}
