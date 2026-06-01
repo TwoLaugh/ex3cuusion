@@ -4,8 +4,6 @@ export type TaskStatus = "active" | "scheduled" | "completed" | "deferred" | "bl
 export type PlanItemType = "routine" | "atomic_task" | "folder_block" | "soft_invitation";
 export type PlanItemStatus = "planned" | "completed" | "deferred" | "unscheduled";
 export type LoadLevel = "light" | "normal" | "heavy" | "overloaded";
-export type ContainerKind = "project" | "area" | "person" | "list" | "idea_pool" | "maintenance";
-export type PlanningMode = "deadline_driven" | "maintenance" | "suggestion_pool" | "relationship" | "open_backlog";
 export type CompletionBehavior = "exhaust_once" | "repeatable" | "keep_as_suggestion" | "regenerate_after_completion";
 export type CompletionMode =
   | "simple_done"
@@ -56,31 +54,8 @@ export type ClarificationMode = "blocking" | "optional" | "batch" | "refinement"
 export type DailyReviewEnergy = "low" | "normal" | "high";
 export type DailyReviewPlanFit = "underfilled" | "realistic" | "overplanned";
 
-export interface Domain {
-  id: string;
-  name: string;
-  weight: number;
-}
-
-export type Area = Domain;
-
-export interface Project {
-  id: string;
-  domainId: string;
-  name: string;
-  kind: ContainerKind;
-  planningMode: PlanningMode;
-  status: "active" | "paused" | "completed";
-  priorityWeight: number;
-  defaultBlockMinutes: number;
-  contextNote: string;
-}
-
-export type Container = Project;
-
-// T088: a single recursive folder concept that will replace Domain + Project. Introduced
-// additively (Stage 2a); domains+projects are migrated into `folders` in normalizeState. Stage 2b
-// switches consumers to read folders; Stage 2c removes Domain/Project.
+// T088: a single recursive folder concept replacing the legacy Domain + Project model. Old saved
+// states are migrated into `folders` one-way in normalizeState (migrateLegacyToFolders).
 export interface Folder {
   id: string;
   name: string;
@@ -179,9 +154,7 @@ export interface Task {
   title: string;
   description?: string;
   type: "atomic" | "project_task" | "routine_instance" | "soft_invitation";
-  domainId: string;
-  projectId?: string;
-  folderId?: string; // T088: target field; derived from domain/project during migration (Stage 2a)
+  folderId?: string; // T088: canonical placement. Unset = unfiled/top-level.
   parentTaskId?: string;
   sourceInboxItemId?: string;
   status: TaskStatus;
@@ -226,7 +199,6 @@ export interface PlanItem {
   status: PlanItemStatus;
   startTime: string;
   endTime: string;
-  domainId?: string;
   folderId?: string;
   taskId?: string;
   routineId?: string;
@@ -269,13 +241,6 @@ export interface CompletionEvent {
   actualMinutes?: number;
 }
 
-export interface ProjectBlockSelection {
-  date: string;
-  projectId: string;
-  selectedTaskIds: string[];
-  updatedAt: string;
-}
-
 export interface DailyReview {
   id: string;
   date: string;
@@ -304,8 +269,7 @@ export interface WeekBacklogItem {
   dateIntent: DateIntent;
   dueDate?: string;
   scheduledDate?: string;
-  projectId?: string;
-  domainId: string;
+  folderId?: string;
   effortMinutes: number;
 }
 
@@ -341,15 +305,10 @@ export interface AiAction {
     | "create_task"
     | "create_folder"
     | "schedule_block"
-    | "add_project_note"
-    | "assign_task_to_project"
-    | "assign_task_to_domain"
     | "schedule_task"
     | "update_task"
     | "archive_task"
-    | "archive_project"
     | "move_deadline"
-    | "change_routine_recurrence"
     | "mark_task_done"
     | "replace_today_plan"
     | "bulk_update_tasks"
@@ -456,15 +415,12 @@ export interface AppState {
   currentDate: string;
   currentTime: string;
   availableMinutes: number;
-  domains: Domain[];
-  projects: Project[];
-  folders?: Folder[]; // T088 Stage 2a: derived from domains+projects in normalizeState
-  folderBlockSelections?: FolderBlockSelection[];
+  folders: Folder[]; // T088: canonical recursive structure store
+  folderBlockSelections: FolderBlockSelection[];
   tasks: Task[];
   deferrals: DeferralLog[];
   completions: CompletionEvent[];
   executionEvents: ExecutionEvent[];
-  projectBlockSelections: ProjectBlockSelection[];
   dailyReviews: DailyReview[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];

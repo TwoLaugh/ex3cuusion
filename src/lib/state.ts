@@ -22,11 +22,6 @@ import type {
 } from "./types";
 
 export type StructureMutation =
-  | { entity: "domain"; action: "create"; patch: Partial<AppState["domains"][number]> }
-  | { entity: "domain"; action: "update"; id: string; patch: Partial<AppState["domains"][number]> }
-  | { entity: "project"; action: "create"; patch: Partial<AppState["projects"][number]> }
-  | { entity: "project"; action: "update"; id: string; patch: Partial<AppState["projects"][number]> }
-  | { entity: "project"; action: "archive"; id: string }
   | { entity: "folder"; action: "create"; patch: Partial<Folder> }
   | { entity: "folder"; action: "update"; id: string; patch: Partial<Folder> }
   | { entity: "folder"; action: "archive"; id: string }
@@ -212,68 +207,6 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
   recordChange("manual_edit", `Manual ${mutation.action} ${mutation.entity}`);
   const state = currentState();
 
-  if (mutation.entity === "domain") {
-    if (mutation.action === "create") {
-      state.domains.push({
-        id: uniqueStateId(state, "domain"),
-        name: cleanText(mutation.patch.name) || "New domain",
-        weight: clampNumber(mutation.patch.weight, 1, 10, 5)
-      });
-      return getState();
-    }
-
-    const domain = state.domains.find((entry) => entry.id === mutation.id);
-    if (!domain) return getState();
-    domain.name = cleanText(mutation.patch.name) || domain.name;
-    domain.weight = clampNumber(mutation.patch.weight, 1, 10, domain.weight);
-    return getState();
-  }
-
-  if (mutation.entity === "project") {
-    if (mutation.action === "create") {
-      const domainId = validDomainId(state, mutation.patch.domainId) ?? state.domains[0]?.id;
-      if (!domainId) return getState();
-      state.projects.push({
-        id: uniqueStateId(state, "project"),
-        domainId,
-        name: cleanText(mutation.patch.name) || "New project",
-        kind: validProjectKind(mutation.patch.kind) ?? "project",
-        planningMode: validPlanningMode(mutation.patch.planningMode) ?? "open_backlog",
-        status: validProjectStatus(mutation.patch.status) ?? "active",
-        priorityWeight: clampNumber(mutation.patch.priorityWeight, 1, 10, 5),
-        defaultBlockMinutes: clampNumber(mutation.patch.defaultBlockMinutes, 5, 480, 60),
-        contextNote: cleanText(mutation.patch.contextNote)
-      });
-      return getState();
-    }
-
-    const project = state.projects.find((entry) => entry.id === mutation.id);
-    if (!project) return getState();
-    if (mutation.action === "archive") {
-      project.status = "paused";
-      for (const task of state.tasks.filter((entry) => entry.projectId === project.id)) {
-        task.projectId = undefined;
-        task.type = task.type === "project_task" ? "atomic" : task.type;
-      }
-      return getState();
-    }
-
-    project.domainId = validDomainId(state, mutation.patch.domainId) ?? project.domainId;
-    project.name = cleanText(mutation.patch.name) || project.name;
-    project.kind = validProjectKind(mutation.patch.kind) ?? project.kind;
-    project.planningMode = validPlanningMode(mutation.patch.planningMode) ?? project.planningMode;
-    project.status = validProjectStatus(mutation.patch.status) ?? project.status;
-    project.priorityWeight = clampNumber(mutation.patch.priorityWeight, 1, 10, project.priorityWeight);
-    project.defaultBlockMinutes = clampNumber(mutation.patch.defaultBlockMinutes, 5, 480, project.defaultBlockMinutes);
-    project.contextNote = cleanText(mutation.patch.contextNote ?? project.contextNote);
-    if (mutation.patch.domainId) {
-      for (const task of state.tasks.filter((entry) => entry.projectId === project.id)) {
-        task.domainId = project.domainId;
-      }
-    }
-    return getState();
-  }
-
   if (mutation.entity === "folder") {
     state.folders ??= [];
     if (mutation.action === "create") {
@@ -317,22 +250,22 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
 
   if (mutation.entity === "task") {
     if (mutation.action === "create") {
-      const domainId = validDomainId(state, mutation.patch.domainId) ?? state.domains[0]?.id;
-      if (!domainId) return getState();
       const parentTaskId = resolveParentForChild(state, mutation.patch.parentTaskId);
       const parentTask = parentTaskId ? state.tasks.find((entry) => entry.id === parentTaskId) : undefined;
-      const projectId = parentTask ? parentTask.projectId : validProjectId(state, mutation.patch.projectId);
-      // Folders are canonical (T088): folderId placement wins; otherwise default it to
-      // parent/project/domain so normalizeState re-derives domainId/projectId consistently.
-      const folderId =
-        (parentTask ? parentTask.folderId : undefined) ?? validFolderId(state, mutation.patch.folderId) ?? projectId ?? domainId;
+      // Placement is folder-only (T088 2c-C). A task may be unfiled (no folder).
+      const folderId = (parentTask ? parentTask.folderId : undefined) ?? validFolderId(state, mutation.patch.folderId);
+      const folder = folderId ? (state.folders ?? []).find((entry) => entry.id === folderId) : undefined;
+      const keepAsSuggestion = mutation.patch.completionBehavior === "keep_as_suggestion";
+      const type: Task["type"] = folder?.parentFolderId
+        ? keepAsSuggestion
+          ? "soft_invitation"
+          : "project_task"
+        : validTaskType(mutation.patch.type) ?? "atomic";
       state.tasks.push({
         id: uniqueStateId(state, "task"),
         title: cleanText(mutation.patch.title) || "New task",
         description: cleanText(mutation.patch.description) || undefined,
-        type: projectId ? "project_task" : validTaskType(mutation.patch.type) ?? "atomic",
-        domainId: parentTask ? parentTask.domainId : projectId ? state.projects.find((project) => project.id === projectId)!.domainId : domainId,
-        projectId,
+        type,
         folderId,
         parentTaskId,
         status: validTaskStatus(mutation.patch.status) ?? "active",
@@ -376,46 +309,30 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
       return getState();
     }
 
-    const projectId = mutation.patch.projectId === "" ? undefined : validProjectId(state, mutation.patch.projectId);
-    if (mutation.patch.projectId !== undefined) {
-      task.projectId = projectId;
-      if (projectId) {
-        const project = state.projects.find((entry) => entry.id === projectId)!;
-        task.domainId = project.domainId;
-        task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
-      } else if (task.type === "project_task") {
-        task.type = "atomic";
-      }
-    } else {
-      task.domainId = validDomainId(state, mutation.patch.domainId) ?? task.domainId;
-    }
-    if (!task.projectId) task.domainId = validDomainId(state, mutation.patch.domainId) ?? task.domainId;
     if (mutation.patch.parentTaskId !== undefined) {
       const resolvedParent = resolveParentForChild(state, mutation.patch.parentTaskId, task.id);
       task.parentTaskId = resolvedParent;
       if (resolvedParent) {
         const parent = state.tasks.find((entry) => entry.id === resolvedParent)!;
-        task.projectId = parent.projectId;
-        task.domainId = parent.domainId;
         task.folderId = parent.folderId;
-        task.type = parent.projectId ? "project_task" : "atomic";
+        const parentFolder = parent.folderId ? (state.folders ?? []).find((entry) => entry.id === parent.folderId) : undefined;
+        task.type = parentFolder?.parentFolderId ? "project_task" : "atomic";
       }
     }
-    // Folders are canonical (T088): folderId is the way to move a task between folders. If the
-    // patch supplies a folderId it wins; we also point projectId/domainId at that folder so they stay
-    // in sync (normalizeState re-derives them from folderId). Otherwise keep folderId aligned with any
-    // projectId/domainId change above so the placement signal stays consistent.
+    // Folders are the only structure (T088 2c-C): folderId moves a task between folders. An empty
+    // string clears it (task becomes unfiled/top-level). A child folder makes the task project-like.
     if (mutation.patch.folderId !== undefined) {
-      const targetFolderId = mutation.patch.folderId === "" ? task.domainId : validFolderId(state, mutation.patch.folderId) ?? task.folderId;
-      if (targetFolderId) {
-        task.folderId = targetFolderId;
-        const folder = (state.folders ?? []).find((entry) => entry.id === targetFolderId);
-        const isTop = !folder?.parentFolderId;
-        task.projectId = isTop ? undefined : targetFolderId;
-        task.type = isTop ? (task.type === "project_task" ? "atomic" : task.type) : task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
-      }
-    } else if (mutation.patch.projectId !== undefined || mutation.patch.domainId !== undefined) {
-      task.folderId = task.projectId ?? task.domainId;
+      const targetFolderId = mutation.patch.folderId === "" ? undefined : validFolderId(state, mutation.patch.folderId) ?? task.folderId;
+      task.folderId = targetFolderId;
+      const folder = targetFolderId ? (state.folders ?? []).find((entry) => entry.id === targetFolderId) : undefined;
+      const isInChildFolder = Boolean(folder?.parentFolderId);
+      task.type = isInChildFolder
+        ? task.completionBehavior === "keep_as_suggestion"
+          ? "soft_invitation"
+          : "project_task"
+        : task.type === "project_task"
+          ? "atomic"
+          : task.type;
     }
     task.title = cleanText(mutation.patch.title) || task.title;
     task.description = optionalText(mutation.patch.description, task.description);
@@ -1096,16 +1013,12 @@ function applyTaskDateIntent(state: AppState, task: Task, kind: string | undefin
 }
 
 // Resolve a create_task's intended folder name/path to a real folderId at apply time — covers a
-// folder created earlier in the same batch (T088 grouping). Derives the back-compat
-// projectId/domainId/type from the matched folder.
+// folder created earlier in the same batch (T088 grouping). Derives the task type from the folder.
 function linkPendingFolder(state: AppState, action: AiAction, payload: Omit<Task, "id">): void {
   if (payload.folderId || !action.pendingFolderName) return;
   const folder = findFolderMention(state, action.pendingFolderName);
   if (!folder) return;
-  const folders = state.folders ?? [];
   payload.folderId = folder.id;
-  payload.projectId = folder.parentFolderId ? folder.id : undefined;
-  payload.domainId = topAncestorFolderId(folders, folder.id) ?? "domain_work";
   payload.type = folder.parentFolderId
     ? "project_task"
     : payload.completionBehavior === "keep_as_suggestion"
@@ -1320,7 +1233,7 @@ function patchDraftTask(draft: Omit<Task, "id"> | undefined, kind: Clarification
     } else if (/one.?off|once|task/i.test(answer)) {
       task.completionBehavior = "exhaust_once";
       task.completionMode = "simple_done";
-      task.type = task.projectId ? "project_task" : "atomic";
+      task.type = task.type === "project_task" ? "project_task" : "atomic";
     }
     task.notes = [task.notes, `Clarified behavior: ${answer}`].filter(Boolean).join("\n");
   }
@@ -1336,7 +1249,6 @@ function fallbackClarifiedTask(answer: string): Omit<Task, "id"> {
   return {
     title: answer,
     type: "atomic",
-    domainId: "domain_work",
     status: "active",
     repeatPolicy: { type: "none" },
     completionBehavior: "exhaust_once",
@@ -1394,8 +1306,7 @@ function taskSnapshot(task: Task): Partial<Task> {
     id: task.id,
     title: task.title,
     type: task.type,
-    domainId: task.domainId,
-    projectId: task.projectId,
+    folderId: task.folderId,
     status: task.status,
     completionBehavior: task.completionBehavior,
     completionMode: task.completionMode,
@@ -1478,10 +1389,7 @@ function applyFollowUpToTask(state: AppState, task: Task, message: string): stri
   // Prefer a child folder (legacy "project" role) over a top-level one when both names appear.
   const folder = folderMatches.find((candidate) => candidate.parentFolderId) ?? folderMatches[0];
   if (folder) {
-    const folders = state.folders ?? [];
     task.folderId = folder.id;
-    task.projectId = folder.parentFolderId ? folder.id : undefined;
-    task.domainId = topAncestorFolderId(folders, folder.id) ?? "domain_work";
     task.type = folder.parentFolderId
       ? "project_task"
       : task.completionBehavior === "keep_as_suggestion"
@@ -1512,10 +1420,7 @@ function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevis
 
   const folder = revision.folderName ? findFolderMention(state, revision.folderName) : undefined;
   if (folder) {
-    const folders = state.folders ?? [];
     task.folderId = folder.id;
-    task.projectId = folder.parentFolderId ? folder.id : undefined;
-    task.domainId = topAncestorFolderId(folders, folder.id) ?? "domain_work";
     task.type = folder.parentFolderId
       ? "project_task"
       : task.completionBehavior === "keep_as_suggestion"
@@ -1736,19 +1641,6 @@ function folderFullPath(state: AppState, folderId: string): string | undefined {
   return names.length ? names.join(" / ") : undefined;
 }
 
-// T088: top-level ancestor folder id (the folder that plays the legacy "domain" role).
-function topAncestorFolderId(folders: Folder[], folderId: string): string {
-  const byId = new Map(folders.map((folder) => [folder.id, folder]));
-  const seen = new Set<string>();
-  let current = byId.get(folderId);
-  if (!current) return folderId;
-  while (current.parentFolderId && byId.has(current.parentFolderId) && !seen.has(current.id)) {
-    seen.add(current.id);
-    current = byId.get(current.parentFolderId)!;
-  }
-  return current.id;
-}
-
 function uniqueChanges(changes: string[]): string[] {
   return changes.filter((change, index, all) => all.indexOf(change) === index);
 }
@@ -1781,13 +1673,8 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, Math.round(numeric)));
 }
 
-function uniqueStateId(state: AppState, prefix: "domain" | "project" | "task"): string {
-  const pools = {
-    domain: state.domains,
-    project: state.projects,
-    task: state.tasks
-  };
-  const ids = pools[prefix].map((entry) => entry.id);
+function uniqueStateId(state: AppState, prefix: "task"): string {
+  const ids = state.tasks.map((entry) => entry.id);
   let index = ids.reduce((max, id) => {
     const match = id.match(new RegExp(`^${prefix}_(\\d+)$`));
     return match ? Math.max(max, Number(match[1])) : max;
@@ -1822,34 +1709,12 @@ function validFolderId(state: AppState, value: unknown): string | undefined {
   return typeof value === "string" && (state.folders ?? []).some((folder) => folder.id === value) ? value : undefined;
 }
 
-function validDomainId(state: AppState, value: unknown): string | undefined {
-  return typeof value === "string" && state.domains.some((domain) => domain.id === value) ? value : undefined;
-}
-
-function validProjectId(state: AppState, value: unknown): string | undefined {
-  return typeof value === "string" && state.projects.some((project) => project.id === value && project.status === "active") ? value : undefined;
-}
-
 function isSelectableBlockTask(state: AppState, folderId: string, taskId: string): boolean {
   const task = state.tasks.find((entry) => entry.id === taskId);
   if (!task || task.status === "archived" || blockFolderId(state, task) !== folderId) return false;
   if (task.status === "blocked" && !task.blocked?.unblockAction) return false;
   if (task.status === "waiting" && !task.waiting?.followUpDate) return false;
   return true;
-}
-
-function validProjectKind(value: unknown): AppState["projects"][number]["kind"] | undefined {
-  return value === "project" || value === "area" || value === "person" || value === "list" || value === "idea_pool" || value === "maintenance" ? value : undefined;
-}
-
-function validPlanningMode(value: unknown): AppState["projects"][number]["planningMode"] | undefined {
-  return value === "deadline_driven" || value === "maintenance" || value === "suggestion_pool" || value === "relationship" || value === "open_backlog"
-    ? value
-    : undefined;
-}
-
-function validProjectStatus(value: unknown): AppState["projects"][number]["status"] | undefined {
-  return value === "active" || value === "paused" || value === "completed" ? value : undefined;
 }
 
 function validTaskType(value: unknown): Task["type"] | undefined {
@@ -1907,8 +1772,7 @@ function normalizeRepeatPolicy(value: Task["repeatPolicy"] | undefined): Task["r
 
 function taskActionPatch(task: Task): Record<string, unknown> {
   return {
-    projectId: task.projectId,
-    domainId: task.domainId,
+    folderId: task.folderId,
     scheduledDate: task.scheduledDate,
     dueDate: task.dueDate,
     dateIntent: task.dateIntent,
@@ -2007,7 +1871,7 @@ function planTitleFromId(state: AppState, date: string, planItemId: string): str
   const entityId = planItemId.startsWith(prefix) ? planItemId.slice(prefix.length).replace(/_phase_\d+$/, "") : planItemId;
   return (
     state.tasks.find((task) => task.id === entityId)?.title ??
-    state.projects.find((project) => project.id === entityId)?.name ??
+    (state.folders ?? []).find((folder) => folder.id === entityId)?.name ??
     planItemId
   );
 }

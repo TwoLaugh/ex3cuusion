@@ -5,8 +5,8 @@ export function createRealisticCharacterState(): AppState {
     currentDate: "2026-06-03",
     currentTime: "06:45",
     availableMinutes: 780,
-    // T088 Stage 2b: folders are canonical. Top-level folders = legacy domains; child folders
-    // (parentFolderId set) = legacy projects. normalizeState re-derives domains/projects from these.
+    // T088: folders are the only structure. Top-level folders are areas; child folders
+    // (parentFolderId set) behave like the legacy projects (their tasks become project_task).
     folders: [
       { id: "domain_health", name: "Health", weight: 10 },
       { id: "domain_work", name: "Work", weight: 10 },
@@ -31,40 +31,6 @@ export function createRealisticCharacterState(): AppState {
         contextNote: "Personal creative project; preserve a small amount of momentum without sacrificing sleep."
       }
     ],
-    // Legacy mirrors kept so the scenario is usable without normalizeState; normalizeState
-    // re-derives them from `folders`, which is canonical.
-    domains: [
-      { id: "domain_health", name: "Health", weight: 10 },
-      { id: "domain_work", name: "Work", weight: 10 },
-      { id: "domain_zine", name: "Recipe Zine", weight: 7 },
-      { id: "domain_home", name: "Home Admin", weight: 5 },
-      { id: "domain_social", name: "Social", weight: 6 },
-      { id: "domain_recovery", name: "Recovery", weight: 8 }
-    ],
-    projects: [
-      {
-        id: "project_dashboard_review",
-        domainId: "domain_work",
-        name: "Clinician Dashboard UX Review",
-        kind: "project",
-        planningMode: "deadline_driven",
-        status: "active",
-        priorityWeight: 10,
-        defaultBlockMinutes: 150,
-        contextNote: "Final UX review package is due before tomorrow's stakeholder readout."
-      },
-      {
-        id: "project_recipe_zine",
-        domainId: "domain_zine",
-        name: "Illustrated Recipe Zine",
-        kind: "project",
-        planningMode: "open_backlog",
-        status: "active",
-        priorityWeight: 6,
-        defaultBlockMinutes: 75,
-        contextNote: "Personal creative project; preserve a small amount of momentum without sacrificing sleep."
-      }
-    ],
     tasks: [
       fixedTask("task_medication", "Medication and water", "domain_health", "07:00", 5, "low"),
       fixedTask("task_standup", "Team standup", "domain_work", "09:30", 15, "medium"),
@@ -79,8 +45,6 @@ export function createRealisticCharacterState(): AppState {
         id: "task_polish_screens",
         title: "Polish 6 dashboard screens",
         type: "project_task",
-        domainId: "domain_work",
-        projectId: "project_dashboard_review",
         folderId: "project_dashboard_review",
         status: "active",
         repeatPolicy: { type: "none" },
@@ -98,8 +62,6 @@ export function createRealisticCharacterState(): AppState {
         id: "task_review_analytics",
         title: "Review analytics notes",
         type: "project_task",
-        domainId: "domain_work",
-        projectId: "project_dashboard_review",
         folderId: "project_dashboard_review",
         status: "active",
         repeatPolicy: { type: "none" },
@@ -117,8 +79,6 @@ export function createRealisticCharacterState(): AppState {
         id: "task_rationale_bullets",
         title: "Write UX rationale bullets",
         type: "project_task",
-        domainId: "domain_work",
-        projectId: "project_dashboard_review",
         folderId: "project_dashboard_review",
         status: "active",
         repeatPolicy: { type: "none" },
@@ -136,7 +96,6 @@ export function createRealisticCharacterState(): AppState {
         id: "task_pm_preview",
         title: "Send preview to PM",
         type: "atomic",
-        domainId: "domain_work",
         folderId: "domain_work",
         status: "active",
         repeatPolicy: { type: "none" },
@@ -154,7 +113,6 @@ export function createRealisticCharacterState(): AppState {
         id: "task_process_feedback",
         title: "Process critique feedback",
         type: "atomic",
-        domainId: "domain_work",
         folderId: "domain_work",
         status: "active",
         repeatPolicy: { type: "none" },
@@ -172,8 +130,6 @@ export function createRealisticCharacterState(): AppState {
         id: "task_sketch_zine",
         title: "Sketch one recipe zine spread",
         type: "project_task",
-        domainId: "domain_zine",
-        projectId: "project_recipe_zine",
         folderId: "project_recipe_zine",
         status: "active",
         repeatPolicy: { type: "none" },
@@ -191,8 +147,6 @@ export function createRealisticCharacterState(): AppState {
         id: "task_zine_words",
         title: "Write 150 zine words",
         type: "project_task",
-        domainId: "domain_zine",
-        projectId: "project_recipe_zine",
         folderId: "project_recipe_zine",
         status: "active",
         repeatPolicy: { type: "none" },
@@ -234,7 +188,7 @@ export function createRealisticCharacterState(): AppState {
     ],
     completions: [],
     executionEvents: [],
-    projectBlockSelections: [],
+    folderBlockSelections: [],
     dailyReviews: [],
     inbox: [],
     captureSessions: []
@@ -244,7 +198,7 @@ export function createRealisticCharacterState(): AppState {
 function fixedTask(
   id: string,
   title: string,
-  domainId: string,
+  folderId: string,
   scheduledTime: string,
   effortMinutes: number,
   energy: "low" | "medium" | "high"
@@ -253,8 +207,7 @@ function fixedTask(
     id,
     title,
     type: "atomic" as const,
-    domainId,
-    folderId: domainId,
+    folderId,
     status: "active" as const,
     repeatPolicy: { type: "none" as const },
     completionBehavior: "exhaust_once" as const,
@@ -273,7 +226,7 @@ function fixedTask(
 function normalTask(
   id: string,
   title: string,
-  domainId: string,
+  folderId: string,
   effortMinutes: number,
   priority: number,
   importance: number,
@@ -284,8 +237,7 @@ function normalTask(
     id,
     title,
     type: "atomic" as const,
-    domainId,
-    folderId: domainId,
+    folderId,
     status: "active" as const,
     repeatPolicy: { type: "none" as const },
     completionBehavior: "exhaust_once" as const,
@@ -303,7 +255,7 @@ function normalTask(
 function recurringTask(
   id: string,
   title: string,
-  domainId: string,
+  folderId: string,
   effortMinutes: number,
   energy: "low" | "medium" | "high",
   preferredWindow: "morning" | "afternoon" | "evening"
@@ -312,8 +264,7 @@ function recurringTask(
     id,
     title,
     type: "atomic" as const,
-    domainId,
-    folderId: domainId,
+    folderId,
     status: "active" as const,
     repeatPolicy: { type: "daily" as const, preferredWindow, carryover: "skip" as const },
     completionBehavior: "repeatable" as const,

@@ -86,9 +86,9 @@ describe("state integration", () => {
     const banner = after.tasks.find((task) => task.title === "Design banner");
     expect(copy?.folderId).toBe(folder!.id);
     expect(banner?.folderId).toBe(folder!.id);
-    // A child folder plays the legacy "project" role, so grouped tasks derive that projectId.
-    expect(copy?.projectId).toBe(folder!.id);
-    expect(banner?.projectId).toBe(folder!.id);
+    // A child folder makes grouped tasks behave like the legacy project_task.
+    expect(copy?.type).toBe("project_task");
+    expect(banner?.type).toBe("project_task");
   });
 
   it("reprioritizes and demotes an existing task to someday (T064 update_task)", async () => {
@@ -296,28 +296,24 @@ describe("state integration", () => {
     expect(listChangeHistory().length).toBe(historyLen);
   });
 
-  it("treats folders as the canonical structure store and derives domains/projects from them (T088 Stage 2b)", () => {
+  it("treats folders as the only structure store (T088 2c-C)", () => {
     const state = getState();
-    expect(state.folders && state.folders.length).toBeTruthy();
-    // Every derived domain is a top-level folder (no parentFolderId).
-    for (const domain of state.domains) {
-      expect(state.folders!.some((folder) => folder.id === domain.id && !folder.parentFolderId)).toBe(true);
-    }
-    // Every derived project is a child folder (parentFolderId points at its domain folder).
-    for (const project of state.projects) {
-      expect(state.folders!.some((folder) => folder.id === project.id && folder.parentFolderId === project.domainId)).toBe(true);
-    }
-    // Every task has a folderId, and its derived domainId/projectId follow from that folder.
+    expect(state.folders.length).toBeTruthy();
+    // Legacy domains/projects no longer exist on the state.
+    expect((state as unknown as { domains?: unknown }).domains).toBeUndefined();
+    expect((state as unknown as { projects?: unknown }).projects).toBeUndefined();
+    // Every task's folderId (when set) points at an existing folder; tasks may also be unfiled.
     for (const task of state.tasks) {
-      expect(task.folderId).toBeTruthy();
-      expect(task.folderId).toBe(task.projectId ?? task.domainId);
+      if (task.folderId) expect(state.folders.some((folder) => folder.id === task.folderId)).toBe(true);
+      expect((task as unknown as { domainId?: unknown }).domainId).toBeUndefined();
+      expect((task as unknown as { projectId?: unknown }).projectId).toBeUndefined();
     }
   });
 
-  it("creates a folder via a structure mutation and derives a project from it (T088)", () => {
+  it("creates a folder via a structure mutation and nests it under a parent (T088)", () => {
     const before = getState();
-    const topFolderId = before.folders!.find((folder) => !folder.parentFolderId)!.id;
-    const beforeFolderCount = before.folders!.length;
+    const topFolderId = before.folders.find((folder) => !folder.parentFolderId)!.id;
+    const beforeFolderCount = before.folders.length;
 
     applyStructureMutation({
       entity: "folder",
@@ -326,37 +322,31 @@ describe("state integration", () => {
     });
 
     const after = getState();
-    expect(after.folders!.length).toBe(beforeFolderCount + 1);
-    const created = after.folders!.find((folder) => folder.name === "Side project")!;
+    expect(after.folders.length).toBe(beforeFolderCount + 1);
+    const created = after.folders.find((folder) => folder.name === "Side project")!;
     expect(created.parentFolderId).toBe(topFolderId);
-    // A non-top folder is derived into a project whose domainId is its top-level ancestor.
-    const derivedProject = after.projects.find((project) => project.id === created.id)!;
-    expect(derivedProject).toBeTruthy();
-    expect(derivedProject.domainId).toBe(topFolderId);
   });
 
-  it("moves a task between folders via folderId and re-derives its domain/project (T088)", () => {
+  it("moves a task between folders via folderId and makes it project-like under a child folder (T088)", () => {
     const state = getState();
-    const childFolder = state.folders!.find((folder) => folder.parentFolderId)!;
-    const topAncestor = childFolder.parentFolderId!;
+    const childFolder = state.folders.find((folder) => folder.parentFolderId)!;
     const task = state.tasks.find((entry) => entry.folderId !== childFolder.id && entry.status !== "archived")!;
 
     applyStructureMutation({ entity: "task", action: "update", id: task.id, patch: { folderId: childFolder.id } });
 
     const moved = getState().tasks.find((entry) => entry.id === task.id)!;
     expect(moved.folderId).toBe(childFolder.id);
-    expect(moved.projectId).toBe(childFolder.id);
-    expect(moved.domainId).toBe(topAncestor);
+    expect(moved.type).toBe("project_task");
   });
 
   it("rejects making a folder a child of its own descendant (cycle guard) (T088)", () => {
-    const parentFolderId = getState().folders!.find((folder) => !folder.parentFolderId)!.id;
+    const parentFolderId = getState().folders.find((folder) => !folder.parentFolderId)!.id;
     applyStructureMutation({ entity: "folder", action: "create", patch: { name: "Cycle child", parentFolderId } });
-    const child = getState().folders!.find((folder) => folder.name === "Cycle child")!;
+    const child = getState().folders.find((folder) => folder.name === "Cycle child")!;
 
     // Attempt to reparent the original parent under its own child -> rejected (parent stays top-level).
     applyStructureMutation({ entity: "folder", action: "update", id: parentFolderId, patch: { parentFolderId: child.id } });
-    const parentAfter = getState().folders!.find((folder) => folder.id === parentFolderId)!;
+    const parentAfter = getState().folders.find((folder) => folder.id === parentFolderId)!;
     expect(parentAfter.parentFolderId).toBeUndefined();
   });
 
@@ -393,50 +383,52 @@ describe("state integration", () => {
     expect(listChangeHistory().length).toBe(history.length - 1);
   });
 
-  it("manually creates, edits, moves, and archives structure", () => {
-    applyStructureMutation({ entity: "domain", action: "create", patch: { name: "Manual Domain", weight: 6 } });
+  it("manually creates, edits, moves, and archives structure (folders only, T088 2c-C)", () => {
+    applyStructureMutation({ entity: "folder", action: "create", patch: { name: "Manual Area", weight: 6 } });
     let state = getState();
-    const domain = state.domains.find((entry) => entry.name === "Manual Domain");
-    expect(domain).toBeDefined();
+    const area = state.folders.find((entry) => entry.name === "Manual Area");
+    expect(area).toBeDefined();
 
     applyStructureMutation({
-      entity: "project",
+      entity: "folder",
       action: "create",
-      patch: { name: "Manual Project", domainId: domain!.id, kind: "project", planningMode: "open_backlog", defaultBlockMinutes: 45 }
+      patch: { name: "Manual Project", parentFolderId: area!.id, canBlock: true, defaultBlockMinutes: 45 }
     });
     state = getState();
-    const project = state.projects.find((entry) => entry.name === "Manual Project");
-    expect(project).toMatchObject({ domainId: domain!.id, status: "active" });
+    const project = state.folders.find((entry) => entry.name === "Manual Project");
+    expect(project).toMatchObject({ parentFolderId: area!.id, status: "active" });
 
+    // A task placed in a child folder is project-like.
     applyStructureMutation({
       entity: "task",
       action: "create",
-      patch: { title: "Manual task", domainId: domain!.id, projectId: project!.id, effortMinutes: 35, dueDate: "2026-06-04" }
+      patch: { title: "Manual task", folderId: project!.id, effortMinutes: 35, dueDate: "2026-06-04" }
     });
     state = getState();
     const task = state.tasks.find((entry) => entry.title === "Manual task");
-    expect(task).toMatchObject({ projectId: project!.id, domainId: domain!.id, type: "project_task", effortMinutes: 35 });
+    expect(task).toMatchObject({ folderId: project!.id, type: "project_task", effortMinutes: 35 });
 
+    // Clearing folderId ("") unfiles the task and makes it atomic again.
     applyStructureMutation({
       entity: "task",
       action: "update",
       id: task!.id,
-      patch: { title: "Manual task corrected", projectId: "", effortMinutes: 20, completionBehavior: "keep_as_suggestion" }
+      patch: { title: "Manual task corrected", folderId: "", effortMinutes: 20, completionBehavior: "keep_as_suggestion" }
     });
     state = getState();
     expect(state.tasks.find((entry) => entry.id === task!.id)).toMatchObject({
       title: "Manual task corrected",
-      projectId: undefined,
+      folderId: undefined,
       type: "atomic",
       effortMinutes: 20,
       completionBehavior: "keep_as_suggestion"
     });
 
     applyStructureMutation({ entity: "task", action: "archive", id: task!.id });
-    applyStructureMutation({ entity: "project", action: "archive", id: project!.id });
+    applyStructureMutation({ entity: "folder", action: "archive", id: project!.id });
     state = getState();
     expect(state.tasks.find((entry) => entry.id === task!.id)?.status).toBe("archived");
-    expect(state.projects.find((entry) => entry.id === project!.id)?.status).toBe("paused");
+    expect(state.folders.find((entry) => entry.id === project!.id)?.status).toBe("archived");
   });
 
   it("records completion and deferral events against the active day", () => {
@@ -690,7 +682,7 @@ describe("state integration", () => {
     const afterAnswer = answerCaptureQuestion(session.id, question.id, "Reusable suggestion");
     const idea = afterAnswer.tasks.find((task) => task.title === "Ideas for things to do with Emma");
 
-    expect(idea?.projectId).toBe("container_emma");
+    expect(idea?.folderId).toBe("container_emma");
     expect(idea?.completionBehavior).toBe("keep_as_suggestion");
     expect(idea?.completionMode).toBe("suggestion_used");
   });
@@ -707,7 +699,7 @@ describe("state integration", () => {
     const updated = afterSecondFollowUp.tasks.find((candidate) => candidate.id === task!.id);
 
     expect(afterSecondFollowUp.tasks.filter((candidate) => candidate.title === "Water plants")).toHaveLength(1);
-    expect(updated?.projectId).toBe("project_diet_app");
+    expect(updated?.folderId).toBe("project_diet_app");
     expect(updated?.dateIntent?.kind).toBe("tomorrow");
     expect(updated?.scheduledDate).toBe("2026-06-02");
     expect(afterSecondFollowUp.captureSessions[0].appliedEntityIds).toEqual([task!.id]);
@@ -716,7 +708,7 @@ describe("state integration", () => {
       source: "follow_up",
       taskId: task!.id,
       before: { scheduledDate: "2026-06-01" },
-      after: { projectId: "project_diet_app", dateIntent: { kind: "week_window" } }
+      after: { folderId: "project_diet_app", dateIntent: { kind: "week_window" } }
     });
     expect(afterSecondFollowUp.captureSessions[0].revisionEvents[1]).toMatchObject({
       source: "follow_up",
@@ -835,11 +827,11 @@ describe("state integration", () => {
   });
 
   it("archives duplicate tasks when the inbox asks to keep only one matching task", async () => {
-    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Make dump run", domainId: "domain_house", effortMinutes: 60, priority: 2 } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Make dump run", folderId: "domain_house", effortMinutes: 60, priority: 2 } });
     applyStructureMutation({
       entity: "task",
       action: "create",
-      patch: { title: "Go to the dump", domainId: "domain_house", effortMinutes: 60, priority: 5, scheduledDate: "2026-06-01", scheduledTime: "17:00" }
+      patch: { title: "Go to the dump", folderId: "domain_house", effortMinutes: 60, priority: 5, scheduledDate: "2026-06-01", scheduledTime: "17:00" }
     });
     const before = getState();
     const oldTask = before.tasks.find((task) => task.title === "Make dump run");
@@ -890,7 +882,7 @@ describe("state integration", () => {
   });
 
   it("archives original duplicate tasks from capture follow-up messages", async () => {
-    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dump errand", domainId: "domain_house", effortMinutes: 60, priority: 2 } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dump errand", folderId: "domain_house", effortMinutes: 60, priority: 2 } });
     const afterCapture = await submitInbox("take recycling to the tip today", async () => ({
       model: "fixture",
       summary: "Dump run was added.",
@@ -962,7 +954,7 @@ describe("state integration", () => {
     }));
     const updated = afterFollowUp.tasks.find((candidate) => candidate.id === task!.id);
 
-    expect(updated?.projectId).toBe("container_emma");
+    expect(updated?.folderId).toBe("container_emma");
     expect(updated?.dateIntent?.kind).toBe("someday");
     expect(updated?.completionBehavior).toBe("keep_as_suggestion");
     expect(updated?.completionMode).toBe("suggestion_used");

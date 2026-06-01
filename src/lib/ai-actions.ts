@@ -4,7 +4,6 @@ import { z } from "zod";
 import { addDays, nextDayOfWeek, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
 import { buildDayPlan } from "./planner";
-import { topAncestorFolderId } from "./repository";
 import { buildWeekPlan } from "./week-plan";
 import type { AiAction, AiDebugTrace, AppState, CaptureSession, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
 
@@ -77,9 +76,7 @@ export type AiRevisionInterpreter = (input: {
 }) => Promise<CaptureRevision>;
 
 const highRiskActions: ReadonlySet<AiAction["type"]> = new Set([
-  "archive_project",
   "move_deadline",
-  "change_routine_recurrence",
   "mark_task_done",
   "replace_today_plan",
   "bulk_update_tasks",
@@ -332,7 +329,7 @@ function buildInboxModelContext(state: AppState) {
     deferrals: state.deferrals,
     completions: state.completions,
     executionEvents: state.executionEvents,
-    projectBlockSelections: state.projectBlockSelections,
+    folderBlockSelections: state.folderBlockSelections,
     dailyReviews: state.dailyReviews,
     currentDayPlan: buildDayPlan(state),
     weekPlan: buildWeekPlan(state),
@@ -1302,17 +1299,14 @@ function taskPayload(
   folderId?: string,
   sourceText = ""
 ): Omit<Task, "id"> {
-  // Derive back-compat domainId/projectId from the canonical folderId (T088). A folder with a
-  // parent plays the legacy "project" role; its top-level ancestor plays the "domain" role.
+  // Placement is folder-only (T088 2c-C). A folder with a parent is a "child folder"; tasks placed
+  // in one behave like the legacy project_task (outcome-oriented), top-level/unfiled stay atomic.
   const folders = state.folders ?? [];
   const folder = folderId ? folders.find((entry) => entry.id === folderId) : undefined;
-  const projectId = folder?.parentFolderId ? folder.id : undefined;
-  // No folder placement: fall back to the first existing top-level folder/domain, else "domain_work".
-  const fallbackDomainId = folders.find((entry) => !entry.parentFolderId)?.id ?? state.domains[0]?.id ?? "domain_work";
-  const domainId = folderId ? topAncestorFolderId(folders, folderId) ?? fallbackDomainId : fallbackDomainId;
+  const isInChildFolder = Boolean(folder?.parentFolderId);
   const isRecurring = action.recurrenceDays !== null && action.recurrenceDays !== undefined;
   const completionBehavior = isRecurring ? "repeatable" : inferCompletionBehavior(action);
-  const completionMode = isRecurring ? "repeatable_checkoff" : inferCompletionMode(action, projectId, completionBehavior);
+  const completionMode = isRecurring ? "repeatable_checkoff" : inferCompletionMode(action, isInChildFolder, completionBehavior);
   const dueDate = action.dueDate ?? undefined;
   const scheduledDate = action.scheduledDate ?? undefined;
   const scheduledTime = action.scheduledTime && /^\d{2}:\d{2}$/.test(action.scheduledTime) ? action.scheduledTime : undefined;
@@ -1328,18 +1322,16 @@ function taskPayload(
   const scheduling = buildScheduling(action);
   return {
     title: action.title,
-    type: projectId ? "project_task" : completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "atomic",
-    domainId,
-    projectId,
+    type: isInChildFolder ? "project_task" : completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "atomic",
     folderId,
     sourceInboxItemId: inboxItemId,
     status: "active",
     repeatPolicy,
     completionBehavior,
     completionMode,
-    definitionOfDone: action.definitionOfDone ?? (projectId && completionMode === "outcome_done" ? `${action.title} is finished and verified.` : undefined),
+    definitionOfDone: action.definitionOfDone ?? (isInChildFolder && completionMode === "outcome_done" ? `${action.title} is finished and verified.` : undefined),
     plannerFields: {
-      intentType: projectId ? "progress" : completionBehavior === "keep_as_suggestion" ? "idea" : "obligation",
+      intentType: isInChildFolder ? "progress" : completionBehavior === "keep_as_suggestion" ? "idea" : "obligation",
       pressureLevel: scheduledTime ? "scheduled" : dueDate ? "due" : action.strictness === "flexible" ? "soft" : "someday"
     },
     plannerSignals: {
@@ -1374,11 +1366,11 @@ function inferCompletionBehavior(action: ParsedAiAction): CompletionBehavior {
   return "exhaust_once";
 }
 
-function inferCompletionMode(action: ParsedAiAction, projectId: string | undefined, behavior: CompletionBehavior): CompletionMode {
+function inferCompletionMode(action: ParsedAiAction, isInChildFolder: boolean, behavior: CompletionBehavior): CompletionMode {
   if (action.completionMode) return action.completionMode;
   if (behavior === "keep_as_suggestion") return "suggestion_used";
   if (behavior === "repeatable") return "repeatable_checkoff";
-  return projectId ? "outcome_done" : "simple_done";
+  return isInChildFolder ? "outcome_done" : "simple_done";
 }
 
 // Return the full path (or name) of an active folder matching the pattern, else null. Used by the

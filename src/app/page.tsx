@@ -952,7 +952,7 @@ const completionModes = ["simple_done", "outcome_done", "timebox", "repeatable_c
 function submitStructureForm(
   event: FormEvent<HTMLFormElement>,
   post: PostFn,
-  entity: "domain" | "project" | "task" | "routine" | "folder",
+  entity: "task" | "folder",
   action: "create" | "update",
   id?: string
 ) {
@@ -965,14 +965,7 @@ function submitStructureForm(
   });
 }
 
-function structurePatch(entity: "domain" | "project" | "task" | "routine" | "folder", formData: FormData): Record<string, unknown> {
-  if (entity === "domain") {
-    return {
-      name: fieldText(formData, "name"),
-      weight: fieldNumber(formData, "weight")
-    };
-  }
-
+function structurePatch(entity: "task" | "folder", formData: FormData): Record<string, unknown> {
   if (entity === "folder") {
     return {
       name: fieldText(formData, "name"),
@@ -981,33 +974,6 @@ function structurePatch(entity: "domain" | "project" | "task" | "routine" | "fol
       weight: fieldNumber(formData, "weight"),
       canBlock: formData.get("canBlock") === "on",
       defaultBlockMinutes: fieldNumber(formData, "defaultBlockMinutes")
-    };
-  }
-
-  if (entity === "project") {
-    return {
-      name: fieldText(formData, "name"),
-      domainId: fieldText(formData, "domainId"),
-      kind: fieldText(formData, "kind"),
-      planningMode: fieldText(formData, "planningMode"),
-      status: fieldText(formData, "status"),
-      defaultBlockMinutes: fieldNumber(formData, "defaultBlockMinutes"),
-      contextNote: fieldText(formData, "contextNote")
-    };
-  }
-
-  if (entity === "routine") {
-    const recurrenceType = fieldText(formData, "recurrenceType");
-    const weeklyDays = fieldText(formData, "weeklyDays")
-      .split(",")
-      .map((day) => Number(day.trim()))
-      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
-    return {
-      title: fieldText(formData, "title"),
-      domainId: fieldText(formData, "domainId"),
-      recurrence: recurrenceType === "weekly" ? { type: "weekly", days: weeklyDays.length ? weeklyDays : [1] } : { type: "daily" },
-      defaultEffortMinutes: fieldNumber(formData, "defaultEffortMinutes"),
-      preferredWindow: fieldText(formData, "preferredWindow")
     };
   }
 
@@ -1031,8 +997,7 @@ function structurePatch(entity: "domain" | "project" | "task" | "routine" | "fol
   return {
     repeatPolicy,
     title: fieldText(formData, "title"),
-    // Folders are canonical (T088): the single folder picker drives placement; state.ts re-derives
-    // domainId/projectId from folderId.
+    // Folders are the only structure (T088): the single folder picker drives placement.
     folderId: fieldText(formData, "folderId"),
     parentTaskId: fieldText(formData, "parentTaskId"),
     status: fieldText(formData, "status"),
@@ -1133,7 +1098,7 @@ function SecondaryPanel({
                       <span className="taskBadge">{task.status}</span>
                       <span className="taskBadge">{dateIntentLabel(task)}</span>
                       <span className="taskBadge">{task.effortMinutes}m</span>
-                      {task.projectId && <span className="taskBadge">{projectName(state, task.projectId)}</span>}
+                      {task.folderId && <span className="taskBadge">{folderPath(state, task.folderId)}</span>}
                       {task.parentTaskId && <span className="taskBadge">↳ subtask</span>}
                       {task.repeatPolicy?.type && task.repeatPolicy.type !== "none" && (
                         <span className="taskBadge">↻ {task.repeatPolicy.type}</span>
@@ -1656,7 +1621,7 @@ function clientPlanTitleFromId(state: AppState, date: string, planItemId: string
   const entityId = planItemId.startsWith(prefix) ? planItemId.slice(prefix.length).replace(/_phase_\d+$/, "") : planItemId;
   return (
     state.tasks.find((task) => task.id === entityId)?.title ??
-    state.projects.find((project) => project.id === entityId)?.name ??
+    (state.folders ?? []).find((folder) => folder.id === entityId)?.name ??
     planItemId
   );
 }
@@ -1698,10 +1663,6 @@ function dateIntentLabel(task: Task): string {
   if (task.scheduledDate) return formatShortDate(task.scheduledDate);
   if (task.dueDate) return `due ${formatShortDate(task.dueDate)}`;
   return task.plannerFields.pressureLevel;
-}
-
-function projectName(state: AppState, projectId: string): string {
-  return state.projects.find((project) => project.id === projectId)?.name ?? "Project";
 }
 
 // Client mirror of planner.blockFolderId (T088 2c-A): nearest ancestor-or-self folder (walking

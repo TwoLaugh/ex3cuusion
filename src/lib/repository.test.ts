@@ -165,7 +165,7 @@ describePostgres("postgres repository", () => {
         expect(readFromNormalizedRows.currentDate).toBe("2026-06-04");
         expect(readFromNormalizedRows.tasks.find((task) => task.id === "task_postgres_roundtrip")).toMatchObject({
           title: "Postgres roundtrip task",
-          domainId: "domain_product"
+          folderId: "project_diet_app"
         });
         expect(readFromNormalizedRows.executionEvents[0]).toMatchObject({
           id: "event_postgres_roundtrip",

@@ -43,7 +43,7 @@ describe("interpretInboxInput", () => {
       title: "Work on Diet App",
       completionMode: "timebox",
       effortMinutes: 120,
-      projectId: "project_diet_app"
+      folderId: "project_diet_app"
     });
 
     // Recurring habits are now create_task with a repeatPolicy (T088), not a separate create_routine.
@@ -152,11 +152,9 @@ describe("interpretInboxInput", () => {
     });
   });
 
-  it("falls back to an existing top-level folder when a create_task has no resolvable folder", async () => {
+  it("leaves a create_task unfiled (no folder) when it has no resolvable folder (T088 2c-C)", async () => {
     const state = createSeedState();
-    state.folders = [{ id: "domain_personal", name: "Personal", weight: 5 }];
-    state.domains = [{ id: "domain_personal", name: "Personal", weight: 5 }];
-    state.projects = [];
+    state.folders = [{ id: "folder_personal", name: "Personal", weight: 5 }];
     state.tasks = [];
     state.currentDate = "2026-06-01";
     state.currentTime = "08:30";
@@ -196,7 +194,7 @@ describe("interpretInboxInput", () => {
 
     expect(entry.actions[0].payload).toMatchObject({
       title: "Figure out local setup",
-      domainId: "domain_personal"
+      folderId: undefined
     });
   });
 

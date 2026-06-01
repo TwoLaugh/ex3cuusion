@@ -208,7 +208,6 @@ export function buildDayPlan(state: AppState): DayPlan {
       title: task.status === "blocked" && task.blocked?.unblockAction ? `Unblock: ${task.title}` : task.status === "waiting" ? `Follow up: ${task.title}` : task.title,
       section,
       status: "planned",
-      domainId: task.domainId,
       taskId: task.id,
       estimatedMinutes: calibratedEffortMinutes,
       clockMinutes: calibratedEffortMinutes,

@@ -83,8 +83,7 @@ function toBacklogItem(task: Task): WeekBacklogItem {
     dateIntent: effectiveDateIntent(task),
     dueDate: task.dueDate,
     scheduledDate: task.scheduledDate,
-    projectId: task.projectId,
-    domainId: task.domainId,
+    folderId: task.folderId,
     effortMinutes: task.effortMinutes
   };
 }
