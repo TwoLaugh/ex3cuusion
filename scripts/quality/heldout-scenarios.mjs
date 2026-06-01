@@ -48,6 +48,33 @@ export const heldoutScenarios = [
     minPassRate: 0.6
   },
   {
+    id: "ho-grouping",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "I'm organising a small dinner party — plan the menu, send the invites, and tidy the flat",
+    rubric:
+      "Several tasks belonging to one event/piece of work. GOOD: group them under a single project/work-block (a create_project or existing project) with the tasks attached. BAD: unrelated flat tasks with no shared project, or one merged task.",
+    minPassRate: 0.6
+  },
+  {
+    id: "ho-week-plan",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "help me lay out the rest of the week so nothing piles up",
+    rubric:
+      "A request to plan/spread the week. GOOD: assign multiple tasks to specific days across the week (several schedule_task actions on different days), a realistic spread. BAD: no scheduling actions, or everything on one day.",
+    minPassRate: 0.5
+  },
+  {
+    id: "ho-backlog-demote",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "the garage clean-out can wait — drop it to someday",
+    rubric:
+      "Deprioritise an EXISTING task (the seed has a garage-cleaning task) to someday. GOOD: update that existing task to someday / unscheduled / low pressure (e.g. update_task with dateIntent someday). BAD: creating a new task, scheduling it soon, or asking an unnecessary question.",
+    minPassRate: 0.5
+  },
+  {
     id: "ho-two-simple",
     date: "2026-06-01",
     time: "19:00",

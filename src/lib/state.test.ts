@@ -12,9 +12,11 @@ import {
   deferPlanItem,
   getState,
   listChangeHistory,
+  maybeRunDailyOrganizer,
   recordPlanItemOutcome,
   rejectAiAction,
   resetState,
+  runOrganizerPass,
   undoChange,
   retreatDay,
   setClock,
@@ -40,6 +42,120 @@ describe("state integration", () => {
     expect(after.inbox[0].actions.every((action) => action.status === "applied")).toBe(true);
     expect(after.inbox[0].actions.some((action) => action.skippedReason === "Task already exists.")).toBe(true);
     expect(plan.items.some((item) => item.title === "Message Will")).toBe(true);
+  });
+
+  it("groups multiple related tasks under a work block created in the same message (T062)", async () => {
+    const base = {
+      targetTaskId: null,
+      domainName: "Job Work",
+      projectName: null as string | null,
+      dueDate: null,
+      scheduledDate: null,
+      scheduledTime: null,
+      effortMinutes: 30,
+      energy: "medium" as const,
+      strictness: "normal" as const,
+      priority: 3,
+      importance: 3,
+      urgency: 3,
+      recurrenceDays: null,
+      completionBehavior: null,
+      completionMode: null,
+      definitionOfDone: null,
+      tags: null,
+      question: null,
+      clarificationKind: null,
+      clarificationOptions: null,
+      schedulingMode: null,
+      dateIntent: null
+    };
+    const after = await submitInbox("launch prep: write copy, design banner", async () => ({
+      model: "grouping-fixture",
+      summary: "Grouped under Launch Prep.",
+      actions: [
+        { ...base, type: "create_project" as const, label: "Create Launch Prep", title: "Launch Prep" },
+        { ...base, type: "create_task" as const, label: "Add Write copy", title: "Write copy", projectName: "Launch Prep" },
+        { ...base, type: "create_task" as const, label: "Add Design banner", title: "Design banner", projectName: "Launch Prep" }
+      ]
+    }));
+
+    const project = after.projects.find((candidate) => candidate.name === "Launch Prep");
+    expect(project).toBeDefined();
+    const copy = after.tasks.find((task) => task.title === "Write copy");
+    const banner = after.tasks.find((task) => task.title === "Design banner");
+    expect(copy?.projectId).toBe(project!.id);
+    expect(banner?.projectId).toBe(project!.id);
+  });
+
+  it("reprioritizes and demotes an existing task to someday (T064 update_task)", async () => {
+    const seed = getState();
+    const target = seed.tasks.find((task) => task.status !== "archived");
+    expect(target).toBeDefined();
+
+    const after = await submitInbox(`push ${target!.title} to someday`, async () => ({
+      model: "groom-fixture",
+      summary: "Demoted to someday.",
+      actions: [
+        {
+          type: "update_task" as const,
+          label: `Demote ${target!.title}`,
+          title: target!.title,
+          targetTaskId: target!.id,
+          domainName: "Job Work",
+          projectName: null,
+          dueDate: null,
+          scheduledDate: null,
+          scheduledTime: null,
+          effortMinutes: 30,
+          energy: "low" as const,
+          strictness: "flexible" as const,
+          priority: 2,
+          importance: 2,
+          urgency: 1,
+          recurrenceDays: null,
+          completionBehavior: null,
+          completionMode: null,
+          definitionOfDone: null,
+          tags: null,
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null,
+          schedulingMode: null,
+          dateIntent: "someday" as const
+        }
+      ]
+    }));
+
+    const updated = after.tasks.find((task) => task.id === target!.id);
+    expect(updated?.scheduledDate).toBeUndefined();
+    expect(updated?.plannerFields.pressureLevel).toBe("someday");
+    expect(updated?.urgency).toBe(1);
+  });
+
+  it("organizer archives duplicate tasks as one undoable pass (T066)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Duplicate me" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Duplicate me" } });
+    const liveBefore = getState().tasks.filter((task) => task.title === "Duplicate me" && task.status !== "archived").length;
+    expect(liveBefore).toBe(2);
+
+    await runOrganizerPass();
+
+    const liveAfter = getState().tasks.filter((task) => task.title === "Duplicate me" && task.status !== "archived").length;
+    expect(liveAfter).toBe(1);
+    expect(listChangeHistory()[0].source).toBe("organizer");
+  });
+
+  it("auto organizer runs once per day then no-ops (T069)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup once" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup once" } });
+
+    await maybeRunDailyOrganizer();
+    expect(getState().tasks.filter((task) => task.title === "Dup once" && task.status !== "archived").length).toBe(1);
+    expect(getState().lastAutoOrganizeDate).toBe("2026-06-01");
+
+    const historyLen = listChangeHistory().length;
+    await maybeRunDailyOrganizer(); // same day -> no-op
+    expect(listChangeHistory().length).toBe(historyLen);
   });
 
   it("records AI changes and undoes them (auto-apply with undo)", async () => {
@@ -454,7 +570,8 @@ describe("state integration", () => {
           question: null,
           clarificationKind: null,
           clarificationOptions: null,
-          schedulingMode: null
+          schedulingMode: null,
+          dateIntent: null
         }
       ]
     }));
@@ -497,7 +614,8 @@ describe("state integration", () => {
           question: null,
           clarificationKind: null,
           clarificationOptions: null,
-          schedulingMode: null
+          schedulingMode: null,
+          dateIntent: null
         }
       ]
     }));
@@ -548,7 +666,8 @@ describe("state integration", () => {
           question: null,
           clarificationKind: null,
           clarificationOptions: null,
-          schedulingMode: null
+          schedulingMode: null,
+          dateIntent: null
         }
       ]
     }));
@@ -592,7 +711,8 @@ describe("state integration", () => {
           question: null,
           clarificationKind: null,
           clarificationOptions: null,
-          schedulingMode: null
+          schedulingMode: null,
+          dateIntent: null
         }
       ]
     }));

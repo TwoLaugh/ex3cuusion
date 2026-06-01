@@ -17,6 +17,33 @@ export const devScenarios = [
     minPassRate: 0.6
   },
   {
+    id: "multi-task-grouping",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "for the Q3 launch: draft the announcement, line up the email sequence, and brief the design team",
+    rubric:
+      "Several tasks that clearly belong to one piece of work (a launch). GOOD: group them under a single project/work-block — a create_project (or an existing project) — with the individual tasks attached to that project (their projectId set), not unrelated flat tasks. Acceptable to also schedule a block. BAD: flat tasks with no shared project, or merging everything into one task.",
+    minPassRate: 0.6
+  },
+  {
+    id: "backlog-demote",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "the optimizer tests aren't urgent — push them to someday",
+    rubric:
+      "The user wants to defer/deprioritize an EXISTING task (the seed has a task about optimizer tests) to someday. GOOD: update that existing task to someday (unscheduled, low pressure) and/or lower its urgency — e.g. an update_task with dateIntent someday targeting it. BAD: creating a new task, scheduling it soon, or asking an unnecessary question.",
+    minPassRate: 0.5
+  },
+  {
+    id: "mixed-altitude",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "move the auth bug to tomorrow and push the optimizer tests to someday",
+    rubric:
+      "A mixed request touching two existing seed tasks at different altitudes: reschedule the auth-bug task to tomorrow AND demote the optimizer-tests task to someday. GOOD: both happen — a schedule_task (or update_task) moving the auth bug to tomorrow, and an update_task/demotion sending the optimizer tests to someday. BAD: doing only one, creating brand-new tasks, or asking an unnecessary question.",
+    minPassRate: 0.5
+  },
+  {
     id: "obvious-simple",
     date: "2026-06-01",
     time: "08:30",
@@ -33,6 +60,15 @@ export const devScenarios = [
     rubric:
       "Broad outcome work: a whole space with no defined finish line. GOOD: ask a clarifying question about what 'done' means (definition of done / scope) before committing, OR create a task with a clearly stated concrete scope. BAD: create a vague task with no scope and no question.",
     minPassRate: 0.6
+  },
+  {
+    id: "week-plan",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "plan out my week — spread my open tasks across the next few days",
+    rubric:
+      "A request to lay out the week. GOOD: assign multiple tasks to specific days across the week (several schedule_task actions whose scheduledDate falls on different days), producing a realistic spread; respecting deadlines and not overloading a single day is a plus. BAD: no scheduling actions at all, or piling every task onto one day.",
+    minPassRate: 0.5
   },
   {
     id: "deadline-not-schedule",
@@ -56,9 +92,11 @@ export const devScenarios = [
     id: "recurring-habit",
     date: "2026-06-01",
     time: "08:30",
-    input: "I want to stretch my back every morning",
+    // Use a habit NOT already present in the seed (the seed has a back-rehab routine, so a
+    // back-stretch request correctly dedupes to the existing one — a flawed test, not a model bug).
+    input: "I want to drink a glass of water every morning when I wake up",
     rubric:
-      "An explicit recurring daily habit. GOOD: create a recurring routine (daily). BAD: a single one-off task, or asking an unnecessary question.",
+      "An explicit recurring daily habit not already in the system. GOOD: create a recurring routine (daily). BAD: a single one-off task, or asking an unnecessary question.",
     minPassRate: 0.7
   },
   {

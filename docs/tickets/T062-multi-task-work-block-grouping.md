@@ -1,6 +1,20 @@
 # T062: Multi-Task Capture to Work-Block Grouping
 
-Status: planned.
+Status: implemented.
+
+## Implementation
+
+- Prompt: instruct the model to group several tasks that share one piece of work under a
+  create_project (or existing project) with each task's projectName set to that work block, and
+  NOT to group unrelated errands.
+- Linking fix: a create_task's projectId is resolved at build time against pre-apply state, so a
+  project created in the same message wasn't visible. Now the raw intended name is carried on
+  `AiAction.pendingProjectName` (types.ts); `submitInbox` applies create_project before
+  create_task (`applyRank`); and `linkPendingProject` resolves the projectId at apply time.
+- Verified: unit test (project + two tasks in one batch link to the new project) and the live
+  quality scenario `multi-task-grouping` passes. tsc + 45 unit tests green.
+- Note: `recurring-habit` quality scenario dipped to 1/3 in the same run — unrelated model
+  variance (small sample), not caused by this change; flagged for monitoring.
 
 ## Goal
 

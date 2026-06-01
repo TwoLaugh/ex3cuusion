@@ -1,6 +1,17 @@
 # T065: Week + Backlog Reasoning Altitude
 
-Status: planned.
+Status: implemented.
+
+## Implementation
+
+- Added an explicit "work at the right altitude" instruction to the single interpreter: read the
+  week plan and backlog (not only today), and choose day-level edits, week-level distribution
+  (schedule_task across days), or backlog grooming (update_task) to match the request —
+  decomposing mixed requests rather than defaulting to a single task today. No second interpreter
+  (AGENTS.md).
+- Verified: new live `mixed-altitude` scenario (reschedule one task to tomorrow AND demote
+  another to someday in one message) passes 3/3; full dev set 12/12; no regressions. tsc + 47
+  unit tests green.
 
 ## Goal
 

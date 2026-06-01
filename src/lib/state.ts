@@ -1,4 +1,4 @@
-import { interpretCaptureRevision, interpretInboxInput, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
+import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
 import { buildDayPlan } from "./planner";
@@ -632,8 +632,12 @@ export function recordPlanItemOutcome(input: {
   return getState();
 }
 
-export async function submitInbox(input: string, interpreter?: AiInterpreter): Promise<AppState> {
-  recordChange("inbox", summarizeInbox(input));
+export async function submitInbox(
+  input: string,
+  interpreter?: AiInterpreter,
+  history?: { source: string; summary: string }
+): Promise<AppState> {
+  recordChange(history?.source ?? "inbox", history?.summary ?? summarizeInbox(input));
   const state = currentState();
   const entry = await interpretInboxInput(input, state, interpreter);
   const session = buildCaptureSession(state, input, entry);
@@ -657,7 +661,10 @@ export async function submitInbox(input: string, interpreter?: AiInterpreter): P
     session.actionIds.push(action.id);
   }
 
-  for (const action of entry.actions) {
+  // Apply create_project before create_task so tasks can link to a work-block created in the
+  // same message (T062 grouping). Display order (entry.actions) is preserved separately.
+  const applyOrder = [...entry.actions].sort((left, right) => applyRank(left) - applyRank(right));
+  for (const action of applyOrder) {
     applyAutoAction(state, action, input);
     recordAppliedEntity(session, action);
   }
@@ -670,6 +677,28 @@ export async function submitInbox(input: string, interpreter?: AiInterpreter): P
 
   state.inbox.unshift(entry);
   state.captureSessions.unshift(session);
+  return getState();
+}
+
+// Proactive maintenance pass (T066): reuses the inbox apply/history machinery with an
+// organizer interpreter, recorded as one undoable "organizer" change.
+export async function runOrganizerPass(interpreter: AiInterpreter = defaultOrganizerInterpreter): Promise<AppState> {
+  return submitInbox("Review my tasks and propose small, safe maintenance edits.", interpreter, {
+    source: "organizer",
+    summary: "Tidy-up pass"
+  });
+}
+
+// Run the organizer at most once per local day (T069). Stamps the date after running so a second
+// open the same day is a no-op. Undoable like any organizer pass.
+export async function maybeRunDailyOrganizer(interpreter: AiInterpreter = defaultOrganizerInterpreter): Promise<AppState> {
+  const today = currentState().currentDate;
+  if (currentState().lastAutoOrganizeDate === today) return getState();
+  await submitInbox("Daily maintenance: propose small, safe tidy-up edits.", interpreter, {
+    source: "organizer",
+    summary: "Daily tidy-up (auto)"
+  });
+  currentState().lastAutoOrganizeDate = today;
   return getState();
 }
 
@@ -886,6 +915,67 @@ export function rejectAiAction(actionId: string, reason?: string): AppState {
   return getState();
 }
 
+function applyRank(action: AiAction): number {
+  // create_project must run before create_task so same-batch tasks can link to it (T062).
+  return action.type === "create_project" ? 0 : 1;
+}
+
+function clampTaskScore(value: number): number {
+  return Math.max(1, Math.min(9, Math.round(value)));
+}
+
+// Apply a backlog/grooming date-intent change to an existing task (T064): promote, demote to
+// someday, or move to a week window. "unchanged"/undefined leaves dates untouched.
+function applyTaskDateIntent(state: AppState, task: Task, kind: string | undefined, scheduledDate?: string, dueDate?: string): void {
+  if (!kind || kind === "unchanged") return;
+  const today = state.currentDate;
+  if (kind === "today" || kind === "tomorrow") {
+    const date = kind === "today" ? today : addDays(today, 1);
+    task.scheduledDate = date;
+    task.scheduledTime = undefined;
+    task.plannerFields.pressureLevel = "scheduled";
+    task.dateIntent = { kind, scheduledDate: date, confidence: 0.8 };
+  } else if (kind === "this_week" || kind === "next_week") {
+    const range = kind === "this_week" ? weekRange(today) : nextWeekRange(today);
+    task.scheduledDate = undefined;
+    task.plannerFields.pressureLevel = "soft";
+    task.dateIntent = { kind: "week_window", startDate: range.startDate, endDate: range.endDate, confidence: 0.7 };
+  } else if (kind === "someday") {
+    task.scheduledDate = undefined;
+    task.dueDate = undefined;
+    task.scheduledTime = undefined;
+    task.plannerFields.pressureLevel = "someday";
+    task.dateIntent = { kind: "someday", confidence: 0.6 };
+  } else if (kind === "specific_date" && scheduledDate) {
+    task.scheduledDate = scheduledDate;
+    task.plannerFields.pressureLevel = "scheduled";
+    task.dateIntent = { kind: "specific_date", scheduledDate, confidence: 0.7 };
+  } else if (kind === "deadline" && dueDate) {
+    task.dueDate = dueDate;
+    task.scheduledDate = undefined;
+    task.plannerFields.pressureLevel = "due";
+    task.dateIntent = { kind: "deadline", dueDate, confidence: 0.7 };
+  }
+}
+
+// Resolve a create_task's intended project name to a real projectId at apply time — covers a
+// work-block created earlier in the same batch (T062 grouping).
+function linkPendingProject(state: AppState, action: AiAction, payload: Omit<Task, "id">): void {
+  if (payload.projectId || !action.pendingProjectName) return;
+  const target = action.pendingProjectName.toLowerCase();
+  const project = state.projects.find(
+    (candidate) =>
+      candidate.status !== "completed" &&
+      (candidate.name.toLowerCase() === target ||
+        candidate.name.toLowerCase().includes(target) ||
+        target.includes(candidate.name.toLowerCase()))
+  );
+  if (!project) return;
+  payload.projectId = project.id;
+  payload.type = "project_task";
+  payload.domainId = project.domainId;
+}
+
 function applyAutoAction(state: AppState, action: AiAction, sourceText?: string) {
   if (action.status === "failed") return;
   if (action.safety !== "auto_apply") {
@@ -902,6 +992,7 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
 
   if (action.type === "create_task") {
     const payload = action.payload as Omit<Task, "id">;
+    linkPendingProject(state, action, payload);
     const existing = state.tasks.find(
       (task) =>
         task.title.toLowerCase() === payload.title.toLowerCase() &&
@@ -939,6 +1030,24 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
       return;
     }
     applyTaskSchedulePatch(state, task, action.payload);
+    action.status = "applied";
+    action.appliedEntityId = task.id;
+    action.skippedReason = undefined;
+    return;
+  }
+
+  if (action.type === "update_task") {
+    const task = findTaskForAction(state, action);
+    if (!task) {
+      action.status = "failed";
+      action.skippedReason = "Could not find the task to update.";
+      return;
+    }
+    const payload = action.payload as { priority?: number; importance?: number; urgency?: number; dateIntent?: string; scheduledDate?: string; dueDate?: string };
+    if (typeof payload.priority === "number") task.priority = clampTaskScore(payload.priority);
+    if (typeof payload.importance === "number") task.importance = clampTaskScore(payload.importance);
+    if (typeof payload.urgency === "number") task.urgency = clampTaskScore(payload.urgency);
+    applyTaskDateIntent(state, task, payload.dateIntent, payload.scheduledDate, payload.dueDate);
     action.status = "applied";
     action.appliedEntityId = task.id;
     action.skippedReason = undefined;

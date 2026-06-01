@@ -1,6 +1,21 @@
 # T066: Proactive Structure / Hygiene Organizer
 
-Status: planned.
+Status: implemented (MVP).
+
+## Implementation
+
+- `defaultOrganizerInterpreter` (ai-actions.ts): a conservative maintenance prompt over the full
+  state, reusing the existing action schema — archive_task (dedupe), update_task (demote stale /
+  fix priority), schedule_task (surface ready), and split via create_project + create_task +
+  archive_task. Instructed to return no actions when nothing needs maintenance.
+- `runOrganizerPass` (state.ts) reuses the inbox apply/history machinery (one undoable
+  "organizer" change). `POST /api/organizer`. "Tidy up" button in the UI.
+- `fixtureOrganizerInterpreter` deterministically archives exact-duplicate tasks (test/smoke).
+- Verified: unit test (fixture dedupe) + live end-to-end (seeded two duplicates, the real model
+  returned exactly one archive_task — conservative, didn't churn other tasks — and it's
+  undoable). tsc + 48 unit tests green.
+- Scope: triggered on demand (button/endpoint). Scheduled/auto-trigger and richer maintenance
+  (recategorize, stale detection heuristics) can extend this later. Supersedes T020.
 
 ## Goal
 

@@ -335,6 +335,7 @@ export interface AiAction {
     | "assign_task_to_project"
     | "assign_task_to_domain"
     | "schedule_task"
+    | "update_task"
     | "archive_task"
     | "archive_project"
     | "move_deadline"
@@ -359,6 +360,9 @@ export interface AiAction {
   captureSessionId?: string;
   sourceMessageId?: string;
   pendingQuestionId?: string;
+  // Intended project/work-block name for a create_task whose project may be created in the same
+  // batch (T062 grouping). Resolved to a real projectId at apply time, after create_project runs.
+  pendingProjectName?: string;
 }
 
 export interface InboxEntry {
@@ -453,4 +457,6 @@ export interface AppState {
   dailyReviews: DailyReview[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];
+  // Local date of the last auto-triggered organizer pass (T069); guards once-per-day runs.
+  lastAutoOrganizeDate?: string;
 }

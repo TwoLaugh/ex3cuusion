@@ -11,7 +11,7 @@ const aiActionSchema = z.object({
   summary: z.string(),
   actions: z.array(
     z.object({
-      type: z.enum(["create_task", "create_routine", "create_project", "schedule_block", "schedule_task", "archive_task", "ask_clarification"]),
+      type: z.enum(["create_task", "create_routine", "create_project", "schedule_block", "schedule_task", "update_task", "archive_task", "ask_clarification"]),
       label: z.string(),
       title: z.string(),
       targetTaskId: z.string().nullable().optional(),
@@ -36,7 +36,8 @@ const aiActionSchema = z.object({
       question: z.string().nullable(),
       clarificationKind: z.enum(["definition_of_done", "completion_behavior", "container_kind", "repeat_policy", "date", "split", "next_action"]).nullable(),
       clarificationOptions: z.array(z.string()).nullable(),
-      schedulingMode: z.enum(["exclusive", "concurrent", "background"]).nullable()
+      schedulingMode: z.enum(["exclusive", "concurrent", "background"]).nullable(),
+      dateIntent: z.enum(["unchanged", "today", "tomorrow", "this_week", "next_week", "someday", "specific_date", "deadline"]).nullable()
     })
   )
 });
@@ -141,6 +142,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
   const instructions =
     "You are the state-editing brain for a personal execution planner. " +
     "You receive the user's full current app state, current day plan, and week plan as JSON. Use that context directly; do not guess blindly from the latest message. " +
+    "Work at the right altitude. A request may be about a single task or today, about the whole week, or about the backlog of undated/someday work. Read the week plan and backlog too — not only today — and choose the matching actions: day-level edits for a single task, week-level distribution (schedule_task across multiple days) for week requests, and backlog grooming (update_task) for priority/someday/promotion changes. Decompose a mixed request into the right action at each altitude rather than defaulting to a single task today. " +
     "Decide what should change in the existing state. Prefer editing, archiving, rescheduling, or asking a useful clarification over creating duplicates. " +
     "The durable unit is a task; chat exists only to clarify ambiguity before creating good task state. " +
     "Think through the task silently first. Ask a follow-up only when the answer materially changes storage, recurrence, scheduling, completion behavior, project placement, splitting, or definition of done. " +
@@ -153,11 +155,14 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "For ask_clarification actions: title must be the canonical future task title, not the question text. question must contain the user-facing question. definitionOfDone must be null. " +
     "For a request to collect reusable ideas or suggestions — a list the user would draw from repeatedly rather than complete once — use ask_clarification with completionBehavior keep_as_suggestion and completionMode suggestion_used, asking whether to keep it as a reusable suggestion list. Such a list is never 'done', so do not frame it as clarificationKind definition_of_done; use completion_behavior. " +
     "For time-boxed work (wording like 'work on X for N hours/minutes'), return create_task with completionBehavior repeatable, completionMode timebox, the stated effort in minutes, and the matching existing project if one exists. " +
+    "When the user lists several tasks that clearly belong to one piece of work, project, or session, group them: return a create_project for the work block (or reuse an existing project by its exact name) and a create_task for each item with projectName set to that same work-block name — not several unrelated flat tasks. Do NOT group unrelated errands (e.g. milk, bins, call dentist); leave those as separate simple tasks. " +
     "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
     "Interpret colloquial clock times into 24-hour HH:mm (for example an evening 'half past eleven' is 23:30) unless the user clearly means another time. " +
     "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; set scheduledDate and dueDate to null and keep the date intent as a week-level window unless the user names a specific day or deadline. " +
     "Do not ask a clarification merely to pin down a vague but acceptable time window such as 'sometime next week' — store it as a week-level window without asking. Only ask about dates when the wording is genuinely contradictory or there is a hard deadline conflict. " +
-    "For deadline wording such as 'by <day>' or 'before <day>', set dueDate, not scheduledDate. For execution wording such as 'on <day>' or 'today', set scheduledDate. " +
+    "For deadline wording such as 'by <day>' or 'before <day>', set dueDate, not scheduledDate. For execution wording such as 'on <day>' or 'today', set scheduledDate. Capture an obvious deadline task directly with its dueDate; do not ask a clarification merely to confirm a clear deadline. " +
+    "For week-level requests (plan my week, lay out the week, rebalance, I'm behind or ahead), distribute this-week, deadline, and open backlog tasks across the days of the week: return one schedule_task per task with targetTaskId and a scheduledDate on the chosen day. Use the provided week plan to respect each day's remaining capacity (do not cram one day past its available minutes), keep tasks before their deadlines, leave fixed anchors alone, and prefer a realistic spread. You may move an already-scheduled task to another day with schedule_task. " +
+    "For backlog grooming on an EXISTING task — changing its priority/importance/urgency, or moving it between today, this week, next week, or someday — use update_task with targetTaskId plus the new score values and/or dateIntent (one of today, tomorrow, this_week, next_week, someday, specific_date, deadline; use unchanged to leave dates as they are). To split a large or vague task into concrete steps, return a create_project for it, a create_task per step with projectName set to that project, and archive_task on the original. To surface what is ready, schedule the clearest capacity-fitting backlog items rather than asking. " +
     "For explicit recurring habits, return create_routine with recurrenceDays when known, mapping weekday names to 0-6 with Sunday as 0. " +
     "For sleep or bed time, return create_task titled 'Sleep', not schedule_block. " +
     "Set schedulingMode on every create_task: 'exclusive' for normal focused work (the default), 'concurrent' for a light-attention activity the user does while something else runs, and 'background' for work that proceeds largely unattended. " +
@@ -192,6 +197,66 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     ...response.output_parsed,
     model,
     debugTrace: debugTraceForCall("Full-context actions", model, instructions, modelInput, responseText(response), response.output_parsed)
+  };
+}
+
+// --- Proactive organizer (T066) ------------------------------------------------------------
+const ORGANIZER_INSTRUCTIONS =
+  "You are doing a conservative maintenance pass over a personal execution planner's full state (provided as JSON). " +
+  "Propose only SMALL, high-confidence maintenance actions and nothing else: " +
+  "archive_task to remove an exact duplicate task (keep one copy) using the duplicate's targetTaskId; " +
+  "update_task to demote a clearly stale, long-undated, low-value task to someday, or to fix an obviously wrong priority; " +
+  "schedule_task to surface a clearly-ready backlog item into an upcoming day that has spare capacity; " +
+  "and to split a single bloated, vague task into concrete steps, a create_project plus a create_task per step (projectName set to that project) plus archive_task on the original. " +
+  "Do NOT churn a well-organized store: if nothing clearly needs maintenance, return an empty actions array. " +
+  "Never invent tasks the user did not imply, and never archive anything that is not a true duplicate. Prefer fewer, safe, reversible edits.";
+
+export async function defaultOrganizerInterpreter(input: string, state: AppState): Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (process.env.EX3CUUSION_AI_MODE === "fixture" || process.env.NODE_ENV === "test" || (!apiKey && process.env.NODE_ENV !== "production")) {
+    return fixtureOrganizerInterpreter(input, state);
+  }
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+  const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+  const openai = new OpenAI({
+    apiKey,
+    timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
+    maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 1)
+  });
+  const modelInput = `Conservative maintenance pass. Full planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
+  const response = await openai.responses.parse({
+    model,
+    instructions: ORGANIZER_INSTRUCTIONS,
+    input: [{ role: "user", content: modelInput }],
+    text: { format: zodTextFormat(aiActionSchema, "organizer_actions") }
+  });
+  if (!response.output_parsed) {
+    throw new Error("OpenAI response did not match the expected organizer schema");
+  }
+  return {
+    ...response.output_parsed,
+    model,
+    debugTrace: debugTraceForCall("Organizer pass", model, ORGANIZER_INSTRUCTIONS, modelInput, responseText(response), response.output_parsed)
+  };
+}
+
+// Deterministic test double: archive exact-duplicate non-archived tasks (keep the first seen).
+export async function fixtureOrganizerInterpreter(_input: string, state: AppState): Promise<ParsedAiResponse & { model: string }> {
+  const seen = new Set<string>();
+  const actions: ParsedAiAction[] = [];
+  for (const task of state.tasks) {
+    if (task.status === "archived") continue;
+    const key = task.title.trim().toLowerCase();
+    if (seen.has(key)) {
+      actions.push(baseAction("archive_task", `Archive duplicate ${task.title}`, task.title, state, { targetTaskId: task.id }));
+    } else {
+      seen.add(key);
+    }
+  }
+  return {
+    model: "fixture",
+    summary: actions.length ? `${actions.length} duplicate task${actions.length === 1 ? "" : "s"} archived.` : "No maintenance needed.",
+    actions
   };
 }
 
@@ -848,6 +913,7 @@ function baseAction(
     clarificationKind: null,
     clarificationOptions: null,
     schedulingMode: null,
+    dateIntent: null,
     ...overrides
   };
 }
@@ -871,6 +937,11 @@ function buildAction(
   const normalizedType = action.type;
   const status: AiAction["status"] = validationErrors.length > 0 && safety === "auto_apply" ? "failed" : "proposed";
 
+  // Capture the model's intended project name from the RAW action (normalization nulls
+  // projectName when the project does not exist yet — which is exactly the same-batch grouping
+  // case). Resolved to a projectId at apply time, after any create_project in the batch runs.
+  const pendingProjectName = normalizedType === "create_task" ? cleanNullableString(rawAction.projectName) ?? undefined : undefined;
+
   return {
     id: nextId("action"),
     type: normalizedType,
@@ -878,6 +949,7 @@ function buildAction(
     safety,
     status,
     validationErrors,
+    pendingProjectName,
     model,
     createdAt: timestampForState(state),
     payload:
@@ -920,12 +992,23 @@ function buildAction(
                     dueDate: normalizeDate(action.dueDate ?? undefined, state.currentDate),
                     effortMinutes: action.effortMinutes
                   }
-                : normalizedType === "archive_task"
+                : normalizedType === "update_task"
                   ? {
                       taskId: action.targetTaskId,
                       title: targetTask?.title ?? action.title,
-                      reason: action.label
+                      priority: action.priority,
+                      importance: action.importance,
+                      urgency: action.urgency,
+                      dateIntent: action.dateIntent ?? "unchanged",
+                      scheduledDate: normalizeDate(action.scheduledDate ?? undefined, state.currentDate),
+                      dueDate: normalizeDate(action.dueDate ?? undefined, state.currentDate)
                     }
+                  : normalizedType === "archive_task"
+                    ? {
+                        taskId: action.targetTaskId,
+                        title: targetTask?.title ?? action.title,
+                        reason: action.label
+                      }
                   : {
                       question: action.question ?? "What should this become?",
                       questionKind: action.clarificationKind ?? "next_action",
@@ -1154,7 +1237,7 @@ function validateStructuredAction(action: ParsedAiAction, state: AppState): stri
   if (action.projectName && !findProjectId(state, action.projectName)) {
     errors.push("Project match is ambiguous or missing.");
   }
-  if (action.type === "schedule_task" || action.type === "archive_task") {
+  if (action.type === "schedule_task" || action.type === "archive_task" || action.type === "update_task") {
     if (!action.targetTaskId) {
       errors.push("Target task is required.");
     } else if (!state.tasks.some((task) => task.id === action.targetTaskId && task.status !== "archived")) {

@@ -117,6 +117,10 @@ Execution order:
 7. T066 - Proactive structure / hygiene organizer (extends T020)
 8. T067 - Week & backlog quality evals (continuous; each feature lands with its rubric scenarios)
 
+Follow-ups:
+- T068 - Guarded live clock tick (keep today current / roll midnight without yanking navigation)
+- T069 - Scheduled / auto-triggered organizer (once-per-day maintenance pass on app open)
+
 Dependencies: T061 precedes T063, T064, and T066. T065 follows T063 and T064. T067 runs
 alongside -- every feature ticket adds its quality scenarios as it lands.
 
