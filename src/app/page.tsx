@@ -7,8 +7,8 @@ import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 
 type ApiPayload = { state: AppState; plan: DayPlan };
 type PostFn = (url: string, body?: Record<string, unknown>) => Promise<void>;
-type SecondaryView = "Domains" | "Projects" | "Tasks" | "Routines" | "Planning preferences" | "AI activity";
-const secondaryViews: SecondaryView[] = ["Domains", "Projects", "Tasks", "Routines", "Planning preferences", "AI activity"];
+type SecondaryView = "Domains" | "Projects" | "Tasks" | "Planning preferences" | "AI activity";
+const secondaryViews: SecondaryView[] = ["Domains", "Projects", "Tasks", "Planning preferences", "AI activity"];
 const showAiDebugTrace = process.env.NODE_ENV !== "production";
 
 export default function Home() {
@@ -1434,75 +1434,6 @@ function SecondaryPanel({
           ))}
         </div>
       )}
-      {view === "Routines" && (
-        <div className="panelGrid">
-          <form className="structureForm" aria-label="Create routine" onSubmit={(event) => submitStructureForm(event, post, "routine", "create")}>
-            <h2>New routine</h2>
-            <input name="title" placeholder="Routine title" aria-label="Routine title" />
-            <select name="domainId" aria-label="Routine domain" defaultValue={state.domains[0]?.id}>
-              {state.domains.map((domain) => (
-                <option value={domain.id} key={domain.id}>
-                  {domain.name}
-                </option>
-              ))}
-            </select>
-            <select name="recurrenceType" aria-label="Routine recurrence" defaultValue="daily">
-              <option value="daily">daily</option>
-              <option value="weekly">weekly</option>
-            </select>
-            <input name="defaultEffortMinutes" type="number" min="1" max="240" defaultValue="20" aria-label="Routine minutes" />
-            <button type="submit">
-              <Plus size={15} />
-              Add
-            </button>
-          </form>
-          {state.routines.map((routine) => (
-            <article key={routine.id}>
-              <form className="stackedEditForm" onSubmit={(event) => submitStructureForm(event, post, "routine", "update", routine.id)}>
-                <input name="title" defaultValue={routine.title} aria-label={`Title ${routine.title}`} />
-                <select name="domainId" defaultValue={routine.domainId} aria-label={`Domain ${routine.title}`}>
-                  {state.domains.map((domain) => (
-                    <option value={domain.id} key={domain.id}>
-                      {domain.name}
-                    </option>
-                  ))}
-                </select>
-                <select name="recurrenceType" defaultValue={routine.recurrence.type} aria-label={`Recurrence ${routine.title}`}>
-                  <option value="daily">daily</option>
-                  <option value="weekly">weekly</option>
-                </select>
-                <input
-                  name="weeklyDays"
-                  defaultValue={routine.recurrence.type === "weekly" ? routine.recurrence.days.join(",") : ""}
-                  placeholder="Weekly days 0-6"
-                  aria-label={`Weekly days ${routine.title}`}
-                />
-                <input name="defaultEffortMinutes" type="number" min="1" max="240" defaultValue={routine.defaultEffortMinutes} aria-label={`Minutes ${routine.title}`} />
-                <select name="preferredWindow" defaultValue={routine.preferredWindow ?? ""} aria-label={`Window ${routine.title}`}>
-                  <option value="">anytime</option>
-                  <option value="morning">morning</option>
-                  <option value="afternoon">afternoon</option>
-                  <option value="evening">evening</option>
-                </select>
-                <div className="formActions">
-                  <button type="submit">
-                    <Save size={15} />
-                    Save
-                  </button>
-                  <button type="button" onClick={() => post("/api/structure", { entity: "routine", action: "archive", id: routine.id })}>
-                    <Archive size={15} />
-                    Archive
-                  </button>
-                </div>
-              </form>
-              <p>{routine.recurrence.type === "daily" ? "Daily" : `Weekly: ${routine.recurrence.days.join(", ")}`}</p>
-              <span>
-                {routine.defaultEffortMinutes}m - {routine.energy} - {routine.strictness} - {routine.active ? "active" : "inactive"}
-              </span>
-            </article>
-          ))}
-        </div>
-      )}
       {view === "Planning preferences" && (
         <div className="panelGrid">
           <article>
@@ -1691,7 +1622,6 @@ function clientPlanTitleFromId(state: AppState, date: string, planItemId: string
   return (
     state.tasks.find((task) => task.id === entityId)?.title ??
     state.projects.find((project) => project.id === entityId)?.name ??
-    state.routines.find((routine) => routine.id === entityId)?.title ??
     planItemId
   );
 }

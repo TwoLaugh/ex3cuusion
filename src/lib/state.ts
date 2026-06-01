@@ -36,10 +36,7 @@ export type StructureMutation =
         dateIntentKind?: "today" | "tomorrow" | "this_week" | "next_week" | "someday" | "specific_date" | "deadline" | "none";
       };
     }
-  | { entity: "task"; action: "archive"; id: string }
-  | { entity: "routine"; action: "create"; patch: Partial<AppState["routines"][number]> }
-  | { entity: "routine"; action: "update"; id: string; patch: Partial<AppState["routines"][number]> }
-  | { entity: "routine"; action: "archive"; id: string };
+  | { entity: "task"; action: "archive"; id: string };
 
 export type ProjectBlockSelectionAction = "add" | "remove" | "regenerate";
 
@@ -362,42 +359,6 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
       // Manual promote/demote (T072), sharing the AI's date-intent logic (T064).
       applyTaskDateIntent(state, task, mutation.patch.dateIntentKind, task.scheduledDate, task.dueDate);
     }
-    return getState();
-  }
-
-  if (mutation.entity === "routine") {
-    if (mutation.action === "create") {
-      const domainId = validDomainId(state, mutation.patch.domainId) ?? state.domains[0]?.id;
-      if (!domainId) return getState();
-      state.routines.push({
-        id: uniqueStateId(state, "routine"),
-        title: cleanText(mutation.patch.title) || "New routine",
-        domainId,
-        recurrence: normalizeRoutineRecurrence(mutation.patch.recurrence),
-        defaultEffortMinutes: clampNumber(mutation.patch.defaultEffortMinutes, 1, 240, 20),
-        energy: validEnergy(mutation.patch.energy) ?? "low",
-        strictness: validStrictness(mutation.patch.strictness) ?? "normal",
-        preferredWindow: validPreferredWindow(mutation.patch.preferredWindow),
-        active: mutation.patch.active ?? true
-      });
-      return getState();
-    }
-
-    const routine = state.routines.find((entry) => entry.id === mutation.id);
-    if (!routine) return getState();
-    if (mutation.action === "archive") {
-      routine.active = false;
-      return getState();
-    }
-    routine.title = cleanText(mutation.patch.title) || routine.title;
-    routine.domainId = validDomainId(state, mutation.patch.domainId) ?? routine.domainId;
-    routine.recurrence = mutation.patch.recurrence ? normalizeRoutineRecurrence(mutation.patch.recurrence) : routine.recurrence;
-    routine.defaultEffortMinutes = clampNumber(mutation.patch.defaultEffortMinutes, 1, 240, routine.defaultEffortMinutes);
-    routine.energy = validEnergy(mutation.patch.energy) ?? routine.energy;
-    routine.strictness = validStrictness(mutation.patch.strictness) ?? routine.strictness;
-    routine.preferredWindow =
-      cleanText(mutation.patch.preferredWindow) === "" ? undefined : validPreferredWindow(mutation.patch.preferredWindow) ?? routine.preferredWindow;
-    routine.active = mutation.patch.active ?? routine.active;
     return getState();
   }
 
@@ -1153,19 +1114,48 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
   }
 
   if (action.type === "create_routine") {
-    const title = String(action.payload.title);
-    const exists = state.routines.some((routine) => routine.title.toLowerCase() === title.toLowerCase());
+    // Routines are now recurring tasks (T088): build a task with a repeatPolicy from the
+    // routine-shaped payload instead of a separate RoutineTemplate entity.
+    const payload = action.payload as {
+      title: string;
+      domainId: string;
+      recurrence?: { type: "daily" } | { type: "weekly"; days: number[] };
+      defaultEffortMinutes?: number;
+      energy?: Task["energy"];
+      strictness?: Task["strictness"];
+    };
+    const title = String(payload.title);
+    const exists = state.tasks.some((task) => task.title.toLowerCase() === title.toLowerCase() && task.status !== "archived");
     if (!exists) {
-      const routine = {
-        id: nextId("routine"),
-        ...(action.payload as Omit<AppState["routines"][number], "id" | "active">),
-        active: true
+      const recurrence = payload.recurrence ?? { type: "daily" as const };
+      const task: Task = {
+        id: nextId("task"),
+        title,
+        type: "atomic",
+        domainId: payload.domainId,
+        status: "active",
+        repeatPolicy:
+          recurrence.type === "weekly"
+            ? { type: "weekly", days: recurrence.days ?? [1], carryover: "skip" }
+            : { type: "daily", carryover: "skip" },
+        completionBehavior: "repeatable",
+        completionMode: "repeatable_checkoff",
+        plannerFields: { intentType: "obligation", pressureLevel: "soft" },
+        tags: [],
+        priority: 3,
+        importance: 3,
+        urgency: 3,
+        effortMinutes: payload.defaultEffortMinutes ?? 20,
+        energy: payload.energy ?? "low",
+        strictness: payload.strictness ?? "normal",
+        dateIntent: { kind: "recurring", confidence: 0.8 },
+        scheduling: { mode: "exclusive", attentionLoad: "full", canOverlap: false }
       };
-      state.routines.push(routine);
-      action.appliedEntityId = routine.id;
+      state.tasks.push(task);
+      action.appliedEntityId = task.id;
       action.skippedReason = undefined;
     } else {
-      action.skippedReason = "Routine already exists.";
+      action.skippedReason = "Task already exists.";
     }
     action.status = "applied";
     return;
@@ -1698,12 +1688,11 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, Math.round(numeric)));
 }
 
-function uniqueStateId(state: AppState, prefix: "domain" | "project" | "task" | "routine"): string {
+function uniqueStateId(state: AppState, prefix: "domain" | "project" | "task"): string {
   const pools = {
     domain: state.domains,
     project: state.projects,
-    task: state.tasks,
-    routine: state.routines
+    task: state.tasks
   };
   const ids = pools[prefix].map((entry) => entry.id);
   let index = ids.reduce((max, id) => {
@@ -1787,10 +1776,6 @@ function validStrictness(value: unknown): Task["strictness"] | undefined {
   return value === "flexible" || value === "normal" || value === "strict" ? value : undefined;
 }
 
-function validPreferredWindow(value: unknown): AppState["routines"][number]["preferredWindow"] | undefined {
-  return value === "morning" || value === "afternoon" || value === "evening" ? value : undefined;
-}
-
 function normalizeRepeatPolicy(value: Task["repeatPolicy"] | undefined): Task["repeatPolicy"] {
   if (!value || value.type === "none") return { type: "none" };
   if (value.type === "daily" || value.type === "weekly") {
@@ -1803,14 +1788,6 @@ function normalizeRepeatPolicy(value: Task["repeatPolicy"] | undefined): Task["r
     };
   }
   return { type: "none" };
-}
-
-function normalizeRoutineRecurrence(value: AppState["routines"][number]["recurrence"] | undefined): AppState["routines"][number]["recurrence"] {
-  if (!value || value.type === "daily") return { type: "daily" };
-  return {
-    type: "weekly",
-    days: Array.isArray(value.days) && value.days.length ? value.days.map((day) => clampNumber(day, 0, 6, 1)) : [1]
-  };
 }
 
 function taskActionPatch(task: Task): Record<string, unknown> {
@@ -1916,7 +1893,6 @@ function planTitleFromId(state: AppState, date: string, planItemId: string): str
   return (
     state.tasks.find((task) => task.id === entityId)?.title ??
     state.projects.find((project) => project.id === entityId)?.name ??
-    state.routines.find((routine) => routine.id === entityId)?.title ??
     planItemId
   );
 }

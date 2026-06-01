@@ -365,18 +365,11 @@ describe("state integration", () => {
       completionBehavior: "keep_as_suggestion"
     });
 
-    applyStructureMutation({ entity: "routine", action: "create", patch: { title: "Manual routine", domainId: domain!.id, defaultEffortMinutes: 12 } });
-    state = getState();
-    const routine = state.routines.find((entry) => entry.title === "Manual routine");
-    expect(routine).toMatchObject({ active: true, defaultEffortMinutes: 12 });
-
     applyStructureMutation({ entity: "task", action: "archive", id: task!.id });
     applyStructureMutation({ entity: "project", action: "archive", id: project!.id });
-    applyStructureMutation({ entity: "routine", action: "archive", id: routine!.id });
     state = getState();
     expect(state.tasks.find((entry) => entry.id === task!.id)?.status).toBe("archived");
     expect(state.projects.find((entry) => entry.id === project!.id)?.status).toBe("paused");
-    expect(state.routines.find((entry) => entry.id === routine!.id)?.active).toBe(false);
   });
 
   it("records completion and deferral events against the active day", () => {

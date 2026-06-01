@@ -4,6 +4,14 @@ Status: in progress. (Large — data model + planner + AI + UI.)
 
 ## Progress
 
+- **STAGE 1 — RoutineTemplate entity removed: DONE.** Recurrence now lives entirely on tasks.
+  Removed the `RoutineTemplate` type, `AppState.routines`, the planner routine-template loop, the
+  routine structure-mutation entity + CRUD, and the Routines admin panel. `create_routine` (AI)
+  now builds a recurring task. Seed/scenario routines converted to recurring tasks;
+  `normalizeState` migrates any legacy `routines` data to recurring tasks. Debug payload exposes
+  `repeatPolicy`; eval harness "routine" assertions retargeted to recurring tasks. tsc clean,
+  58 unit tests green. (`create_routine` action kept for now; folds into create_task in Stage 3.)
+
 - **Routine-as-a-flag: DONE.** A task can be set to repeat (none / daily / weekly + days) directly
   in the editor; the planner already schedules recurring tasks via `isRepeatPolicyDue`, so a
   flagged task plans on its due days. A `↻ daily/weekly` badge shows on task cards. Unit-tested.

@@ -443,17 +443,22 @@ function taskExistsMatching(pattern) {
   return (debug) => (debug.tasks.some((task) => pattern.test(task.title)) ? [] : [`Expected a task matching ${pattern}.`]);
 }
 
+// Routines are now recurring tasks (T088): a "routine" = a task with a non-none repeatPolicy.
 function routineExists(title) {
-  return (debug) => (findRoutine(debug, title) ? [] : [`Expected routine ${matcherLabel(title)} to exist.`]);
+  return (debug) => (findRecurringTask(debug, title) ? [] : [`Expected a recurring task ${matcherLabel(title)} to exist.`]);
 }
 
 function routineHasWeeklyDay(title, day) {
   return (debug) => {
-    const routine = findRoutine(debug, title);
-    return routine?.recurrence?.type === "weekly" && routine.recurrence.days?.includes(day)
+    const task = findRecurringTask(debug, title);
+    return task?.repeatPolicy?.type === "weekly" && task.repeatPolicy.days?.includes(day)
       ? []
-      : [`Expected routine ${matcherLabel(title)} to recur weekly on day ${day}.`];
+      : [`Expected ${matcherLabel(title)} to recur weekly on day ${day}.`];
   };
+}
+
+function findRecurringTask(debug, title) {
+  return debug.tasks.find((task) => task.repeatPolicy && task.repeatPolicy.type !== "none" && matches(task.title, title));
 }
 
 function taskField(title, field, value) {
@@ -580,9 +585,6 @@ function findTask(debug, title) {
   return debug.tasks.find((task) => matches(task.title, title));
 }
 
-function findRoutine(debug, title) {
-  return debug.routines.find((routine) => matches(routine.title, title));
-}
 
 function matches(value, matcher) {
   return matcher instanceof RegExp ? matcher.test(value) : value === matcher;

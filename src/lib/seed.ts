@@ -147,19 +147,25 @@ export function createSeedState(): AppState {
         effortMinutes: 45,
         energy: "low",
         strictness: "flexible"
-      }
-    ],
-    routines: [
+      },
       {
-        id: "routine_back_rehab",
+        id: "task_back_rehab",
         title: "Back rehab",
+        type: "atomic",
         domainId: "domain_health",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 20,
+        status: "active",
+        repeatPolicy: { type: "daily", preferredWindow: "morning", carryover: "skip" },
+        completionBehavior: "repeatable",
+        completionMode: "repeatable_checkoff",
+        plannerFields: { intentType: "health", pressureLevel: "soft" },
+        tags: ["health", "recurring"],
+        priority: 5,
+        importance: 5,
+        urgency: 4,
+        effortMinutes: 20,
         energy: "low",
         strictness: "strict",
-        preferredWindow: "morning",
-        active: true
+        dateIntent: { kind: "recurring", confidence: 0.9 }
       }
     ],
     deferrals: [],

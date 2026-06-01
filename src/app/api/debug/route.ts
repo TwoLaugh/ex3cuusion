@@ -9,10 +9,8 @@ export async function GET() {
     currentDate: state.currentDate,
     currentTime: state.currentTime,
     taskCount: state.tasks.length,
-    routineCount: state.routines.length,
     domains: state.domains,
     projects: state.projects,
-    routines: state.routines,
     inbox: state.inbox.map((entry) => ({
       id: entry.id,
       input: entry.input,
@@ -39,6 +37,7 @@ export async function GET() {
       projectId: task.projectId,
       completionBehavior: task.completionBehavior,
       completionMode: task.completionMode,
+      repeatPolicy: task.repeatPolicy,
       definitionOfDone: task.definitionOfDone,
       blocked: task.blocked,
       waiting: task.waiting,

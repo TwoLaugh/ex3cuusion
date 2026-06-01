@@ -195,17 +195,6 @@ export interface Task {
   source?: string;
 }
 
-export interface RoutineTemplate {
-  id: string;
-  title: string;
-  domainId: string;
-  recurrence: { type: "daily" } | { type: "weekly"; days: number[] };
-  defaultEffortMinutes: number;
-  energy: Energy;
-  strictness: Strictness;
-  preferredWindow?: "morning" | "afternoon" | "evening";
-  active: boolean;
-}
 
 export interface PlanItem {
   id: string;
@@ -449,7 +438,6 @@ export interface AppState {
   domains: Domain[];
   projects: Project[];
   tasks: Task[];
-  routines: RoutineTemplate[];
   deferrals: DeferralLog[];
   completions: CompletionEvent[];
   executionEvents: ExecutionEvent[];

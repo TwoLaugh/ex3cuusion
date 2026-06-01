@@ -308,7 +308,6 @@ function buildInboxModelContext(state: AppState) {
     domains: state.domains,
     projects: state.projects,
     tasks: state.tasks,
-    routines: state.routines,
     deferrals: state.deferrals,
     completions: state.completions,
     executionEvents: state.executionEvents,

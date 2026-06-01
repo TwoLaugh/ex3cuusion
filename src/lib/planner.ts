@@ -4,13 +4,8 @@ import type { AppState, DayPlan, ExecutionEvent, LoadLevel, PlanItem, PlanItemSt
 type PlanCandidate = Omit<PlanItem, "startTime" | "endTime"> & {
   fixedStartTime?: string;
   hardAnchor?: boolean;
-  preferredWindow?: AppState["routines"][number]["preferredWindow"];
+  preferredWindow?: "morning" | "afternoon" | "evening";
 };
-
-function isRoutineDue(recurrence: AppState["routines"][number]["recurrence"], date: string): boolean {
-  if (recurrence.type === "daily") return true;
-  return recurrence.days.includes(dayOfWeek(date));
-}
 
 function isRepeatPolicyDue(task: Task, date: string): boolean {
   if (task.repeatPolicy.type === "none") return true;
@@ -123,20 +118,8 @@ export function buildDayPlan(state: AppState): DayPlan {
       .map((event) => event.planItemId as string)
   );
 
-  for (const routine of state.routines.filter((item) => item.active && isRoutineDue(item.recurrence, date))) {
-    items.push({
-      id: `plan_${date}_${routine.id}`,
-      type: "routine",
-      title: routine.title,
-      section: "routines",
-      status: "planned",
-      domainId: routine.domainId,
-      routineId: routine.id,
-      preferredWindow: routine.preferredWindow,
-      estimatedMinutes: routine.defaultEffortMinutes,
-      reason: routine.strictness === "strict" ? "Strict routine due today." : "Routine due today."
-    });
-  }
+  // Recurring work is now modeled as tasks with a repeatPolicy (T088); they flow through the task
+  // candidate path below, so there is no separate routine-template loop.
 
   // A parent task with active subtasks acts as a container (T071): its subtasks are scheduled,
   // not the parent itself, so effort isn't double-counted. A task completed today stays on the

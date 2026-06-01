@@ -144,9 +144,36 @@ function normalizeState(state: AppState): AppState {
       task.domainId = fallbackDomainId;
     }
   }
-  for (const routine of state.routines ?? []) {
-    if (!domainIds.has(routine.domainId)) routine.domainId = fallbackDomainId;
+  // Migrate any legacy routine templates (T088) into recurring tasks, then drop the field.
+  const legacyRoutines = (state as AppState & { routines?: Array<Record<string, unknown>> }).routines;
+  if (Array.isArray(legacyRoutines) && legacyRoutines.length) {
+    for (const routine of legacyRoutines) {
+      const recurrence = (routine.recurrence as { type?: string; days?: number[] }) ?? { type: "daily" };
+      const domainId = domainIds.has(routine.domainId as string) ? (routine.domainId as string) : fallbackDomainId;
+      state.tasks.push({
+        id: `task_${String(routine.id ?? "routine")}`,
+        title: String(routine.title ?? "Routine"),
+        type: "atomic",
+        domainId,
+        status: "active",
+        repeatPolicy:
+          recurrence.type === "weekly"
+            ? { type: "weekly", days: recurrence.days ?? [1], carryover: "skip" }
+            : { type: "daily", carryover: "skip" },
+        completionBehavior: "repeatable",
+        completionMode: "repeatable_checkoff",
+        plannerFields: { intentType: "obligation", pressureLevel: "soft" },
+        priority: 4,
+        importance: 4,
+        urgency: 3,
+        effortMinutes: Number(routine.defaultEffortMinutes ?? 20),
+        energy: (routine.energy as "low" | "medium" | "high") ?? "low",
+        strictness: (routine.strictness as "flexible" | "normal" | "strict") ?? "normal",
+        dateIntent: { kind: "recurring", confidence: 0.8 }
+      });
+    }
   }
+  delete (state as AppState & { routines?: unknown }).routines;
   state.executionEvents ??= [];
   state.projectBlockSelections ??= [];
   state.dailyReviews ??= [];

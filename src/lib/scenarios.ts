@@ -175,53 +175,11 @@ export function createRealisticCharacterState(): AppState {
       normalTask("task_text_leo", "Confirm dinner with Leo", "domain_social", 5, 7, 8, 7, "low"),
       normalTask("task_support_coworker", "Send supportive note to Alex", "domain_social", 10, 5, 7, 4, "low"),
       normalTask("task_buy_toothpaste", "Buy toothpaste", "domain_home", 10, 4, 4, 4, "low"),
-      normalTask("task_kitchen_tidy", "Quick tidy kitchen", "domain_home", 15, 4, 5, 3, "low")
-    ],
-    routines: [
-      {
-        id: "routine_mobility",
-        title: "Run or mobility fallback",
-        domainId: "domain_health",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 25,
-        energy: "medium",
-        strictness: "normal",
-        preferredWindow: "morning",
-        active: true
-      },
-      {
-        id: "routine_breakfast",
-        title: "Shower and breakfast",
-        domainId: "domain_health",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 30,
-        energy: "low",
-        strictness: "normal",
-        preferredWindow: "morning",
-        active: true
-      },
-      {
-        id: "routine_lunch",
-        title: "Lunch away from desk",
-        domainId: "domain_recovery",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 30,
-        energy: "low",
-        strictness: "normal",
-        preferredWindow: "afternoon",
-        active: true
-      },
-      {
-        id: "routine_inbox",
-        title: "AI inbox triage",
-        domainId: "domain_work",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 15,
-        energy: "medium",
-        strictness: "normal",
-        preferredWindow: "morning",
-        active: true
-      }
+      normalTask("task_kitchen_tidy", "Quick tidy kitchen", "domain_home", 15, 4, 5, 3, "low"),
+      recurringTask("task_mobility", "Run or mobility fallback", "domain_health", 25, "medium", "morning"),
+      recurringTask("task_breakfast", "Shower and breakfast", "domain_health", 30, "low", "morning"),
+      recurringTask("task_lunch", "Lunch away from desk", "domain_recovery", 30, "low", "afternoon"),
+      recurringTask("task_inbox", "AI inbox triage", "domain_work", 15, "medium", "morning")
     ],
     deferrals: [
       {
@@ -302,5 +260,33 @@ function normalTask(
     effortMinutes,
     energy,
     strictness: "normal" as const
+  };
+}
+
+function recurringTask(
+  id: string,
+  title: string,
+  domainId: string,
+  effortMinutes: number,
+  energy: "low" | "medium" | "high",
+  preferredWindow: "morning" | "afternoon" | "evening"
+) {
+  return {
+    id,
+    title,
+    type: "atomic" as const,
+    domainId,
+    status: "active" as const,
+    repeatPolicy: { type: "daily" as const, preferredWindow, carryover: "skip" as const },
+    completionBehavior: "repeatable" as const,
+    completionMode: "repeatable_checkoff" as const,
+    plannerFields: { intentType: "obligation" as const, pressureLevel: "soft" as const },
+    priority: 4,
+    importance: 4,
+    urgency: 3,
+    effortMinutes,
+    energy,
+    strictness: "normal" as const,
+    dateIntent: { kind: "recurring" as const, confidence: 0.9 }
   };
 }

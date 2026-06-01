@@ -61,7 +61,6 @@ describe("buildDayPlan", () => {
     state.currentDate = "2026-06-01";
     state.currentTime = "08:30";
     state.projects = [];
-    state.routines = [];
     state.tasks = [
       {
         ...state.tasks[0],
@@ -118,7 +117,6 @@ describe("buildDayPlan", () => {
     state.currentDate = "2026-06-02";
     state.currentTime = "08:30";
     state.projects = [];
-    state.routines = [];
     state.tasks = [
       {
         ...state.tasks[2],
@@ -195,7 +193,6 @@ describe("buildDayPlan", () => {
       }
     ];
     state.projects = [];
-    state.routines = [];
 
     const plan = buildDayPlan(state);
     const sleep = plan.items.find((item) => item.title === "Sleep");
@@ -224,7 +221,6 @@ describe("buildDayPlan", () => {
     const state = createSeedState();
     state.currentDate = "2026-06-02";
     state.currentTime = "08:30";
-    state.routines = [];
     state.tasks.push({
       id: "task_walk",
       title: "Walk",
@@ -285,7 +281,6 @@ describe("buildDayPlan", () => {
       }
     ];
     state.projects = [];
-    state.routines = [];
 
     const plan = buildDayPlan(state);
     const passive = plan.items.find((item) => item.title === "Laundry running");
@@ -345,7 +340,6 @@ describe("buildDayPlan", () => {
       }
     ];
     state.projects = [];
-    state.routines = [];
 
     const plan = buildDayPlan(state);
     const cook = plan.items.find((item) => item.title === "Cook dinner");
