@@ -1673,3 +1673,12 @@ textarea {
 @media (max-width: 720px) {
   .backlogBoard { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
 }
+
+/* T074: settings toggle */
+.settingToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}

@@ -1247,10 +1247,10 @@ function SecondaryPanel({
                               Overlap
                               <select
                                 name="schedulingMode"
-                                defaultValue={task.scheduling?.mode === "concurrent" || task.scheduling?.mode === "background" ? task.scheduling.mode : "exclusive"}
+                                defaultValue={["concurrent", "background", "phased"].includes(task.scheduling?.mode ?? "") ? task.scheduling!.mode : "exclusive"}
                                 aria-label={`Overlap mode ${task.title}`}
                               >
-                                {["exclusive", "concurrent", "background"].map((value) => (
+                                {["exclusive", "concurrent", "background", "phased"].map((value) => (
                                   <option value={value} key={value}>{value}</option>
                                 ))}
                               </select>
@@ -1272,7 +1272,12 @@ function SecondaryPanel({
                             <select name="parentTaskId" defaultValue={task.parentTaskId ?? ""} aria-label={`Parent task ${task.title}`}>
                               <option value="">No parent</option>
                               {state.tasks
-                                .filter((candidate) => candidate.id !== task.id && !candidate.parentTaskId && candidate.status !== "archived")
+                                .filter(
+                                  (candidate) =>
+                                    candidate.id !== task.id &&
+                                    candidate.status !== "archived" &&
+                                    !isDescendantOfClient(state, candidate.id, task.id)
+                                )
                                 .map((candidate) => (
                                   <option value={candidate.id} key={candidate.id}>{candidate.title}</option>
                                 ))}
@@ -1389,6 +1394,18 @@ function SecondaryPanel({
             <span>
               {backlogSummary.thisWeek} this week - {backlogSummary.nextWeek} next week - {backlogSummary.someday} someday
             </span>
+          </article>
+          <article>
+            <h2>Automation</h2>
+            <label className="settingToggle">
+              <input
+                type="checkbox"
+                defaultChecked={state.autoOrganizeEnabled !== false}
+                onChange={(event) => post("/api/settings", { autoOrganizeEnabled: event.target.checked })}
+                aria-label="Run a daily tidy-up automatically"
+              />
+              Run a conservative tidy-up automatically once a day
+            </label>
           </article>
         </div>
       )}
@@ -1881,14 +1898,35 @@ function BacklogBoard({ state, post }: { state: AppState; post: PostFn }) {
   );
 }
 
-// Subtask rollup for a parent task (T071): count, completed count, and aggregate effort.
-function childStats(state: AppState, taskId: string) {
+// Subtask rollup for a parent task (T071/T076): recursive count, completed count, and aggregate
+// effort across all descendants.
+function childStats(state: AppState, taskId: string): { count: number; done: number; minutes: number } {
   const children = state.tasks.filter((task) => task.parentTaskId === taskId && task.status !== "archived");
-  return {
-    count: children.length,
-    done: children.filter((task) => task.status === "completed").length,
-    minutes: children.reduce((sum, task) => sum + task.effortMinutes, 0)
-  };
+  let count = 0;
+  let done = 0;
+  let minutes = 0;
+  for (const child of children) {
+    count += 1;
+    minutes += child.effortMinutes;
+    if (child.status === "completed") done += 1;
+    const sub = childStats(state, child.id);
+    count += sub.count;
+    done += sub.done;
+    minutes += sub.minutes;
+  }
+  return { count, done, minutes };
+}
+
+// True if `nodeId` is within the subtree rooted at `ancestorId` (T076 cycle guard for the UI).
+function isDescendantOfClient(state: AppState, nodeId: string, ancestorId: string): boolean {
+  let current = state.tasks.find((task) => task.id === nodeId);
+  const seen = new Set<string>();
+  while (current?.parentTaskId && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.parentTaskId === ancestorId) return true;
+    current = state.tasks.find((task) => task.id === current!.parentTaskId);
+  }
+  return false;
 }
 
 // Real local wall-clock now, as the app's date/time format. Used to anchor the app to the

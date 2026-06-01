@@ -133,6 +133,23 @@ Shared principle: manual and AI paths use the same underlying state mutations an
 undo/history layer (T061). UI-polish items (drag-and-drop, editable badges, task detail drawer,
 timeline drag-to-reschedule) tracked separately as UI improvements.
 
+### M8: Functional Hardening & Deferred Features
+
+1. T073 - Undo coverage for ALL mutations (manual edits, plan outcomes, reviews, block selection)
+2. T074 - Auto-organizer enable/disable setting
+3. T075 - Phased multi-step scheduling (reintroduce, model-owned + manual)
+4. T076 - Multi-level task hierarchy (extends single-level T071)
+5. T077 - Undo/history persistence (Postgres/file, survives restart)
+
+Order rationale: T073 completes the auto-apply-with-undo promise (highest value); T074 is a
+small control; T075/T076 are feature depth; T077 is durable-path infra.
+
+### M9: UI Polish (after a UI review pass)
+
+- T078 Post-action toasts (with undo) · T079 Editable task badges · T080 Task detail drawer ·
+  T081 Drag-between-days (week/timeline) · T082 Bulk multi-select on backlog · T083 Visual
+  subtask tree indentation · T084 Componentize page.tsx.
+
 Dependencies: T061 precedes T063, T064, and T066. T065 follows T063 and T064. T067 runs
 alongside -- every feature ticket adds its quality scenarios as it lands.
 

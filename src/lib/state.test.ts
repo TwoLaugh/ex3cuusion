@@ -17,6 +17,7 @@ import {
   rejectAiAction,
   resetState,
   runOrganizerPass,
+  setAutoOrganizeEnabled,
   undoChange,
   retreatDay,
   setClock,
@@ -148,6 +149,30 @@ describe("state integration", () => {
     expect(task.dateIntent?.kind).toBe("today");
   });
 
+  it("supports multi-level nesting and rejects cycles (T076)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "A" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "B" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "C" } });
+    const a = getState().tasks.find((t) => t.title === "A")!;
+    const b = getState().tasks.find((t) => t.title === "B")!;
+    const c = getState().tasks.find((t) => t.title === "C")!;
+
+    // A -> B -> C (three levels)
+    applyStructureMutation({ entity: "task", action: "update", id: b.id, patch: { parentTaskId: a.id } });
+    applyStructureMutation({ entity: "task", action: "update", id: c.id, patch: { parentTaskId: b.id } });
+    expect(getState().tasks.find((t) => t.id === c.id)?.parentTaskId).toBe(b.id);
+
+    // Cycle guard: A cannot become a child of its own descendant C.
+    applyStructureMutation({ entity: "task", action: "update", id: a.id, patch: { parentTaskId: c.id } });
+    expect(getState().tasks.find((t) => t.id === a.id)?.parentTaskId).toBeUndefined();
+
+    // Container behavior holds at each level: only the leaf (C) is plannable.
+    applyStructureMutation({ entity: "task", action: "update", id: c.id, patch: { scheduledDate: "2026-06-01" } });
+    const plan = buildDayPlan(getState());
+    expect(plan.items.some((item) => item.title === "A")).toBe(false);
+    expect(plan.items.some((item) => item.title === "B")).toBe(false);
+  });
+
   it("nests a subtask under a parent and treats the parent as a container (T071)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Parent task", scheduledDate: "2026-06-01" } });
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Child task", scheduledDate: "2026-06-01" } });
@@ -166,6 +191,22 @@ describe("state integration", () => {
     // Single-level guard: the parent (which has a child) cannot itself become a subtask.
     applyStructureMutation({ entity: "task", action: "update", id: parent.id, patch: { parentTaskId: child.id } });
     expect(getState().tasks.find((task) => task.id === parent.id)?.parentTaskId).toBeUndefined();
+  });
+
+  it("sets a phased schedule and the planner expands it into phases (T075)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Laundry", effortMinutes: 90, scheduledDate: "2026-06-01" } });
+    const id = getState().tasks.find((task) => task.title === "Laundry")!.id;
+
+    applyStructureMutation({ entity: "task", action: "update", id, patch: { schedulingMode: "phased" } });
+    const task = getState().tasks.find((entry) => entry.id === id)!;
+    expect(task.scheduling?.mode).toBe("phased");
+    expect(task.scheduling?.phases?.length).toBe(3);
+    expect(task.scheduling?.phases?.map((phase) => phase.kind)).toEqual(["active", "passive", "return"]);
+
+    const plan = buildDayPlan(getState());
+    const phaseItems = plan.items.filter((item) => item.phaseKind);
+    expect(phaseItems.length).toBeGreaterThanOrEqual(3);
+    expect(phaseItems.some((item) => item.phaseKind === "passive" && item.canOverlap)).toBe(true);
   });
 
   it("manually sets tags, overlap mode, and min/max minutes on a task (T070)", async () => {
@@ -199,6 +240,19 @@ describe("state integration", () => {
     expect(listChangeHistory()[0].source).toBe("organizer");
   });
 
+  it("respects the auto-organizer enable/disable setting (T074)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup x" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup x" } });
+
+    setAutoOrganizeEnabled(false);
+    await maybeRunDailyOrganizer();
+    expect(getState().tasks.filter((task) => task.title === "Dup x" && task.status !== "archived").length).toBe(2);
+
+    setAutoOrganizeEnabled(true);
+    await maybeRunDailyOrganizer();
+    expect(getState().tasks.filter((task) => task.title === "Dup x" && task.status !== "archived").length).toBe(1);
+  });
+
   it("auto organizer runs once per day then no-ops (T069)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup once" } });
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup once" } });
@@ -210,6 +264,18 @@ describe("state integration", () => {
     const historyLen = listChangeHistory().length;
     await maybeRunDailyOrganizer(); // same day -> no-op
     expect(listChangeHistory().length).toBe(historyLen);
+  });
+
+  it("records and undoes manual edits and completions, not just AI actions (T073)", async () => {
+    const target = getState().tasks.find((task) => task.status !== "archived")!;
+    const originalTitle = target.title;
+
+    applyStructureMutation({ entity: "task", action: "update", id: target.id, patch: { title: "Renamed by hand" } });
+    expect(getState().tasks.find((task) => task.id === target.id)?.title).toBe("Renamed by hand");
+    expect(listChangeHistory()[0].source).toBe("manual_edit");
+
+    undoChange();
+    expect(getState().tasks.find((task) => task.id === target.id)?.title).toBe(originalTitle);
   });
 
   it("records AI changes and undoes them (auto-apply with undo)", async () => {
