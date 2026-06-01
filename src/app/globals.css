@@ -1625,3 +1625,51 @@ textarea {
   letter-spacing: 0.04em;
   opacity: 0.6;
 }
+
+/* T072: drag-and-drop backlog board */
+.backlogBoardWrap > summary {
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.7;
+  margin-bottom: 8px;
+}
+.backlogBoard {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 8px;
+  overflow-x: auto;
+}
+.backlogColumn {
+  border: 1px solid var(--border, #2a2a2a);
+  border-radius: 8px;
+  padding: 8px;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.backlogColumn > h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+}
+.backlogCard {
+  border: 1px solid var(--border, #2a2a2a);
+  border-radius: 6px;
+  padding: 6px;
+  background: rgba(127, 127, 127, 0.06);
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.backlogCard:active { cursor: grabbing; }
+.backlogCardTitle { font-size: 13px; }
+.backlogCard select { font-size: 11px; }
+@media (max-width: 720px) {
+  .backlogBoard { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+}

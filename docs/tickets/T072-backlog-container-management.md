@@ -1,6 +1,27 @@
 # T072: Backlog & Container Management
 
-Status: planned.
+Status: implemented (drag-and-drop board).
+
+## Implementation
+
+- Backend: task update mutation accepts `dateIntentKind` (today / tomorrow / this_week /
+  next_week / someday / specific_date / deadline / none) and applies it via the shared
+  `applyTaskDateIntent` (T064) — so manual promote/demote and the AI use one code path. Added a
+  "none" (unscheduled) intent that clears dates.
+- UI: a drag-and-drop **Backlog board** in the Tasks view with five date-intent columns
+  (Today / This week / Next week / Someday / Unscheduled). Dragging a task card to a column
+  promotes/demotes it; each card also has a keyboard-accessible "Move…" select using the same
+  call (DnD is not keyboard-accessible on its own).
+- Project/domain reassignment was already available in the task editor (single + via the board's
+  card editor). 
+- Verified: unit test (promote/demote via dateIntentKind) + HTTP (drop-handler call path) + page
+  renders. tsc + 52 unit tests green. The drag *gesture* itself needs a browser to confirm; it is
+  wired to the verified mutation and mirrored by the accessible select.
+
+## Deferred (UI polish)
+
+Bulk multi-select actions and drag-between-days on the week/timeline views are noted as later
+UI-polish tickets.
 
 ## Goal
 

@@ -27,7 +27,15 @@ export type StructureMutation =
   | { entity: "project"; action: "update"; id: string; patch: Partial<AppState["projects"][number]> }
   | { entity: "project"; action: "archive"; id: string }
   | { entity: "task"; action: "create"; patch: Partial<Task> }
-  | { entity: "task"; action: "update"; id: string; patch: Partial<Task> & { schedulingMode?: "exclusive" | "concurrent" | "background" } }
+  | {
+      entity: "task";
+      action: "update";
+      id: string;
+      patch: Partial<Task> & {
+        schedulingMode?: "exclusive" | "concurrent" | "background";
+        dateIntentKind?: "today" | "tomorrow" | "this_week" | "next_week" | "someday" | "specific_date" | "deadline" | "none";
+      };
+    }
   | { entity: "task"; action: "archive"; id: string }
   | { entity: "routine"; action: "create"; patch: Partial<AppState["routines"][number]> }
   | { entity: "routine"; action: "update"; id: string; patch: Partial<AppState["routines"][number]> }
@@ -337,6 +345,10 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
     }
     if (mutation.patch.schedulingMode) {
       task.scheduling = schedulingForMode(mutation.patch.schedulingMode);
+    }
+    if (mutation.patch.dateIntentKind) {
+      // Manual promote/demote (T072), sharing the AI's date-intent logic (T064).
+      applyTaskDateIntent(state, task, mutation.patch.dateIntentKind, task.scheduledDate, task.dueDate);
     }
     return getState();
   }
@@ -993,6 +1005,12 @@ function applyTaskDateIntent(state: AppState, task: Task, kind: string | undefin
     task.scheduledDate = undefined;
     task.plannerFields.pressureLevel = "due";
     task.dateIntent = { kind: "deadline", dueDate, confidence: 0.7 };
+  } else if (kind === "none") {
+    task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
+    task.dueDate = undefined;
+    task.plannerFields.pressureLevel = "soft";
+    task.dateIntent = { kind: "none", confidence: 0.3 };
   }
 }
 

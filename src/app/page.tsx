@@ -1094,6 +1094,10 @@ function SecondaryPanel({
       )}
       {view === "Tasks" && (
         <div className="taskSections">
+          <details className="backlogBoardWrap" open>
+            <summary>Backlog board — drag to reschedule</summary>
+            <BacklogBoard state={state} post={post} />
+          </details>
           <form className="structureForm wideStructureForm" aria-label="Create task" onSubmit={(event) => submitStructureForm(event, post, "task", "create")}>
             <h2>New task</h2>
             <input name="title" placeholder="Task title" aria-label="Task title" />
@@ -1784,6 +1788,97 @@ function weekDots(dateOnly: string, todayIndex: number | null) {
 function systemWeekdayIndex() {
   const jsDay = new Date().getDay();
   return (jsDay + 6) % 7;
+}
+
+type BacklogBucket = "today" | "this_week" | "next_week" | "someday" | "none";
+
+const BACKLOG_COLUMNS: { key: BacklogBucket; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "this_week", label: "This week" },
+  { key: "next_week", label: "Next week" },
+  { key: "someday", label: "Someday" },
+  { key: "none", label: "Unscheduled" }
+];
+
+// Which backlog column a task currently belongs in (T072).
+function taskBucket(task: AppState["tasks"][number], currentDate: string): BacklogBucket {
+  const intent = task.dateIntent;
+  if (task.scheduledDate === currentDate || intent?.kind === "today" || intent?.kind === "tomorrow") return "today";
+  if (intent?.kind === "someday") return "someday";
+  const thisWeek = weekRange(currentDate);
+  const nextWeek = nextWeekRange(currentDate);
+  if (intent?.kind === "week_window") {
+    return intent.startDate === nextWeek.startDate ? "next_week" : "this_week";
+  }
+  if (task.scheduledDate) {
+    if (isDateInRange(task.scheduledDate, thisWeek.startDate, thisWeek.endDate)) return "this_week";
+    if (isDateInRange(task.scheduledDate, nextWeek.startDate, nextWeek.endDate)) return "next_week";
+  }
+  if (task.dueDate) {
+    if (task.dueDate <= thisWeek.endDate) return "this_week";
+    if (task.dueDate <= nextWeek.endDate) return "next_week";
+  }
+  return "none";
+}
+
+// Drag-and-drop backlog board (T072): drag a task between date-intent columns to promote/demote
+// it, sharing the same applyTaskDateIntent semantics as the AI. The per-card select is the
+// keyboard-accessible fallback for the drag interaction.
+function BacklogBoard({ state, post }: { state: AppState; post: PostFn }) {
+  const [dragId, setDragId] = useState<string | null>(null);
+  const tasks = state.tasks.filter(
+    (task) => !["archived", "completed"].includes(task.status) && !task.parentTaskId
+  );
+  function move(taskId: string, bucket: BacklogBucket) {
+    void post("/api/structure", { entity: "task", action: "update", id: taskId, patch: { dateIntentKind: bucket } });
+  }
+  return (
+    <div className="backlogBoard" aria-label="Backlog board">
+      {BACKLOG_COLUMNS.map((column) => {
+        const columnTasks = tasks.filter((task) => taskBucket(task, state.currentDate) === column.key);
+        return (
+          <div
+            key={column.key}
+            className="backlogColumn"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={() => {
+              if (dragId) move(dragId, column.key);
+              setDragId(null);
+            }}
+          >
+            <h3>
+              {column.label} <span>{columnTasks.length}</span>
+            </h3>
+            {columnTasks.map((task) => (
+              <div
+                key={task.id}
+                className="backlogCard"
+                draggable
+                onDragStart={() => setDragId(task.id)}
+                onDragEnd={() => setDragId(null)}
+              >
+                <span className="backlogCardTitle">{task.title}</span>
+                <select
+                  value=""
+                  aria-label={`Move ${task.title}`}
+                  onChange={(event) => {
+                    if (event.target.value) move(task.id, event.target.value as BacklogBucket);
+                  }}
+                >
+                  <option value="">Move…</option>
+                  {BACKLOG_COLUMNS.filter((option) => option.key !== column.key).map((option) => (
+                    <option value={option.key} key={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // Subtask rollup for a parent task (T071): count, completed count, and aggregate effort.

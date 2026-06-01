@@ -132,6 +132,22 @@ describe("state integration", () => {
     expect(updated?.urgency).toBe(1);
   });
 
+  it("manually promotes and demotes a task via dateIntentKind (T072)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Groom me", scheduledDate: "2026-06-01" } });
+    const id = getState().tasks.find((task) => task.title === "Groom me")!.id;
+
+    applyStructureMutation({ entity: "task", action: "update", id, patch: { dateIntentKind: "someday" } });
+    let task = getState().tasks.find((entry) => entry.id === id)!;
+    expect(task.scheduledDate).toBeUndefined();
+    expect(task.dateIntent?.kind).toBe("someday");
+    expect(task.plannerFields.pressureLevel).toBe("someday");
+
+    applyStructureMutation({ entity: "task", action: "update", id, patch: { dateIntentKind: "today" } });
+    task = getState().tasks.find((entry) => entry.id === id)!;
+    expect(task.scheduledDate).toBe("2026-06-01");
+    expect(task.dateIntent?.kind).toBe("today");
+  });
+
   it("nests a subtask under a parent and treats the parent as a container (T071)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Parent task", scheduledDate: "2026-06-01" } });
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Child task", scheduledDate: "2026-06-01" } });
