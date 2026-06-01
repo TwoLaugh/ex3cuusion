@@ -783,8 +783,8 @@ export async function submitInbox(
     session.actionIds.push(action.id);
   }
 
-  // Apply create_project before create_task so tasks can link to a work-block created in the
-  // same message (T062 grouping). Display order (entry.actions) is preserved separately.
+  // Apply create_folder before create_task so tasks can link to a folder created in the
+  // same message (T088 grouping). Display order (entry.actions) is preserved separately.
   const applyOrder = [...entry.actions].sort((left, right) => applyRank(left) - applyRank(right));
   for (const action of applyOrder) {
     applyAutoAction(state, action, input);
@@ -1047,8 +1047,8 @@ export function rejectAiAction(actionId: string, reason?: string): AppState {
 }
 
 function applyRank(action: AiAction): number {
-  // create_project must run before create_task so same-batch tasks can link to it (T062).
-  return action.type === "create_project" ? 0 : 1;
+  // create_folder must run before create_task so same-batch tasks can link to it (T088).
+  return action.type === "create_folder" ? 0 : 1;
 }
 
 function clampTaskScore(value: number): number {
@@ -1095,22 +1095,22 @@ function applyTaskDateIntent(state: AppState, task: Task, kind: string | undefin
   }
 }
 
-// Resolve a create_task's intended project name to a real projectId at apply time — covers a
-// work-block created earlier in the same batch (T062 grouping).
-function linkPendingProject(state: AppState, action: AiAction, payload: Omit<Task, "id">): void {
-  if (payload.projectId || !action.pendingProjectName) return;
-  const target = action.pendingProjectName.toLowerCase();
-  const project = state.projects.find(
-    (candidate) =>
-      candidate.status !== "completed" &&
-      (candidate.name.toLowerCase() === target ||
-        candidate.name.toLowerCase().includes(target) ||
-        target.includes(candidate.name.toLowerCase()))
-  );
-  if (!project) return;
-  payload.projectId = project.id;
-  payload.type = "project_task";
-  payload.domainId = project.domainId;
+// Resolve a create_task's intended folder name/path to a real folderId at apply time — covers a
+// folder created earlier in the same batch (T088 grouping). Derives the back-compat
+// projectId/domainId/type from the matched folder.
+function linkPendingFolder(state: AppState, action: AiAction, payload: Omit<Task, "id">): void {
+  if (payload.folderId || !action.pendingFolderName) return;
+  const folder = findFolderMention(state, action.pendingFolderName);
+  if (!folder) return;
+  const folders = state.folders ?? [];
+  payload.folderId = folder.id;
+  payload.projectId = folder.parentFolderId ? folder.id : undefined;
+  payload.domainId = topAncestorFolderId(folders, folder.id) ?? "domain_work";
+  payload.type = folder.parentFolderId
+    ? "project_task"
+    : payload.completionBehavior === "keep_as_suggestion"
+      ? "soft_invitation"
+      : "atomic";
 }
 
 function applyAutoAction(state: AppState, action: AiAction, sourceText?: string) {
@@ -1129,11 +1129,11 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
 
   if (action.type === "create_task") {
     const payload = action.payload as Omit<Task, "id">;
-    linkPendingProject(state, action, payload);
+    linkPendingFolder(state, action, payload);
     const existing = state.tasks.find(
       (task) =>
         task.title.toLowerCase() === payload.title.toLowerCase() &&
-        (task.projectId ?? null) === (payload.projectId ?? null) &&
+        (task.folderId ?? null) === (payload.folderId ?? null) &&
         task.status !== "archived"
     );
     if (existing) {
@@ -1207,62 +1207,18 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
     return;
   }
 
-  if (action.type === "create_routine") {
-    // Routines are now recurring tasks (T088): build a task with a repeatPolicy from the
-    // routine-shaped payload instead of a separate RoutineTemplate entity.
-    const payload = action.payload as {
-      title: string;
-      domainId: string;
-      recurrence?: { type: "daily" } | { type: "weekly"; days: number[] };
-      defaultEffortMinutes?: number;
-      energy?: Task["energy"];
-      strictness?: Task["strictness"];
+  if (action.type === "create_folder") {
+    // T088: create_folder pushes a Folder onto the canonical folders store. Back-compat
+    // domains/projects are re-derived by normalizeState on the next read.
+    state.folders ??= [];
+    const folder: Folder = {
+      id: nextId("folder"),
+      ...(action.payload as Omit<Folder, "id" | "status">),
+      status: "active"
     };
-    const title = String(payload.title);
-    const exists = state.tasks.some((task) => task.title.toLowerCase() === title.toLowerCase() && task.status !== "archived");
-    if (!exists) {
-      const recurrence = payload.recurrence ?? { type: "daily" as const };
-      const task: Task = {
-        id: nextId("task"),
-        title,
-        type: "atomic",
-        domainId: payload.domainId,
-        status: "active",
-        repeatPolicy:
-          recurrence.type === "weekly"
-            ? { type: "weekly", days: recurrence.days ?? [1], carryover: "skip" }
-            : { type: "daily", carryover: "skip" },
-        completionBehavior: "repeatable",
-        completionMode: "repeatable_checkoff",
-        plannerFields: { intentType: "obligation", pressureLevel: "soft" },
-        tags: [],
-        priority: 3,
-        importance: 3,
-        urgency: 3,
-        effortMinutes: payload.defaultEffortMinutes ?? 20,
-        energy: payload.energy ?? "low",
-        strictness: payload.strictness ?? "normal",
-        dateIntent: { kind: "recurring", confidence: 0.8 },
-        scheduling: { mode: "exclusive", attentionLoad: "full", canOverlap: false }
-      };
-      state.tasks.push(task);
-      action.appliedEntityId = task.id;
-      action.skippedReason = undefined;
-    } else {
-      action.skippedReason = "Task already exists.";
-    }
+    state.folders.push(folder);
     action.status = "applied";
-    return;
-  }
-
-  if (action.type === "create_project") {
-    const project = {
-      id: nextId("project"),
-      ...(action.payload as Omit<AppState["projects"][number], "id">)
-    };
-    state.projects.push(project);
-    action.status = "applied";
-    action.appliedEntityId = project.id;
+    action.appliedEntityId = folder.id;
     action.skippedReason = undefined;
     return;
   }
@@ -1515,13 +1471,24 @@ function applyFollowUpToTask(state: AppState, task: Task, message: string): stri
     changes.push("scheduled for today");
   }
 
-  const project = findProjectMention(state, message);
-  if (project) {
-    task.projectId = project.id;
-    task.domainId = project.domainId;
-    task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
-    task.plannerFields.intentType = project.kind === "person" ? "relationship" : "progress";
-    changes.push(`moved under ${project.name}`);
+  const lowerMessage = message.toLowerCase();
+  const folderMatches = (state.folders ?? []).filter(
+    (candidate) => candidate.status !== "archived" && lowerMessage.includes(candidate.name.toLowerCase())
+  );
+  // Prefer a child folder (legacy "project" role) over a top-level one when both names appear.
+  const folder = folderMatches.find((candidate) => candidate.parentFolderId) ?? folderMatches[0];
+  if (folder) {
+    const folders = state.folders ?? [];
+    task.folderId = folder.id;
+    task.projectId = folder.parentFolderId ? folder.id : undefined;
+    task.domainId = topAncestorFolderId(folders, folder.id) ?? "domain_work";
+    task.type = folder.parentFolderId
+      ? "project_task"
+      : task.completionBehavior === "keep_as_suggestion"
+        ? "soft_invitation"
+        : "atomic";
+    if (folder.parentFolderId) task.plannerFields.intentType = "progress";
+    changes.push(`moved under ${folder.name}`);
   }
 
   if (!changes.length) {
@@ -1543,19 +1510,19 @@ function applyRevisionToTask(state: AppState, task: Task, revision: CaptureRevis
     changes.push("renamed");
   }
 
-  const project = revision.projectName ? findProjectMention(state, revision.projectName) : undefined;
-  if (project) {
-    task.projectId = project.id;
-    task.domainId = project.domainId;
-    task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
-    task.plannerFields.intentType = project.kind === "person" ? "relationship" : "progress";
-    changes.push(`moved under ${project.name}`);
-  }
-
-  const domain = revision.domainName ? findDomainMention(state, revision.domainName) : undefined;
-  if (domain && !project) {
-    task.domainId = domain.id;
-    changes.push(`moved to ${domain.name}`);
+  const folder = revision.folderName ? findFolderMention(state, revision.folderName) : undefined;
+  if (folder) {
+    const folders = state.folders ?? [];
+    task.folderId = folder.id;
+    task.projectId = folder.parentFolderId ? folder.id : undefined;
+    task.domainId = topAncestorFolderId(folders, folder.id) ?? "domain_work";
+    task.type = folder.parentFolderId
+      ? "project_task"
+      : task.completionBehavior === "keep_as_suggestion"
+        ? "soft_invitation"
+        : "atomic";
+    if (folder.parentFolderId) task.plannerFields.intentType = "progress";
+    changes.push(`moved under ${folder.name}`);
   }
 
   const dateChange = applyRevisionDate(state, task, revision);
@@ -1740,14 +1707,46 @@ function applyRevisionTime(state: AppState, task: Task, revision: CaptureRevisio
   return `scheduled for ${revision.scheduledTime}`;
 }
 
-function findProjectMention(state: AppState, message: string): AppState["projects"][number] | undefined {
-  const lower = message.toLowerCase();
-  return state.projects.find((project) => lower.includes(project.name.toLowerCase()));
+// Resolve a folderName (exact name, full "A / B" path, or case-insensitive includes) to a folder.
+function findFolderMention(state: AppState, name: string): Folder | undefined {
+  const folders = (state.folders ?? []).filter((folder) => folder.status !== "archived");
+  const lower = name.trim().toLowerCase();
+  if (!lower) return undefined;
+  const leaf = lower.includes("/") ? lower.split("/").pop()!.trim() : lower;
+  return (
+    folders.find((folder) => folder.name.toLowerCase() === lower) ??
+    folders.find((folder) => (folderFullPath(state, folder.id) ?? "").toLowerCase() === lower) ??
+    folders.find((folder) => folder.name.toLowerCase() === leaf) ??
+    folders.find((folder) => folder.name.toLowerCase().includes(lower) || lower.includes(folder.name.toLowerCase()))
+  );
 }
 
-function findDomainMention(state: AppState, message: string): AppState["domains"][number] | undefined {
-  const lower = message.toLowerCase();
-  return state.domains.find((domain) => lower.includes(domain.name.toLowerCase()));
+// Full "A / B / C" path for a folder, walking parentFolderId with cycle guard.
+function folderFullPath(state: AppState, folderId: string): string | undefined {
+  const list = state.folders ?? [];
+  const byId = new Map(list.map((folder) => [folder.id, folder]));
+  const seen = new Set<string>();
+  const names: string[] = [];
+  let current = byId.get(folderId);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    names.unshift(current.name);
+    current = current.parentFolderId ? byId.get(current.parentFolderId) : undefined;
+  }
+  return names.length ? names.join(" / ") : undefined;
+}
+
+// T088: top-level ancestor folder id (the folder that plays the legacy "domain" role).
+function topAncestorFolderId(folders: Folder[], folderId: string): string {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const seen = new Set<string>();
+  let current = byId.get(folderId);
+  if (!current) return folderId;
+  while (current.parentFolderId && byId.has(current.parentFolderId) && !seen.has(current.id)) {
+    seen.add(current.id);
+    current = byId.get(current.parentFolderId)!;
+  }
+  return current.id;
 }
 
 function uniqueChanges(changes: string[]): string[] {

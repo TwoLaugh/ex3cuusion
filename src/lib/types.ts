@@ -339,8 +339,7 @@ export interface AiAction {
   id: string;
   type:
     | "create_task"
-    | "create_routine"
-    | "create_project"
+    | "create_folder"
     | "schedule_block"
     | "add_project_note"
     | "assign_task_to_project"
@@ -371,9 +370,9 @@ export interface AiAction {
   captureSessionId?: string;
   sourceMessageId?: string;
   pendingQuestionId?: string;
-  // Intended project/work-block name for a create_task whose project may be created in the same
-  // batch (T062 grouping). Resolved to a real projectId at apply time, after create_project runs.
-  pendingProjectName?: string;
+  // Intended folder name/path for a create_task whose folder may be created in the same
+  // batch (T088 grouping). Resolved to a real folderId at apply time, after create_folder runs.
+  pendingFolderName?: string;
 }
 
 export interface InboxEntry {

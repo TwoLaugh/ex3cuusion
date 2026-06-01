@@ -48,8 +48,8 @@ describe("state integration", () => {
   it("groups multiple related tasks under a work block created in the same message (T062)", async () => {
     const base = {
       targetTaskId: null,
-      domainName: "Job Work",
-      projectName: null as string | null,
+      folderName: null as string | null,
+      parentFolderName: null as string | null,
       dueDate: null,
       scheduledDate: null,
       scheduledTime: null,
@@ -74,18 +74,21 @@ describe("state integration", () => {
       model: "grouping-fixture",
       summary: "Grouped under Launch Prep.",
       actions: [
-        { ...base, type: "create_project" as const, label: "Create Launch Prep", title: "Launch Prep" },
-        { ...base, type: "create_task" as const, label: "Add Write copy", title: "Write copy", projectName: "Launch Prep" },
-        { ...base, type: "create_task" as const, label: "Add Design banner", title: "Design banner", projectName: "Launch Prep" }
+        { ...base, type: "create_folder" as const, label: "Create Launch Prep", title: "Launch Prep", parentFolderName: "Job Work" },
+        { ...base, type: "create_task" as const, label: "Add Write copy", title: "Write copy", folderName: "Launch Prep" },
+        { ...base, type: "create_task" as const, label: "Add Design banner", title: "Design banner", folderName: "Launch Prep" }
       ]
     }));
 
-    const project = after.projects.find((candidate) => candidate.name === "Launch Prep");
-    expect(project).toBeDefined();
+    const folder = after.folders?.find((candidate) => candidate.name === "Launch Prep");
+    expect(folder).toBeDefined();
     const copy = after.tasks.find((task) => task.title === "Write copy");
     const banner = after.tasks.find((task) => task.title === "Design banner");
-    expect(copy?.projectId).toBe(project!.id);
-    expect(banner?.projectId).toBe(project!.id);
+    expect(copy?.folderId).toBe(folder!.id);
+    expect(banner?.folderId).toBe(folder!.id);
+    // A child folder plays the legacy "project" role, so grouped tasks derive that projectId.
+    expect(copy?.projectId).toBe(folder!.id);
+    expect(banner?.projectId).toBe(folder!.id);
   });
 
   it("reprioritizes and demotes an existing task to someday (T064 update_task)", async () => {
@@ -102,8 +105,8 @@ describe("state integration", () => {
           label: `Demote ${target!.title}`,
           title: target!.title,
           targetTaskId: target!.id,
-          domainName: "Job Work",
-          projectName: null,
+          folderName: null,
+          parentFolderName: null,
           dueDate: null,
           scheduledDate: null,
           scheduledTime: null,
@@ -755,8 +758,8 @@ describe("state integration", () => {
           label: "Move Cut nails",
           title: "Cut nails",
           targetTaskId: task!.id,
-          domainName: "House Work",
-          projectName: null,
+          folderName: null,
+          parentFolderName: null,
           dueDate: null,
           scheduledDate: "2026-06-01",
           scheduledTime: "17:00",
@@ -799,8 +802,8 @@ describe("state integration", () => {
           label: "Remove Cut nails",
           title: "Cut nails",
           targetTaskId: task!.id,
-          domainName: "House Work",
-          projectName: null,
+          folderName: null,
+          parentFolderName: null,
           dueDate: null,
           scheduledDate: null,
           scheduledTime: null,
@@ -851,8 +854,8 @@ describe("state integration", () => {
           label: "Archive duplicate Make dump run",
           title: "Make dump run",
           targetTaskId: oldTask!.id,
-          domainName: "House Work",
-          projectName: null,
+          folderName: null,
+          parentFolderName: null,
           dueDate: null,
           scheduledDate: null,
           scheduledTime: null,
@@ -896,8 +899,8 @@ describe("state integration", () => {
           type: "create_task",
           label: "Add dump run",
           title: "Go to the dump",
-          domainName: "House Work",
-          projectName: null,
+          folderName: null,
+          parentFolderName: null,
           dueDate: "2026-06-01",
           scheduledDate: "2026-06-01",
           scheduledTime: "17:00",
@@ -942,8 +945,7 @@ describe("state integration", () => {
       shouldApply: true,
       confidence: 0.9,
       title: null,
-      projectName: "Emma",
-      domainName: null,
+      folderName: "Emma",
       dateIntent: "someday",
       scheduledDate: null,
       scheduledTime: null,
@@ -983,8 +985,7 @@ describe("state integration", () => {
       shouldApply: true,
       confidence: 0.9,
       title: "/**/",
-      projectName: null,
-      domainName: null,
+      folderName: null,
       dateIntent: "tomorrow",
       scheduledDate: "2026-06-02",
       scheduledTime: null,

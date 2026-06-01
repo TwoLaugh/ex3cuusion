@@ -931,8 +931,7 @@ function actionSummary(action: AppState["inbox"][number]["actions"][number]): st
   if (action.type === "create_task") return `Task: ${String(payload.title ?? action.label)}`;
   if (action.type === "schedule_task") return `Moved: ${String(payload.title ?? action.label)}`;
   if (action.type === "archive_task") return `Removed: ${String(payload.title ?? action.label)}`;
-  if (action.type === "create_routine") return `Routine: ${String(payload.title ?? action.label)}`;
-  if (action.type === "create_project") return `Project: ${String(payload.name ?? payload.title ?? action.label)}`;
+  if (action.type === "create_folder") return `Folder: ${String(payload.name ?? payload.title ?? action.label)}`;
   return action.label;
 }
 

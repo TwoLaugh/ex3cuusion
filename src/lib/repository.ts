@@ -197,7 +197,7 @@ function normalizeState(state: AppState): AppState {
 // T088 Stage 2b: `folders` is the canonical recursive structure store. This walks the folder tree
 // up to its root, guarding against cycles with a seen-set; used to map any folder to the top-level
 // folder that plays the role of its legacy "domain".
-function topAncestorFolderId(folders: Folder[], folderId: string): string {
+export function topAncestorFolderId(folders: Folder[], folderId: string): string {
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
   const seen = new Set<string>();
   let current = byId.get(folderId);
