@@ -1,6 +1,24 @@
 # T067: Week & Backlog Quality Evals (Confidence Track)
 
-Status: planned (continuous).
+Status: implemented (and continuous).
+
+## Implementation
+
+- Dev set (12) now covers: overlap split, multi-task grouping, week planning, backlog demote,
+  mixed-altitude decomposition, deadline-not-schedule, reusable list, recurring habit, broad
+  outcome, vague window, obvious simple, ambiguous blob.
+- Held-out set (8) covers generalization for the new M6 behaviors (grouping, week planning,
+  backlog demote) plus overlap, deadline, broad outcome, vague relationship, two-simple.
+- Demonstrated the loop working: the held-out run caught a deadline-capture regression from
+  prompt growth; it was fixed with a GENERAL principle tuned on the dev `deadline-not-schedule`
+  scenario, and re-checking held-out confirmed the fix generalized (ho-hard-deadline 3/3) —
+  without tuning to the held-out case.
+- Final: dev 12/12 and held-out 8/8 met their pass-rate thresholds.
+
+## Note
+
+Continuous by design: every future behavior ticket adds its rubric scenarios. Keep the held-out
+set sacred (never tune toward it).
 
 ## Goal
 
