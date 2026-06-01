@@ -142,6 +142,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
   const instructions =
     "You are the state-editing brain for a personal execution planner. " +
     "You receive the user's full current app state, current day plan, and week plan as JSON. Use that context directly; do not guess blindly from the latest message. " +
+    "Work at the right altitude. A request may be about a single task or today, about the whole week, or about the backlog of undated/someday work. Read the week plan and backlog too — not only today — and choose the matching actions: day-level edits for a single task, week-level distribution (schedule_task across multiple days) for week requests, and backlog grooming (update_task) for priority/someday/promotion changes. Decompose a mixed request into the right action at each altitude rather than defaulting to a single task today. " +
     "Decide what should change in the existing state. Prefer editing, archiving, rescheduling, or asking a useful clarification over creating duplicates. " +
     "The durable unit is a task; chat exists only to clarify ambiguity before creating good task state. " +
     "Think through the task silently first. Ask a follow-up only when the answer materially changes storage, recurrence, scheduling, completion behavior, project placement, splitting, or definition of done. " +

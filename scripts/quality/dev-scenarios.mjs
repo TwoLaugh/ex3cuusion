@@ -35,6 +35,15 @@ export const devScenarios = [
     minPassRate: 0.5
   },
   {
+    id: "mixed-altitude",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "move the auth bug to tomorrow and push the optimizer tests to someday",
+    rubric:
+      "A mixed request touching two existing seed tasks at different altitudes: reschedule the auth-bug task to tomorrow AND demote the optimizer-tests task to someday. GOOD: both happen — a schedule_task (or update_task) moving the auth bug to tomorrow, and an update_task/demotion sending the optimizer tests to someday. BAD: doing only one, creating brand-new tasks, or asking an unnecessary question.",
+    minPassRate: 0.5
+  },
+  {
     id: "obvious-simple",
     date: "2026-06-01",
     time: "08:30",
