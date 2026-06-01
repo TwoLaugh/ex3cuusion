@@ -1247,10 +1247,10 @@ function SecondaryPanel({
                               Overlap
                               <select
                                 name="schedulingMode"
-                                defaultValue={task.scheduling?.mode === "concurrent" || task.scheduling?.mode === "background" ? task.scheduling.mode : "exclusive"}
+                                defaultValue={["concurrent", "background", "phased"].includes(task.scheduling?.mode ?? "") ? task.scheduling!.mode : "exclusive"}
                                 aria-label={`Overlap mode ${task.title}`}
                               >
-                                {["exclusive", "concurrent", "background"].map((value) => (
+                                {["exclusive", "concurrent", "background", "phased"].map((value) => (
                                   <option value={value} key={value}>{value}</option>
                                 ))}
                               </select>

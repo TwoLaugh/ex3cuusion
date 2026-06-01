@@ -36,7 +36,7 @@ const aiActionSchema = z.object({
       question: z.string().nullable(),
       clarificationKind: z.enum(["definition_of_done", "completion_behavior", "container_kind", "repeat_policy", "date", "split", "next_action"]).nullable(),
       clarificationOptions: z.array(z.string()).nullable(),
-      schedulingMode: z.enum(["exclusive", "concurrent", "background"]).nullable(),
+      schedulingMode: z.enum(["exclusive", "concurrent", "background", "phased"]).nullable(),
       dateIntent: z.enum(["unchanged", "today", "tomorrow", "this_week", "next_week", "someday", "specific_date", "deadline"]).nullable()
     })
   )
@@ -165,7 +165,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "For backlog grooming on an EXISTING task — changing its priority/importance/urgency, or moving it between today, this week, next week, or someday — use update_task with targetTaskId plus the new score values and/or dateIntent (one of today, tomorrow, this_week, next_week, someday, specific_date, deadline; use unchanged to leave dates as they are). To split a large or vague task into concrete steps, return a create_project for it, a create_task per step with projectName set to that project, and archive_task on the original. To surface what is ready, schedule the clearest capacity-fitting backlog items rather than asking. " +
     "For explicit recurring habits, return create_routine with recurrenceDays when known, mapping weekday names to 0-6 with Sunday as 0. " +
     "For sleep or bed time, return create_task titled 'Sleep', not schedule_block. " +
-    "Set schedulingMode on every create_task: 'exclusive' for normal focused work (the default), 'concurrent' for a light-attention activity the user does while something else runs, and 'background' for work that proceeds largely unattended. " +
+    "Set schedulingMode on every create_task: 'exclusive' for normal focused work (the default), 'concurrent' for a light-attention activity the user does while something else runs, 'background' for work that proceeds largely unattended, and 'phased' for multi-step work with a hands-on start, a long passive middle that can overlap other work, and a short finish (e.g. laundry, a dishwasher cycle, a long bake). " +
     "When the user describes doing one thing WHILE another runs — for example automated or passive work running while they do a hands-on activity — return TWO create_task actions, each with its own effort: the hands-on activity as 'concurrent' and the unattended one as 'background'. Do not merge them into a single combined task. " +
     "Use existing domain/project names and target task IDs when they fit. Return only actions that help choose, schedule, split, defer, prioritize, or prune work. " +
     "projectName must be null unless it exactly refers to an existing project/container from the provided list. " +
@@ -1156,9 +1156,32 @@ function deriveDateIntent(action: ParsedAiAction, state: AppState, sourceText: s
   return { kind: "none", originalText: sourceText || undefined, confidence: 0.35 };
 }
 
+// A default 3-phase template for a phased task (T075): an active start, a passive middle that can
+// overlap other work, and an active return/finish. Split proportionally from the total effort.
+function phasedScheduling(effortMinutes: number): SchedulingMetadata {
+  const total = Math.max(15, effortMinutes);
+  const start = Math.max(5, Math.min(20, Math.round(total * 0.2)));
+  const finish = Math.max(5, Math.min(20, Math.round(total * 0.2)));
+  const running = Math.max(10, total - start - finish);
+  return {
+    mode: "phased",
+    attentionLoad: "partial",
+    canOverlap: true,
+    overlapKinds: [],
+    phases: [
+      { id: "start", title: "Start", kind: "active", effortMinutes: start, attentionLoad: "partial", canOverlap: false },
+      { id: "running", title: "Running", kind: "passive", effortMinutes: running, attentionLoad: "passive", canOverlap: true },
+      { id: "finish", title: "Finish", kind: "return", effortMinutes: finish, attentionLoad: "partial", canOverlap: false }
+    ]
+  };
+}
+
 // Map an overlap mode onto the planner's attention/overlap fields. Shared by the AI path and
 // manual editing (T070) so both produce identical scheduling metadata.
-export function schedulingForMode(mode: "exclusive" | "concurrent" | "background" | null | undefined): SchedulingMetadata {
+export function schedulingForMode(
+  mode: "exclusive" | "concurrent" | "background" | "phased" | null | undefined,
+  effortMinutes = 30
+): SchedulingMetadata {
   switch (mode) {
     case "concurrent":
       // Light-attention activity that can run alongside a passive/background task.
@@ -1166,15 +1189,18 @@ export function schedulingForMode(mode: "exclusive" | "concurrent" | "background
     case "background":
       // Runs largely unattended (e.g. a process working while the user does something else).
       return { mode: "background", attentionLoad: "passive", canOverlap: true, overlapKinds: [] };
+    case "phased":
+      // Multi-step work whose passive middle can overlap other work (e.g. laundry).
+      return phasedScheduling(effortMinutes);
     default:
       return { mode: "exclusive", attentionLoad: "full", canOverlap: false };
   }
 }
 
 function buildScheduling(action: ParsedAiAction): SchedulingMetadata {
-  // Overlap semantics are model-owned via action.schedulingMode (the model splits "do X while Y"
-  // into two tasks and tags them). Deterministic code only maps the chosen mode.
-  return schedulingForMode(action.schedulingMode);
+  // Overlap semantics are model-owned via action.schedulingMode. Deterministic code only maps
+  // the chosen mode (and, for phased, derives a default phase template from effort).
+  return schedulingForMode(action.schedulingMode, action.effortMinutes);
 }
 
 function relevantSourceText(action: ParsedAiAction, sourceText: string): string {

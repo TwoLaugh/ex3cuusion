@@ -32,7 +32,7 @@ export type StructureMutation =
       action: "update";
       id: string;
       patch: Partial<Task> & {
-        schedulingMode?: "exclusive" | "concurrent" | "background";
+        schedulingMode?: "exclusive" | "concurrent" | "background" | "phased";
         dateIntentKind?: "today" | "tomorrow" | "this_week" | "next_week" | "someday" | "specific_date" | "deadline" | "none";
       };
     }
@@ -345,7 +345,7 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
       task.maxMinutes = mutation.patch.maxMinutes === null ? undefined : clampNumber(mutation.patch.maxMinutes, 1, 720, task.maxMinutes ?? task.effortMinutes);
     }
     if (mutation.patch.schedulingMode) {
-      task.scheduling = schedulingForMode(mutation.patch.schedulingMode);
+      task.scheduling = schedulingForMode(mutation.patch.schedulingMode, task.effortMinutes);
     }
     if (mutation.patch.dateIntentKind) {
       // Manual promote/demote (T072), sharing the AI's date-intent logic (T064).

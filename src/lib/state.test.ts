@@ -169,6 +169,22 @@ describe("state integration", () => {
     expect(getState().tasks.find((task) => task.id === parent.id)?.parentTaskId).toBeUndefined();
   });
 
+  it("sets a phased schedule and the planner expands it into phases (T075)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Laundry", effortMinutes: 90, scheduledDate: "2026-06-01" } });
+    const id = getState().tasks.find((task) => task.title === "Laundry")!.id;
+
+    applyStructureMutation({ entity: "task", action: "update", id, patch: { schedulingMode: "phased" } });
+    const task = getState().tasks.find((entry) => entry.id === id)!;
+    expect(task.scheduling?.mode).toBe("phased");
+    expect(task.scheduling?.phases?.length).toBe(3);
+    expect(task.scheduling?.phases?.map((phase) => phase.kind)).toEqual(["active", "passive", "return"]);
+
+    const plan = buildDayPlan(getState());
+    const phaseItems = plan.items.filter((item) => item.phaseKind);
+    expect(phaseItems.length).toBeGreaterThanOrEqual(3);
+    expect(phaseItems.some((item) => item.phaseKind === "passive" && item.canOverlap)).toBe(true);
+  });
+
   it("manually sets tags, overlap mode, and min/max minutes on a task (T070)", async () => {
     const target = getState().tasks.find((task) => task.status !== "archived")!;
     applyStructureMutation({
