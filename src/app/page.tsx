@@ -134,6 +134,7 @@ export default function Home() {
       .filter((task): task is AppState["tasks"][number] => Boolean(task));
   }, [state, selected]);
   const selectedProject = selected?.projectId ? state?.projects.find((project) => project.id === selected.projectId) : undefined;
+  const selectedTask = selected?.taskId ? state?.tasks.find((task) => task.id === selected.taskId) : undefined;
   const selectedBacklog = useMemo(() => {
     if (!state || !selected?.projectId) return [];
     const selectedIds = new Set(selected.selectedTaskIds ?? []);
@@ -383,7 +384,7 @@ export default function Home() {
         ))}
       </section>
 
-      {selected && (
+      {selected && selected.type === "project_block" && (
         <div className="drawer" role="dialog" aria-label={`${selected.title} project drawer`}>
           <button className="iconButton closeButton" onClick={() => setSelected(null)} aria-label="Close project drawer">
             <X size={18} />
@@ -455,6 +456,53 @@ export default function Home() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {selected && selected.type !== "project_block" && (
+        <div className="drawer" role="dialog" aria-label={`${selected.title} details`}>
+          <button className="iconButton closeButton" onClick={() => setSelected(null)} aria-label="Close details">
+            <X size={18} />
+          </button>
+          <p className="eyebrow">Task</p>
+          <h2>{selected.title}</h2>
+          <div className="drawerStats">
+            <span>{isClockTime(selected.startTime) ? `${selected.startTime}${isClockTime(selected.endTime) ? ` - ${selected.endTime}` : ""}` : "Unscheduled"}</span>
+            <span>{selectedTask?.effortMinutes ?? selected.estimatedMinutes}m</span>
+            <span>{statusLabel(selected.status)}</span>
+          </div>
+          {selectedTask && (
+            <>
+              <div className="badgeRow">
+                <span className="taskBadge">{dateIntentLabel(selectedTask)}</span>
+                <span className="taskBadge">{selectedTask.energy}</span>
+                <span className="taskBadge">p{selectedTask.priority}/i{selectedTask.importance}/u{selectedTask.urgency}</span>
+                {selectedTask.scheduling?.mode && selectedTask.scheduling.mode !== "exclusive" && (
+                  <span className="taskBadge highlightBadge">{selectedTask.scheduling.mode}</span>
+                )}
+                {(selectedTask.tags ?? []).map((tag) => (
+                  <span className="taskBadge" key={tag}>#{tag}</span>
+                ))}
+                {childStats(state, selectedTask.id).count > 0 && (
+                  <span className="taskBadge highlightBadge">
+                    {childStats(state, selectedTask.id).count} subtasks · {childStats(state, selectedTask.id).done} done
+                  </span>
+                )}
+              </div>
+              {selectedTask.definitionOfDone && (
+                <p className="drawerNote">
+                  <strong>Done when:</strong> {selectedTask.definitionOfDone}
+                </p>
+              )}
+              {selectedTask.notes && <p className="drawerNote">{selectedTask.notes}</p>}
+            </>
+          )}
+          <div className="drawerActions">
+            {selected.taskId && <button onClick={() => setMoveItem(selected)}>Reschedule</button>}
+            <button onClick={() => post("/api/plan/complete", { planItemId: selected.id })}>
+              {selected.status === "completed" ? "Mark not done" : "Mark done"}
+            </button>
           </div>
         </div>
       )}
@@ -1653,7 +1701,15 @@ function PlanItemActions({
           <Clock3 size={15} />
         </button>
       )}
-      {item.type === "project_block" && <button onClick={() => setSelected(item)}>Open</button>}
+      {item.type === "project_block" ? (
+        <button onClick={() => setSelected(item)}>Open</button>
+      ) : (
+        item.taskId && (
+          <button onClick={() => setSelected(item)} aria-label={`Details for ${item.title}`}>
+            Details
+          </button>
+        )
+      )}
     </div>
   );
 }
