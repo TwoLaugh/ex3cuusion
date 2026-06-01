@@ -25,6 +25,11 @@ function isInCompletionCooldown(task: Task, date: string): boolean {
   return daysUntil(completedDate, date) < task.repeatPolicy.cooldownDays;
 }
 
+// Keep a task that was completed today visible on its day as a done card (T085).
+function completedOnDate(task: Task, date: string): boolean {
+  return task.status === "completed" && (task.completedAt?.slice(0, 10) === date || task.lastCompletedAt?.slice(0, 10) === date);
+}
+
 // True if the task has at least one non-archived, non-completed subtask (T071).
 export function hasActiveChildren(state: AppState, taskId: string): boolean {
   return state.tasks.some((task) => task.parentTaskId === taskId && !["archived", "completed"].includes(task.status));
@@ -134,8 +139,11 @@ export function buildDayPlan(state: AppState): DayPlan {
   }
 
   // A parent task with active subtasks acts as a container (T071): its subtasks are scheduled,
-  // not the parent itself, so effort isn't double-counted.
-  const activeTasks = state.tasks.filter((task) => isTaskPlannable(task, date) && !hasActiveChildren(state, task.id));
+  // not the parent itself, so effort isn't double-counted. A task completed today stays on the
+  // day as a done card instead of vanishing the moment it's ticked (T085).
+  const activeTasks = state.tasks.filter(
+    (task) => (isTaskPlannable(task, date) || completedOnDate(task, date)) && !hasActiveChildren(state, task.id)
+  );
   const projectTasks = activeTasks
     .filter((task) => task.projectId && shouldAppearInProjectBlock(state, task))
     .sort((a, b) => taskScore(state, b, date) - taskScore(state, a, date));

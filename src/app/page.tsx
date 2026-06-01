@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
-import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { Dispatch, DragEvent, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 
@@ -35,6 +35,27 @@ export default function Home() {
   // True while the view should track real "today" (T068). Manual day navigation turns it off so
   // the live tick does not yank the user back; the "Today" control turns it back on.
   const followingTodayRef = useRef(true);
+  const dragItemRef = useRef<PlanItem | null>(null);
+
+  // Drag a timeline block to a new time (T081): map the drop Y to a 15-min slot and reschedule via
+  // the same structure mutation the Move dialog uses.
+  function rescheduleByDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const item = dragItemRef.current;
+    dragItemRef.current = null;
+    if (!item?.taskId || !plan || !timeline) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const raw = timeline.startMinutes + (event.clientY - rect.top) / pixelsPerMinute;
+    const snapped = Math.max(0, Math.min(24 * 60 - 5, Math.round(raw / 15) * 15));
+    const hh = String(Math.floor(snapped / 60)).padStart(2, "0");
+    const mm = String(snapped % 60).padStart(2, "0");
+    void post("/api/structure", {
+      entity: "task",
+      action: "update",
+      id: item.taskId,
+      patch: { scheduledDate: plan.date, scheduledTime: `${hh}:${mm}` }
+    });
+  }
 
   async function refresh() {
     const response = await fetch("/api/state", { cache: "no-store" });
@@ -132,6 +153,7 @@ export default function Home() {
       .filter((task): task is AppState["tasks"][number] => Boolean(task));
   }, [state, selected]);
   const selectedProject = selected?.projectId ? state?.projects.find((project) => project.id === selected.projectId) : undefined;
+  const selectedTask = selected?.taskId ? state?.tasks.find((task) => task.id === selected.taskId) : undefined;
   const selectedBacklog = useMemo(() => {
     if (!state || !selected?.projectId) return [];
     const selectedIds = new Set(selected.selectedTaskIds ?? []);
@@ -351,7 +373,12 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <div className="calendarGrid" style={{ height: timeline?.height }}>
+          <div
+            className="calendarGrid"
+            style={{ height: timeline?.height }}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={rescheduleByDrop}
+          >
             {timeline?.hours.map((hour) => <div className="hourLine" key={hour.time} style={{ top: hour.top }} />)}
             {timeline?.items.map(({ item, top, height, left, width, laneCount }) => (
               <article
@@ -362,6 +389,10 @@ export default function Home() {
                 }`}
                 key={item.id}
                 data-testid={`plan-item-${item.title}`}
+                draggable={Boolean(item.taskId)}
+                onDragStart={() => {
+                  dragItemRef.current = item;
+                }}
                 style={{ top, height, left: `${left}%`, width: `${width}%` }}
               >
                 <div className="blockContent">
@@ -370,7 +401,6 @@ export default function Home() {
                       {item.startTime} - {item.endTime}
                     </div>
                     <h2>{item.title}</h2>
-                    <p>{item.reason}</p>
                     <PlanItemMeta item={item} />
                     {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
                   </div>
@@ -384,7 +414,6 @@ export default function Home() {
           <article className={`unscheduledItem ${item.status}`} key={item.id} data-testid={`plan-item-${item.title}`}>
             <div>
               <h2>{item.title}</h2>
-              <p>{item.reason}</p>
               <PlanItemMeta item={item} />
               {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
             </div>
@@ -393,7 +422,7 @@ export default function Home() {
         ))}
       </section>
 
-      {selected && (
+      {selected && selected.type === "project_block" && (
         <div className="drawer" role="dialog" aria-label={`${selected.title} project drawer`}>
           <button className="iconButton closeButton" onClick={() => setSelected(null)} aria-label="Close project drawer">
             <X size={18} />
@@ -469,6 +498,53 @@ export default function Home() {
         </div>
       )}
 
+      {selected && selected.type !== "project_block" && (
+        <div className="drawer" role="dialog" aria-label={`${selected.title} details`}>
+          <button className="iconButton closeButton" onClick={() => setSelected(null)} aria-label="Close details">
+            <X size={18} />
+          </button>
+          <p className="eyebrow">Task</p>
+          <h2>{selected.title}</h2>
+          <div className="drawerStats">
+            <span>{isClockTime(selected.startTime) ? `${selected.startTime}${isClockTime(selected.endTime) ? ` - ${selected.endTime}` : ""}` : "Unscheduled"}</span>
+            <span>{selectedTask?.effortMinutes ?? selected.estimatedMinutes}m</span>
+            <span>{statusLabel(selected.status)}</span>
+          </div>
+          {selectedTask && (
+            <>
+              <div className="badgeRow">
+                <span className="taskBadge">{dateIntentLabel(selectedTask)}</span>
+                <span className="taskBadge">{selectedTask.energy}</span>
+                <span className="taskBadge">p{selectedTask.priority}/i{selectedTask.importance}/u{selectedTask.urgency}</span>
+                {selectedTask.scheduling?.mode && selectedTask.scheduling.mode !== "exclusive" && (
+                  <span className="taskBadge highlightBadge">{selectedTask.scheduling.mode}</span>
+                )}
+                {(selectedTask.tags ?? []).map((tag) => (
+                  <span className="taskBadge" key={tag}>#{tag}</span>
+                ))}
+                {childStats(state, selectedTask.id).count > 0 && (
+                  <span className="taskBadge highlightBadge">
+                    {childStats(state, selectedTask.id).count} subtasks · {childStats(state, selectedTask.id).done} done
+                  </span>
+                )}
+              </div>
+              {selectedTask.definitionOfDone && (
+                <p className="drawerNote">
+                  <strong>Done when:</strong> {selectedTask.definitionOfDone}
+                </p>
+              )}
+              {selectedTask.notes && <p className="drawerNote">{selectedTask.notes}</p>}
+            </>
+          )}
+          <div className="drawerActions">
+            {selected.taskId && <button onClick={() => setMoveItem(selected)}>Reschedule</button>}
+            <button onClick={() => post("/api/plan/complete", { planItemId: selected.id })}>
+              {selected.status === "completed" ? "Mark not done" : "Mark done"}
+            </button>
+          </div>
+        </div>
+      )}
+
       <button className="aiButton" onClick={() => setInboxOpen(true)} aria-label="Open AI inbox">
         <Bot size={28} />
       </button>
@@ -512,7 +588,9 @@ export default function Home() {
               </div>
             )}
             <div className="inboxLog">
-              {state.inbox.map((entry, index) => (
+              {/* T087: keep the inbox fresh — only the current/most-recent exchange shows here;
+                  earlier sessions are logged on the AI activity page. */}
+              {state.inbox.slice(0, 1).map((entry, index) => (
                 <InboxSession
                   key={`${entry.id}_${index}`}
                   entry={entry}
@@ -526,6 +604,11 @@ export default function Home() {
                   post={post}
                 />
               ))}
+              {state.inbox.length > 1 && (
+                <button className="inboxHistoryLink" onClick={() => { setInboxOpen(false); setActiveView("AI activity"); }}>
+                  View {state.inbox.length - 1} earlier session{state.inbox.length - 1 === 1 ? "" : "s"} in AI activity
+                </button>
+              )}
             </div>
           </section>
         </div>
@@ -922,7 +1005,19 @@ function structurePatch(entity: "domain" | "project" | "task" | "routine", formD
   const importance = fieldNumber(formData, "importance");
   const urgency = fieldNumber(formData, "urgency");
   const priority = fieldNumber(formData, "priority");
+  const repeatType = fieldText(formData, "repeatType");
+  const repeatDays = fieldText(formData, "repeatDays")
+    .split(",")
+    .map((day) => Number(day.trim()))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+  const repeatPolicy =
+    repeatType === "weekly"
+      ? { type: "weekly", days: repeatDays.length ? repeatDays : [1] }
+      : repeatType === "daily"
+        ? { type: "daily" }
+        : { type: "none" };
   return {
+    repeatPolicy,
     title: fieldText(formData, "title"),
     domainId: fieldText(formData, "domainId"),
     projectId: fieldText(formData, "projectId"),
@@ -1158,6 +1253,9 @@ function SecondaryPanel({
                       <span className="taskBadge">{task.effortMinutes}m</span>
                       {task.projectId && <span className="taskBadge">{projectName(state, task.projectId)}</span>}
                       {task.parentTaskId && <span className="taskBadge">↳ subtask</span>}
+                      {task.repeatPolicy?.type && task.repeatPolicy.type !== "none" && (
+                        <span className="taskBadge">↻ {task.repeatPolicy.type}</span>
+                      )}
                       {childStats(state, task.id).count > 0 && (
                         <span className="taskBadge highlightBadge">
                           {childStats(state, task.id).count} subtasks · {childStats(state, task.id).done}/{childStats(state, task.id).count} done · {childStats(state, task.id).minutes}m
@@ -1276,6 +1374,25 @@ function SecondaryPanel({
                             <label className="fieldLabel">
                               Max (min)
                               <input name="maxMinutes" type="number" min="1" max="720" defaultValue={task.maxMinutes ?? ""} aria-label={`Max minutes ${task.title}`} />
+                            </label>
+                          </div>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Repeats
+                              <select name="repeatType" defaultValue={task.repeatPolicy?.type ?? "none"} aria-label={`Repeats ${task.title}`}>
+                                {["none", "daily", "weekly"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="fieldLabel">
+                              Weekly days (0-6)
+                              <input
+                                name="repeatDays"
+                                defaultValue={task.repeatPolicy?.type === "weekly" ? (task.repeatPolicy.days ?? []).join(", ") : ""}
+                                placeholder="1, 3, 5"
+                                aria-label={`Repeat days ${task.title}`}
+                              />
                             </label>
                           </div>
                           <input name="tags" defaultValue={(task.tags ?? []).join(", ")} placeholder="tags, comma, separated" aria-label={`Tags ${task.title}`} />
@@ -1655,7 +1772,15 @@ function PlanItemActions({
           <Clock3 size={15} />
         </button>
       )}
-      {item.type === "project_block" && <button onClick={() => setSelected(item)}>Open</button>}
+      {item.type === "project_block" ? (
+        <button onClick={() => setSelected(item)}>Open</button>
+      ) : (
+        item.taskId && (
+          <button onClick={() => setSelected(item)} aria-label={`Details for ${item.title}`}>
+            Details
+          </button>
+        )
+      )}
     </div>
   );
 }
@@ -1681,6 +1806,7 @@ function buildTimeline(items: PlanItem[], currentTime?: string) {
   return {
     height,
     hours,
+    startMinutes,
     unscheduled,
     items: scheduledWithLanes.map(({ item, lane, laneCount }) => {
       const itemStart = absoluteStartMinutes(item, currentTime);

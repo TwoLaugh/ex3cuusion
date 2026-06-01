@@ -150,6 +150,18 @@ small control; T075/T076 are feature depth; T077 is durable-path infra.
   T081 Drag-between-days (week/timeline) · T082 Bulk multi-select on backlog · T083 Visual
   subtask tree indentation · T084 Componentize page.tsx.
 
+### M10: UI Review Feedback (round 1)
+
+From a hands-on walkthrough:
+- T085 Completion keeps the task visible with a done state (the tick currently removes it — bug)
+- T086 Reduce plan-item clutter (drop superfluous rationale subheadings)
+- T087 Fresh inbox + logged AI history (stop stacking old sessions in the inbox)
+- T088 Simplify the structure model — folders + tasks, drop projects, routine as a task flag (large)
+- (Also raised: drag tasks on the Today view -> T081; click a Today task for a detail box -> T080.)
+
+Suggested order: quick wins first (T085 bug, T086 clutter), then T087, then T088 (needs design
+decisions), with T080/T081 from M9 folded in.
+
 Dependencies: T061 precedes T063, T064, and T066. T065 follows T063 and T064. T067 runs
 alongside -- every feature ticket adds its quality scenarios as it lands.
 
