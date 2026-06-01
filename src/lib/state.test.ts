@@ -149,6 +149,20 @@ describe("state integration", () => {
     expect(task.dateIntent?.kind).toBe("today");
   });
 
+  it("keeps a completed task on the day as a done item (T085)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Finish me", scheduledDate: "2026-06-01", effortMinutes: 20 } });
+    let plan = buildDayPlan(getState());
+    const item = plan.items.find((entry) => entry.title === "Finish me");
+    expect(item).toBeDefined();
+
+    completePlanItem(item!.id);
+
+    plan = buildDayPlan(getState());
+    const done = plan.items.find((entry) => entry.title === "Finish me");
+    expect(done).toBeDefined(); // still on the day, not removed
+    expect(done?.status).toBe("completed"); // shown as done
+  });
+
   it("supports multi-level nesting and rejects cycles (T076)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "A" } });
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "B" } });

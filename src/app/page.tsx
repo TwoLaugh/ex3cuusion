@@ -362,7 +362,6 @@ export default function Home() {
                       {item.startTime} - {item.endTime}
                     </div>
                     <h2>{item.title}</h2>
-                    <p>{item.reason}</p>
                     <PlanItemMeta item={item} />
                     {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
                   </div>
@@ -376,7 +375,6 @@ export default function Home() {
           <article className={`unscheduledItem ${item.status}`} key={item.id} data-testid={`plan-item-${item.title}`}>
             <div>
               <h2>{item.title}</h2>
-              <p>{item.reason}</p>
               <PlanItemMeta item={item} />
               {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
             </div>

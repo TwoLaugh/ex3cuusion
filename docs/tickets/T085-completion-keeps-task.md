@@ -1,6 +1,12 @@
 # T085: Completion Keeps the Task Visible (Done State)
 
-Status: planned. (Bug / behavior.)
+Status: implemented.
+
+## Implementation
+
+- Planner now keeps a task completed today as a day candidate (`completedOnDate`), so it renders
+  as a `completed` card (existing done style + toggle) instead of vanishing when ticked. Load
+  excludes completed time. Verified by unit test + 57 tests green.
 
 ## Problem
 

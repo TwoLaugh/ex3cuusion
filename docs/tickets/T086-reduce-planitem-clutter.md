@@ -1,6 +1,11 @@
 # T086: Reduce Plan-Item Clutter
 
-Status: planned. (UI.)
+Status: implemented.
+
+## Implementation
+
+- Removed the generated `item.reason` subheading (e.g. "Small task with time pressure") from both
+  the timeline and unscheduled Today cards. Title, time, meta badges, and status pill remain.
 
 ## Problem
 
