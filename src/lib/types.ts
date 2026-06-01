@@ -78,6 +78,27 @@ export interface Project {
 
 export type Container = Project;
 
+// T088: a single recursive folder concept that will replace Domain + Project. Introduced
+// additively (Stage 2a); domains+projects are migrated into `folders` in normalizeState. Stage 2b
+// switches consumers to read folders; Stage 2c removes Domain/Project.
+export interface Folder {
+  id: string;
+  name: string;
+  parentFolderId?: string;
+  weight?: number;
+  canBlock?: boolean;
+  defaultBlockMinutes?: number;
+  contextNote?: string;
+  status?: "active" | "archived";
+}
+
+export interface FolderBlockSelection {
+  date: string;
+  folderId: string;
+  selectedTaskIds: string[];
+  updatedAt: string;
+}
+
 export type RepeatPolicy =
   | { type: "none" }
   | {
@@ -160,6 +181,7 @@ export interface Task {
   type: "atomic" | "project_task" | "routine_instance" | "soft_invitation";
   domainId: string;
   projectId?: string;
+  folderId?: string; // T088: target field; derived from domain/project during migration (Stage 2a)
   parentTaskId?: string;
   sourceInboxItemId?: string;
   status: TaskStatus;
@@ -437,6 +459,8 @@ export interface AppState {
   availableMinutes: number;
   domains: Domain[];
   projects: Project[];
+  folders?: Folder[]; // T088 Stage 2a: derived from domains+projects in normalizeState
+  folderBlockSelections?: FolderBlockSelection[];
   tasks: Task[];
   deferrals: DeferralLog[];
   completions: CompletionEvent[];

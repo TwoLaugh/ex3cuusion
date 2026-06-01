@@ -293,6 +293,19 @@ describe("state integration", () => {
     expect(listChangeHistory().length).toBe(historyLen);
   });
 
+  it("derives a folder tree from domains and projects (T088 Stage 2a)", () => {
+    const state = getState();
+    expect(state.folders && state.folders.length).toBeTruthy();
+    for (const domain of state.domains) {
+      expect(state.folders!.some((folder) => folder.id === domain.id && !folder.parentFolderId)).toBe(true);
+    }
+    for (const project of state.projects) {
+      expect(state.folders!.some((folder) => folder.id === project.id && folder.parentFolderId === project.domainId)).toBe(true);
+    }
+    const sample = state.tasks[0];
+    expect(sample.folderId).toBe(sample.projectId ?? sample.domainId);
+  });
+
   it("records and undoes manual edits and completions, not just AI actions (T073)", async () => {
     const target = getState().tasks.find((task) => task.status !== "archived")!;
     const originalTitle = target.title;

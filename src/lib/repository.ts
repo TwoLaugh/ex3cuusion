@@ -188,5 +188,34 @@ function normalizeState(state: AppState): AppState {
     session.revisionEvents ??= [];
     session.unresolvedFields ??= [];
   }
+  deriveFolders(state);
   return state;
+}
+
+// T088 Stage 2a: derive the recursive folder tree from domains + projects (ids preserved, so all
+// existing references stay valid). Each domain -> a top-level folder; each project -> a child
+// folder under its domain; every task gets folderId = projectId ?? domainId. Block selections are
+// mirrored onto folders. Stage 2b switches consumers to read these; Stage 2c removes the originals.
+function deriveFolders(state: AppState): void {
+  state.folders = [
+    ...state.domains.map((domain) => ({ id: domain.id, name: domain.name, weight: domain.weight })),
+    ...(state.projects ?? []).map((project) => ({
+      id: project.id,
+      name: project.name,
+      parentFolderId: project.domainId,
+      canBlock: true,
+      defaultBlockMinutes: project.defaultBlockMinutes,
+      contextNote: project.contextNote,
+      status: project.status === "completed" ? ("archived" as const) : ("active" as const)
+    }))
+  ];
+  for (const task of state.tasks) {
+    task.folderId = task.projectId ?? task.domainId;
+  }
+  state.folderBlockSelections = (state.projectBlockSelections ?? []).map((selection) => ({
+    date: selection.date,
+    folderId: selection.projectId,
+    selectedTaskIds: selection.selectedTaskIds,
+    updatedAt: selection.updatedAt
+  }));
 }
