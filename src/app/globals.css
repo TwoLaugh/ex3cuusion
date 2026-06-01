@@ -1682,3 +1682,18 @@ textarea {
   font-size: 13px;
   cursor: pointer;
 }
+
+/* T087: link from a fresh inbox to the full AI activity log */
+.inboxHistoryLink {
+  margin-top: 8px;
+  padding: 4px 0;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.inboxHistoryLink:hover { opacity: 0.9; }

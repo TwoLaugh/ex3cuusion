@@ -1,6 +1,12 @@
 # T087: Fresh Inbox + Logged AI History
 
-Status: planned. (UI.)
+Status: implemented.
+
+## Implementation
+
+- The inbox now renders only the most-recent exchange (composer stays clean); older sessions are
+  reachable via a 'View N earlier sessions in AI activity' link that opens the AI activity log
+  (which already lists all capture sessions). No data change — purely how much the inbox shows.
 
 ## Problem
 

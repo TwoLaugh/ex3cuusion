@@ -502,7 +502,9 @@ export default function Home() {
               </div>
             )}
             <div className="inboxLog">
-              {state.inbox.map((entry, index) => (
+              {/* T087: keep the inbox fresh — only the current/most-recent exchange shows here;
+                  earlier sessions are logged on the AI activity page. */}
+              {state.inbox.slice(0, 1).map((entry, index) => (
                 <InboxSession
                   key={`${entry.id}_${index}`}
                   entry={entry}
@@ -516,6 +518,11 @@ export default function Home() {
                   post={post}
                 />
               ))}
+              {state.inbox.length > 1 && (
+                <button className="inboxHistoryLink" onClick={() => { setInboxOpen(false); setActiveView("AI activity"); }}>
+                  View {state.inbox.length - 1} earlier session{state.inbox.length - 1 === 1 ? "" : "s"} in AI activity
+                </button>
+              )}
             </div>
           </section>
         </div>
