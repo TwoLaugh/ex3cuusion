@@ -1,6 +1,18 @@
 # T063: Week-Level Planning Actions
 
-Status: planned.
+Status: implemented.
+
+## Implementation
+
+- The model already receives the full week plan (per-day plans with capacity + backlog with
+  efforts) and `schedule_task` already assigns a task to any day — so this is a prompt
+  capability, not new plumbing. Added instruction: for week-level requests (plan my week,
+  rebalance, behind/ahead), distribute this-week/deadline/backlog tasks across days with one
+  `schedule_task` per task, respecting each day's remaining capacity and deadlines, and allowing
+  moves between days.
+- Auto-applied; the whole re-plan is one undo snapshot (T061, recorded at submitInbox start).
+- Verified live: `week-plan` quality scenario passes 3/3 (model produces a multi-day spread);
+  full dev set 10/10 met threshold (no regressions). tsc + 45 unit tests green.
 
 ## Goal
 

@@ -44,6 +44,15 @@ export const devScenarios = [
     minPassRate: 0.6
   },
   {
+    id: "week-plan",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "plan out my week — spread my open tasks across the next few days",
+    rubric:
+      "A request to lay out the week. GOOD: assign multiple tasks to specific days across the week (several schedule_task actions whose scheduledDate falls on different days), producing a realistic spread; respecting deadlines and not overloading a single day is a plus. BAD: no scheduling actions at all, or piling every task onto one day.",
+    minPassRate: 0.5
+  },
+  {
     id: "deadline-not-schedule",
     date: "2026-06-01",
     time: "08:30",
