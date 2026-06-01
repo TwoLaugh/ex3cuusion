@@ -149,6 +149,30 @@ describe("state integration", () => {
     expect(task.dateIntent?.kind).toBe("today");
   });
 
+  it("supports multi-level nesting and rejects cycles (T076)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "A" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "B" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "C" } });
+    const a = getState().tasks.find((t) => t.title === "A")!;
+    const b = getState().tasks.find((t) => t.title === "B")!;
+    const c = getState().tasks.find((t) => t.title === "C")!;
+
+    // A -> B -> C (three levels)
+    applyStructureMutation({ entity: "task", action: "update", id: b.id, patch: { parentTaskId: a.id } });
+    applyStructureMutation({ entity: "task", action: "update", id: c.id, patch: { parentTaskId: b.id } });
+    expect(getState().tasks.find((t) => t.id === c.id)?.parentTaskId).toBe(b.id);
+
+    // Cycle guard: A cannot become a child of its own descendant C.
+    applyStructureMutation({ entity: "task", action: "update", id: a.id, patch: { parentTaskId: c.id } });
+    expect(getState().tasks.find((t) => t.id === a.id)?.parentTaskId).toBeUndefined();
+
+    // Container behavior holds at each level: only the leaf (C) is plannable.
+    applyStructureMutation({ entity: "task", action: "update", id: c.id, patch: { scheduledDate: "2026-06-01" } });
+    const plan = buildDayPlan(getState());
+    expect(plan.items.some((item) => item.title === "A")).toBe(false);
+    expect(plan.items.some((item) => item.title === "B")).toBe(false);
+  });
+
   it("nests a subtask under a parent and treats the parent as a container (T071)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Parent task", scheduledDate: "2026-06-01" } });
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Child task", scheduledDate: "2026-06-01" } });

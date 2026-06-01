@@ -157,16 +157,27 @@ export function loadRealisticCharacterScenario(): AppState {
   return getState();
 }
 
-// Resolve a requested parent task id for single-level hierarchy (T071). Returns the parent id, or
-// undefined to clear/reject. Rejects: self-parenting, parenting under a task that is itself a
-// subtask (keeps it single-level), and turning a task that already has children into a child.
+// True if `nodeId` is within the subtree rooted at `ancestorId` (walks up the parent chain).
+function isDescendantOf(state: AppState, nodeId: string, ancestorId: string): boolean {
+  let current = state.tasks.find((task) => task.id === nodeId);
+  const seen = new Set<string>();
+  while (current?.parentTaskId && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.parentTaskId === ancestorId) return true;
+    current = state.tasks.find((task) => task.id === current!.parentTaskId);
+  }
+  return false;
+}
+
+// Resolve a requested parent task id for multi-level hierarchy (T071 single-level, T076 multi).
+// Returns the parent id, or undefined to clear/reject. Rejects self-parenting and any choice that
+// would create a cycle (parenting a task under one of its own descendants).
 function resolveParentForChild(state: AppState, requested: string | undefined, selfId?: string): string | undefined {
-  if (requested === undefined || requested === null || requested === "") return undefined;
+  if (!requested) return undefined;
   if (requested === selfId) return undefined;
   const parent = state.tasks.find((task) => task.id === requested && task.status !== "archived");
   if (!parent) return undefined;
-  if (parent.parentTaskId) return undefined; // single-level: cannot nest under a subtask
-  if (selfId && hasActiveChildren(state, selfId)) return undefined; // a parent cannot become a child
+  if (selfId && isDescendantOf(state, requested, selfId)) return undefined; // would create a cycle
   return parent.id;
 }
 
