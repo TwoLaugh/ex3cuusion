@@ -11,9 +11,11 @@ import {
   dailyReviewSummary,
   deferPlanItem,
   getState,
+  listChangeHistory,
   recordPlanItemOutcome,
   rejectAiAction,
   resetState,
+  undoChange,
   retreatDay,
   setClock,
   submitInbox,
@@ -38,6 +40,27 @@ describe("state integration", () => {
     expect(after.inbox[0].actions.every((action) => action.status === "applied")).toBe(true);
     expect(after.inbox[0].actions.some((action) => action.skippedReason === "Task already exists.")).toBe(true);
     expect(plan.items.some((item) => item.title === "Message Will")).toBe(true);
+  });
+
+  it("records AI changes and undoes them (auto-apply with undo)", async () => {
+    const before = getState();
+    const beforeTaskCount = before.tasks.length;
+    const beforeInboxCount = before.inbox.length;
+
+    await submitInbox("water plants", fixtureInterpreter);
+    const after = getState();
+    expect(after.tasks.some((task) => task.title === "Water plants")).toBe(true);
+    expect(after.tasks.length).toBe(beforeTaskCount + 1);
+
+    const history = listChangeHistory();
+    expect(history.length).toBeGreaterThanOrEqual(1);
+    expect(history[0].source).toBe("inbox");
+
+    const restored = undoChange();
+    expect(restored.tasks.some((task) => task.title === "Water plants")).toBe(false);
+    expect(restored.tasks.length).toBe(beforeTaskCount);
+    expect(restored.inbox.length).toBe(beforeInboxCount);
+    expect(listChangeHistory().length).toBe(history.length - 1);
   });
 
   it("manually creates, edits, moves, and archives structure", () => {

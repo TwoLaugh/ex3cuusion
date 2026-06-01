@@ -1,6 +1,20 @@
 # T061: AI Change History and Undo
 
-Status: planned.
+Status: implemented.
+
+## Implementation
+
+- `state.ts`: a process-level change-history stack kept OUTSIDE `AppState` (so it never leaks
+  into model context). `recordChange(source, summary)` snapshots state before each AI op;
+  `listChangeHistory()` returns metadata; `undoChange(id?)` restores the snapshot (LIFO rewind —
+  undoing a change also reverts later ones). Hooked into `submitInbox`, `answerCaptureQuestion`,
+  and `addCaptureSessionMessage`. `resetState` clears history.
+- `GET/POST /api/history` (list / undo).
+- `page.tsx`: a "Recent AI changes" strip with per-item Undo, refreshed after any state change.
+- Verified: unit test (undo-last), HTTP flow (record + undo-last + undo-by-id rewind), page SSR
+  renders, tsc + 44 unit tests green.
+- Not yet: persistence to Postgres (in-memory/per-process only); manual plan outcomes are not
+  yet in history (AI ops only, per scope).
 
 ## Goal
 

@@ -31,6 +31,7 @@ export default function Home() {
   const [clarificationDrafts, setClarificationDrafts] = useState<Record<string, string>>({});
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [todayIndex, setTodayIndex] = useState<number | null>(null);
+  const [history, setHistory] = useState<{ id: string; source: string; summary: string; createdAt: string }[]>([]);
 
   async function refresh() {
     const response = await fetch("/api/state", { cache: "no-store" });
@@ -44,6 +45,31 @@ export default function Home() {
     const { date, time } = localNowParts();
     await post("/api/time", { date, time });
   }
+
+  // Undo an AI change (auto-apply-with-undo, T061). post() updates the plan/state; the
+  // [payload] effect below refreshes the change list.
+  async function undoChange(id: string) {
+    try {
+      await post("/api/history", { id });
+    } catch {
+      // ignore — list refresh will reflect actual state
+    }
+  }
+
+  // Keep the recent-AI-changes list in sync after any state change.
+  useEffect(() => {
+    if (!payload) return;
+    let active = true;
+    fetch("/api/history")
+      .then((response) => (response.ok ? response.json() : { history: [] }))
+      .then((data) => {
+        if (active) setHistory(data.history ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [payload]);
 
   async function post(url: string, body: Record<string, unknown> = {}) {
     const response = await fetch(url, {
@@ -407,6 +433,19 @@ export default function Home() {
               <p className="errorMessage" role="alert">
                 {inboxError}
               </p>
+            )}
+            {history.length > 0 && (
+              <div className="changeHistory">
+                <span className="changeHistoryTitle">Recent AI changes</span>
+                {history.slice(0, 5).map((change) => (
+                  <div key={change.id} className="changeRow">
+                    <span className="changeSummary">{change.summary}</span>
+                    <button className="undoButton" onClick={() => undoChange(change.id)} aria-label={`Undo ${change.summary}`}>
+                      Undo
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
             <div className="inboxLog">
               {state.inbox.map((entry, index) => (
