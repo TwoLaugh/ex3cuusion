@@ -1,4 +1,4 @@
-import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
+import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, schedulingForMode, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
 import { buildDayPlan } from "./planner";
@@ -27,7 +27,7 @@ export type StructureMutation =
   | { entity: "project"; action: "update"; id: string; patch: Partial<AppState["projects"][number]> }
   | { entity: "project"; action: "archive"; id: string }
   | { entity: "task"; action: "create"; patch: Partial<Task> }
-  | { entity: "task"; action: "update"; id: string; patch: Partial<Task> }
+  | { entity: "task"; action: "update"; id: string; patch: Partial<Task> & { schedulingMode?: "exclusive" | "concurrent" | "background" } }
   | { entity: "task"; action: "archive"; id: string }
   | { entity: "routine"; action: "create"; patch: Partial<AppState["routines"][number]> }
   | { entity: "routine"; action: "update"; id: string; patch: Partial<AppState["routines"][number]> }
@@ -300,6 +300,18 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
     task.strictness = validStrictness(mutation.patch.strictness) ?? task.strictness;
     task.notes = optionalText(mutation.patch.notes, task.notes);
     task.repeatPolicy = mutation.patch.repeatPolicy ? normalizeRepeatPolicy(mutation.patch.repeatPolicy) : task.repeatPolicy;
+    if (Array.isArray(mutation.patch.tags)) {
+      task.tags = mutation.patch.tags.map((tag) => String(tag).trim()).filter(Boolean);
+    }
+    if (mutation.patch.minMinutes !== undefined) {
+      task.minMinutes = mutation.patch.minMinutes === null ? undefined : clampNumber(mutation.patch.minMinutes, 1, 720, task.minMinutes ?? task.effortMinutes);
+    }
+    if (mutation.patch.maxMinutes !== undefined) {
+      task.maxMinutes = mutation.patch.maxMinutes === null ? undefined : clampNumber(mutation.patch.maxMinutes, 1, 720, task.maxMinutes ?? task.effortMinutes);
+    }
+    if (mutation.patch.schedulingMode) {
+      task.scheduling = schedulingForMode(mutation.patch.schedulingMode);
+    }
     return getState();
   }
 

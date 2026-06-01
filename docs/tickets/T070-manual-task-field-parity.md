@@ -1,6 +1,24 @@
 # T070: Full Manual Task-Field Parity
 
-Status: planned.
+Status: implemented.
+
+## Implementation
+
+- Backend: the task update structure mutation now also applies `tags`, `minMinutes`,
+  `maxMinutes`, and `schedulingMode` (mapped via the shared `schedulingForMode` helper, exported
+  from ai-actions.ts so manual + AI paths produce identical scheduling metadata). energy /
+  strictness / repeatPolicy were already handled.
+- UI: the task editor leads with a single **Priority** + Effort, and an **Advanced** section
+  holds importance, urgency, energy, strictness, overlap mode, min/max minutes, and tags. Fields
+  now have visible labels. When importance/urgency are left blank they mirror priority (decision:
+  "one priority + Advanced").
+- Verified: unit test (tags/overlap/min-max/energy/strictness via mutation) + HTTP round-trip;
+  page renders. tsc + 50 unit tests green.
+
+## Deferred to T072
+
+The someday / promote-demote (dateIntent) control moved to T072 (backlog management), where it
+sits with move/reprioritize and shares `applyTaskDateIntent`.
 
 ## Goal
 

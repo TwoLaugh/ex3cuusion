@@ -1599,3 +1599,29 @@ textarea {
   font-size: 11px;
 }
 .todayButton:hover { background: rgba(127, 127, 127, 0.15); }
+
+/* T070: labelled fields + advanced section in the task editor */
+.fieldLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  opacity: 0.8;
+  flex: 1;
+}
+.fieldLabel input,
+.fieldLabel select {
+  font-size: 13px;
+}
+.advancedFields {
+  margin: 6px 0;
+  border-top: 1px dashed var(--border, #2a2a2a);
+  padding-top: 6px;
+}
+.advancedFields > summary {
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+}

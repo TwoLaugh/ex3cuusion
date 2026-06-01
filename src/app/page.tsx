@@ -908,20 +908,34 @@ function structurePatch(entity: "domain" | "project" | "task" | "routine", formD
     };
   }
 
+  const tagsRaw = fieldText(formData, "tags");
+  const minMinutesRaw = fieldText(formData, "minMinutes");
+  const maxMinutesRaw = fieldText(formData, "maxMinutes");
+  const importance = fieldNumber(formData, "importance");
+  const urgency = fieldNumber(formData, "urgency");
+  const priority = fieldNumber(formData, "priority");
   return {
     title: fieldText(formData, "title"),
     domainId: fieldText(formData, "domainId"),
     projectId: fieldText(formData, "projectId"),
     status: fieldText(formData, "status"),
-    priority: fieldNumber(formData, "priority"),
-    importance: fieldNumber(formData, "importance"),
-    urgency: fieldNumber(formData, "urgency"),
+    priority,
+    // If the Advanced importance/urgency fields are absent (simple view), mirror priority so the
+    // planner still has all three scores.
+    importance: importance || priority,
+    urgency: urgency || priority,
     effortMinutes: fieldNumber(formData, "effortMinutes"),
     dueDate: fieldText(formData, "dueDate"),
     scheduledDate: fieldText(formData, "scheduledDate"),
     scheduledTime: fieldText(formData, "scheduledTime"),
     completionBehavior: fieldText(formData, "completionBehavior"),
     completionMode: fieldText(formData, "completionMode"),
+    energy: fieldText(formData, "energy"),
+    strictness: fieldText(formData, "strictness"),
+    schedulingMode: fieldText(formData, "schedulingMode"),
+    tags: tagsRaw ? tagsRaw.split(",").map((tag) => tag.trim()).filter(Boolean) : undefined,
+    minMinutes: minMinutesRaw ? Number(minMinutesRaw) : undefined,
+    maxMinutes: maxMinutesRaw ? Number(maxMinutesRaw) : undefined,
     definitionOfDone: fieldText(formData, "definitionOfDone"),
     notes: fieldText(formData, "notes")
   };
@@ -1159,10 +1173,14 @@ function SecondaryPanel({
                           ))}
                         </select>
                         <div className="compactFields">
-                          <input name="priority" type="number" min="1" max="10" defaultValue={task.priority} aria-label={`Priority ${task.title}`} />
-                          <input name="importance" type="number" min="1" max="10" defaultValue={task.importance} aria-label={`Importance ${task.title}`} />
-                          <input name="urgency" type="number" min="1" max="10" defaultValue={task.urgency} aria-label={`Urgency ${task.title}`} />
-                          <input name="effortMinutes" type="number" min="1" max="720" defaultValue={task.effortMinutes} aria-label={`Minutes ${task.title}`} />
+                          <label className="fieldLabel">
+                            Priority
+                            <input name="priority" type="number" min="1" max="10" defaultValue={task.priority} aria-label={`Priority ${task.title}`} />
+                          </label>
+                          <label className="fieldLabel">
+                            Effort (min)
+                            <input name="effortMinutes" type="number" min="1" max="720" defaultValue={task.effortMinutes} aria-label={`Minutes ${task.title}`} />
+                          </label>
                         </div>
                         <div className="compactFields">
                           <input name="dueDate" type="date" defaultValue={task.dueDate ?? ""} aria-label={`Due ${task.title}`} />
@@ -1185,6 +1203,60 @@ function SecondaryPanel({
                             ))}
                           </select>
                         </div>
+                        <details className="advancedFields">
+                          <summary>Advanced</summary>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Importance
+                              <input name="importance" type="number" min="1" max="10" defaultValue={task.importance} aria-label={`Importance ${task.title}`} />
+                            </label>
+                            <label className="fieldLabel">
+                              Urgency
+                              <input name="urgency" type="number" min="1" max="10" defaultValue={task.urgency} aria-label={`Urgency ${task.title}`} />
+                            </label>
+                          </div>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Energy
+                              <select name="energy" defaultValue={task.energy} aria-label={`Energy ${task.title}`}>
+                                {["low", "medium", "high"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="fieldLabel">
+                              Strictness
+                              <select name="strictness" defaultValue={task.strictness} aria-label={`Strictness ${task.title}`}>
+                                {["flexible", "normal", "strict"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="fieldLabel">
+                              Overlap
+                              <select
+                                name="schedulingMode"
+                                defaultValue={task.scheduling?.mode === "concurrent" || task.scheduling?.mode === "background" ? task.scheduling.mode : "exclusive"}
+                                aria-label={`Overlap mode ${task.title}`}
+                              >
+                                {["exclusive", "concurrent", "background"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Min (min)
+                              <input name="minMinutes" type="number" min="1" max="720" defaultValue={task.minMinutes ?? ""} aria-label={`Min minutes ${task.title}`} />
+                            </label>
+                            <label className="fieldLabel">
+                              Max (min)
+                              <input name="maxMinutes" type="number" min="1" max="720" defaultValue={task.maxMinutes ?? ""} aria-label={`Max minutes ${task.title}`} />
+                            </label>
+                          </div>
+                          <input name="tags" defaultValue={(task.tags ?? []).join(", ")} placeholder="tags, comma, separated" aria-label={`Tags ${task.title}`} />
+                        </details>
                         <textarea name="definitionOfDone" defaultValue={task.definitionOfDone ?? ""} aria-label={`Definition of done ${task.title}`} />
                         <textarea name="notes" defaultValue={task.notes ?? ""} aria-label={`Notes ${task.title}`} />
                         <div className="formActions">

@@ -132,6 +132,24 @@ describe("state integration", () => {
     expect(updated?.urgency).toBe(1);
   });
 
+  it("manually sets tags, overlap mode, and min/max minutes on a task (T070)", async () => {
+    const target = getState().tasks.find((task) => task.status !== "archived")!;
+    applyStructureMutation({
+      entity: "task",
+      action: "update",
+      id: target.id,
+      patch: { tags: ["focus", "deep-work"], schedulingMode: "background", minMinutes: 20, maxMinutes: 90, energy: "high", strictness: "strict" }
+    });
+    const updated = getState().tasks.find((task) => task.id === target.id);
+    expect(updated?.tags).toEqual(["focus", "deep-work"]);
+    expect(updated?.scheduling?.mode).toBe("background");
+    expect(updated?.scheduling?.canOverlap).toBe(true);
+    expect(updated?.minMinutes).toBe(20);
+    expect(updated?.maxMinutes).toBe(90);
+    expect(updated?.energy).toBe("high");
+    expect(updated?.strictness).toBe("strict");
+  });
+
   it("organizer archives duplicate tasks as one undoable pass (T066)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Duplicate me" } });
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Duplicate me" } });
