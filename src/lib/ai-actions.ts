@@ -1156,11 +1156,10 @@ function deriveDateIntent(action: ParsedAiAction, state: AppState, sourceText: s
   return { kind: "none", originalText: sourceText || undefined, confidence: 0.35 };
 }
 
-function buildScheduling(action: ParsedAiAction): SchedulingMetadata {
-  // Overlap semantics are now model-owned via action.schedulingMode (the model is told to
-  // split "do X while Y" into two tasks and tag them). Deterministic code only maps the
-  // chosen mode onto the planner's attention/overlap fields — it does NOT guess from keywords.
-  switch (action.schedulingMode) {
+// Map an overlap mode onto the planner's attention/overlap fields. Shared by the AI path and
+// manual editing (T070) so both produce identical scheduling metadata.
+export function schedulingForMode(mode: "exclusive" | "concurrent" | "background" | null | undefined): SchedulingMetadata {
+  switch (mode) {
     case "concurrent":
       // Light-attention activity that can run alongside a passive/background task.
       return { mode: "concurrent", attentionLoad: "partial", canOverlap: true, overlapKinds: [] };
@@ -1170,6 +1169,12 @@ function buildScheduling(action: ParsedAiAction): SchedulingMetadata {
     default:
       return { mode: "exclusive", attentionLoad: "full", canOverlap: false };
   }
+}
+
+function buildScheduling(action: ParsedAiAction): SchedulingMetadata {
+  // Overlap semantics are model-owned via action.schedulingMode (the model splits "do X while Y"
+  // into two tasks and tags them). Deterministic code only maps the chosen mode.
+  return schedulingForMode(action.schedulingMode);
 }
 
 function relevantSourceText(action: ParsedAiAction, sourceText: string): string {

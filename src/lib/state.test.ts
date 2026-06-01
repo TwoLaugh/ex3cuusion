@@ -132,6 +132,60 @@ describe("state integration", () => {
     expect(updated?.urgency).toBe(1);
   });
 
+  it("manually promotes and demotes a task via dateIntentKind (T072)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Groom me", scheduledDate: "2026-06-01" } });
+    const id = getState().tasks.find((task) => task.title === "Groom me")!.id;
+
+    applyStructureMutation({ entity: "task", action: "update", id, patch: { dateIntentKind: "someday" } });
+    let task = getState().tasks.find((entry) => entry.id === id)!;
+    expect(task.scheduledDate).toBeUndefined();
+    expect(task.dateIntent?.kind).toBe("someday");
+    expect(task.plannerFields.pressureLevel).toBe("someday");
+
+    applyStructureMutation({ entity: "task", action: "update", id, patch: { dateIntentKind: "today" } });
+    task = getState().tasks.find((entry) => entry.id === id)!;
+    expect(task.scheduledDate).toBe("2026-06-01");
+    expect(task.dateIntent?.kind).toBe("today");
+  });
+
+  it("nests a subtask under a parent and treats the parent as a container (T071)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Parent task", scheduledDate: "2026-06-01" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Child task", scheduledDate: "2026-06-01" } });
+    const parent = getState().tasks.find((task) => task.title === "Parent task")!;
+    const child = getState().tasks.find((task) => task.title === "Child task")!;
+
+    applyStructureMutation({ entity: "task", action: "update", id: child.id, patch: { parentTaskId: parent.id } });
+    expect(getState().tasks.find((task) => task.id === child.id)?.parentTaskId).toBe(parent.id);
+
+    // Parent with an active child is excluded from the day plan (container); child still plans.
+    const plan = buildDayPlan(getState());
+    const titles = plan.items.flatMap((item) => [item.title, ...(item.selectedTaskIds ?? [])]);
+    expect(plan.items.some((item) => item.title === "Parent task")).toBe(false);
+    expect(plan.items.some((item) => item.title === "Child task")).toBe(true);
+
+    // Single-level guard: the parent (which has a child) cannot itself become a subtask.
+    applyStructureMutation({ entity: "task", action: "update", id: parent.id, patch: { parentTaskId: child.id } });
+    expect(getState().tasks.find((task) => task.id === parent.id)?.parentTaskId).toBeUndefined();
+  });
+
+  it("manually sets tags, overlap mode, and min/max minutes on a task (T070)", async () => {
+    const target = getState().tasks.find((task) => task.status !== "archived")!;
+    applyStructureMutation({
+      entity: "task",
+      action: "update",
+      id: target.id,
+      patch: { tags: ["focus", "deep-work"], schedulingMode: "background", minMinutes: 20, maxMinutes: 90, energy: "high", strictness: "strict" }
+    });
+    const updated = getState().tasks.find((task) => task.id === target.id);
+    expect(updated?.tags).toEqual(["focus", "deep-work"]);
+    expect(updated?.scheduling?.mode).toBe("background");
+    expect(updated?.scheduling?.canOverlap).toBe(true);
+    expect(updated?.minMinutes).toBe(20);
+    expect(updated?.maxMinutes).toBe(90);
+    expect(updated?.energy).toBe("high");
+    expect(updated?.strictness).toBe("strict");
+  });
+
   it("organizer archives duplicate tasks as one undoable pass (T066)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Duplicate me" } });
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Duplicate me" } });

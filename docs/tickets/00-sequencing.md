@@ -121,6 +121,18 @@ Follow-ups:
 - T068 - Guarded live clock tick (keep today current / roll midnight without yanking navigation)
 - T069 - Scheduled / auto-triggered organizer (once-per-day maintenance pass on app open)
 
+### M7: User Control Parity (everything the AI can do, the user can too)
+
+Goal: full manual control over tasks, categories, backlogs, and hierarchies — not only the AI.
+
+1. T070 - Full manual task-field parity (expose every AI-settable field in the editor)
+2. T071 - Task hierarchy / subtasks (parentTaskId, rollups, UI)
+3. T072 - Backlog & container management (manual move / promote-demote / reprioritize, bulk)
+
+Shared principle: manual and AI paths use the same underlying state mutations and the same
+undo/history layer (T061). UI-polish items (drag-and-drop, editable badges, task detail drawer,
+timeline drag-to-reschedule) tracked separately as UI improvements.
+
 Dependencies: T061 precedes T063, T064, and T066. T065 follows T063 and T064. T067 runs
 alongside -- every feature ticket adds its quality scenarios as it lands.
 

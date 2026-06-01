@@ -1,7 +1,7 @@
-import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
+import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, schedulingForMode, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
-import { buildDayPlan } from "./planner";
+import { buildDayPlan, hasActiveChildren } from "./planner";
 import { getRepository } from "./repository";
 import { createRealisticCharacterState } from "./scenarios";
 import type {
@@ -27,7 +27,15 @@ export type StructureMutation =
   | { entity: "project"; action: "update"; id: string; patch: Partial<AppState["projects"][number]> }
   | { entity: "project"; action: "archive"; id: string }
   | { entity: "task"; action: "create"; patch: Partial<Task> }
-  | { entity: "task"; action: "update"; id: string; patch: Partial<Task> }
+  | {
+      entity: "task";
+      action: "update";
+      id: string;
+      patch: Partial<Task> & {
+        schedulingMode?: "exclusive" | "concurrent" | "background";
+        dateIntentKind?: "today" | "tomorrow" | "this_week" | "next_week" | "someday" | "specific_date" | "deadline" | "none";
+      };
+    }
   | { entity: "task"; action: "archive"; id: string }
   | { entity: "routine"; action: "create"; patch: Partial<AppState["routines"][number]> }
   | { entity: "routine"; action: "update"; id: string; patch: Partial<AppState["routines"][number]> }
@@ -149,6 +157,19 @@ export function loadRealisticCharacterScenario(): AppState {
   return getState();
 }
 
+// Resolve a requested parent task id for single-level hierarchy (T071). Returns the parent id, or
+// undefined to clear/reject. Rejects: self-parenting, parenting under a task that is itself a
+// subtask (keeps it single-level), and turning a task that already has children into a child.
+function resolveParentForChild(state: AppState, requested: string | undefined, selfId?: string): string | undefined {
+  if (requested === undefined || requested === null || requested === "") return undefined;
+  if (requested === selfId) return undefined;
+  const parent = state.tasks.find((task) => task.id === requested && task.status !== "archived");
+  if (!parent) return undefined;
+  if (parent.parentTaskId) return undefined; // single-level: cannot nest under a subtask
+  if (selfId && hasActiveChildren(state, selfId)) return undefined; // a parent cannot become a child
+  return parent.id;
+}
+
 export function applyStructureMutation(mutation: StructureMutation): AppState {
   const state = currentState();
 
@@ -218,14 +239,17 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
     if (mutation.action === "create") {
       const domainId = validDomainId(state, mutation.patch.domainId) ?? state.domains[0]?.id;
       if (!domainId) return getState();
-      const projectId = validProjectId(state, mutation.patch.projectId);
+      const parentTaskId = resolveParentForChild(state, mutation.patch.parentTaskId);
+      const parentTask = parentTaskId ? state.tasks.find((entry) => entry.id === parentTaskId) : undefined;
+      const projectId = parentTask ? parentTask.projectId : validProjectId(state, mutation.patch.projectId);
       state.tasks.push({
         id: uniqueStateId(state, "task"),
         title: cleanText(mutation.patch.title) || "New task",
         description: cleanText(mutation.patch.description) || undefined,
         type: projectId ? "project_task" : validTaskType(mutation.patch.type) ?? "atomic",
-        domainId: projectId ? state.projects.find((project) => project.id === projectId)!.domainId : domainId,
+        domainId: parentTask ? parentTask.domainId : projectId ? state.projects.find((project) => project.id === projectId)!.domainId : domainId,
         projectId,
+        parentTaskId,
         status: validTaskStatus(mutation.patch.status) ?? "active",
         repeatPolicy: normalizeRepeatPolicy(mutation.patch.repeatPolicy),
         completionBehavior: validCompletionBehavior(mutation.patch.completionBehavior) ?? "exhaust_once",
@@ -281,6 +305,16 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
       task.domainId = validDomainId(state, mutation.patch.domainId) ?? task.domainId;
     }
     if (!task.projectId) task.domainId = validDomainId(state, mutation.patch.domainId) ?? task.domainId;
+    if (mutation.patch.parentTaskId !== undefined) {
+      const resolvedParent = resolveParentForChild(state, mutation.patch.parentTaskId, task.id);
+      task.parentTaskId = resolvedParent;
+      if (resolvedParent) {
+        const parent = state.tasks.find((entry) => entry.id === resolvedParent)!;
+        task.projectId = parent.projectId;
+        task.domainId = parent.domainId;
+        task.type = parent.projectId ? "project_task" : "atomic";
+      }
+    }
     task.title = cleanText(mutation.patch.title) || task.title;
     task.description = optionalText(mutation.patch.description, task.description);
     task.status = validTaskStatus(mutation.patch.status) ?? task.status;
@@ -300,6 +334,22 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
     task.strictness = validStrictness(mutation.patch.strictness) ?? task.strictness;
     task.notes = optionalText(mutation.patch.notes, task.notes);
     task.repeatPolicy = mutation.patch.repeatPolicy ? normalizeRepeatPolicy(mutation.patch.repeatPolicy) : task.repeatPolicy;
+    if (Array.isArray(mutation.patch.tags)) {
+      task.tags = mutation.patch.tags.map((tag) => String(tag).trim()).filter(Boolean);
+    }
+    if (mutation.patch.minMinutes !== undefined) {
+      task.minMinutes = mutation.patch.minMinutes === null ? undefined : clampNumber(mutation.patch.minMinutes, 1, 720, task.minMinutes ?? task.effortMinutes);
+    }
+    if (mutation.patch.maxMinutes !== undefined) {
+      task.maxMinutes = mutation.patch.maxMinutes === null ? undefined : clampNumber(mutation.patch.maxMinutes, 1, 720, task.maxMinutes ?? task.effortMinutes);
+    }
+    if (mutation.patch.schedulingMode) {
+      task.scheduling = schedulingForMode(mutation.patch.schedulingMode);
+    }
+    if (mutation.patch.dateIntentKind) {
+      // Manual promote/demote (T072), sharing the AI's date-intent logic (T064).
+      applyTaskDateIntent(state, task, mutation.patch.dateIntentKind, task.scheduledDate, task.dueDate);
+    }
     return getState();
   }
 
@@ -955,6 +1005,12 @@ function applyTaskDateIntent(state: AppState, task: Task, kind: string | undefin
     task.scheduledDate = undefined;
     task.plannerFields.pressureLevel = "due";
     task.dateIntent = { kind: "deadline", dueDate, confidence: 0.7 };
+  } else if (kind === "none") {
+    task.scheduledDate = undefined;
+    task.scheduledTime = undefined;
+    task.dueDate = undefined;
+    task.plannerFields.pressureLevel = "soft";
+    task.dateIntent = { kind: "none", confidence: 0.3 };
   }
 }
 
