@@ -1,6 +1,19 @@
 # T088: Simplify the Structure Model (Folders + Tasks; Routine as a Flag)
 
-Status: planned. (Large — data model + planner + AI + UI.)
+Status: in progress. (Large — data model + planner + AI + UI.)
+
+## Progress
+
+- **Routine-as-a-flag: DONE.** A task can be set to repeat (none / daily / weekly + days) directly
+  in the editor; the planner already schedules recurring tasks via `isRepeatPolicyDue`, so a
+  flagged task plans on its due days. A `↻ daily/weekly` badge shows on task cards. Unit-tested.
+  (The separate RoutineTemplate entity still exists for now and is removed in the structure
+  collapse below.)
+- **Remaining (the structure collapse): NOT STARTED.** Removing `projects`, merging domains+
+  projects into one flat `folder`, recasting project-blocks as folder-blocks, folding the
+  Domains/Projects/Routines admin panels into one Folders panel, and migrating data. This is ~400
+  `project` references across 10 files — a real migration best done as a focused, staged effort
+  WITH in-browser verification (it reshapes the core UX). Deliberately not crammed blind.
 
 ## Goal
 
@@ -27,13 +40,18 @@ Domains/Projects admin panels.
   task editor (folder selector + flags).
 - Keep AI + manual paths sharing the same mutations and undo.
 
-## Open decisions (to confirm before building)
+## Decisions (confirmed)
 
-1. Folder nesting: nested folders (folders within folders) or a single level of categories?
-2. Routines: convert to a per-task recurring flag and remove the RoutineTemplate entity, or keep
-   routines but present them as flagged tasks?
-3. Project blocks (Today currently shows a project's selected subtasks as a grouped block): drop
-   the block concept (just tasks), or keep it as a "folder block"?
+1. **Single-level folders** — flat categories (folders hold tasks, no sub-folders). Replaces
+   domains + projects with one `folder` concept.
+2. **Routine = a task flag** — remove the RoutineTemplate entity; a task carries a `recurring`
+   flag + recurrence. Migrate existing routines to flagged tasks.
+3. **Keep folder blocks** — a folder can still render as a grouped block of its tasks on the day
+   (the project-block feature is recast onto folders).
+
+Implication: a "folder" merges today's domain + project roles into one flat level that can
+optionally behave as a day block; recurrence lives on tasks; the Domains/Projects/Routines admin
+panels collapse into one Folders panel + task flags.
 
 ## Acceptance Criteria
 

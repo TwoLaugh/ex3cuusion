@@ -997,7 +997,19 @@ function structurePatch(entity: "domain" | "project" | "task" | "routine", formD
   const importance = fieldNumber(formData, "importance");
   const urgency = fieldNumber(formData, "urgency");
   const priority = fieldNumber(formData, "priority");
+  const repeatType = fieldText(formData, "repeatType");
+  const repeatDays = fieldText(formData, "repeatDays")
+    .split(",")
+    .map((day) => Number(day.trim()))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+  const repeatPolicy =
+    repeatType === "weekly"
+      ? { type: "weekly", days: repeatDays.length ? repeatDays : [1] }
+      : repeatType === "daily"
+        ? { type: "daily" }
+        : { type: "none" };
   return {
+    repeatPolicy,
     title: fieldText(formData, "title"),
     domainId: fieldText(formData, "domainId"),
     projectId: fieldText(formData, "projectId"),
@@ -1229,6 +1241,9 @@ function SecondaryPanel({
                       <span className="taskBadge">{task.effortMinutes}m</span>
                       {task.projectId && <span className="taskBadge">{projectName(state, task.projectId)}</span>}
                       {task.parentTaskId && <span className="taskBadge">↳ subtask</span>}
+                      {task.repeatPolicy?.type && task.repeatPolicy.type !== "none" && (
+                        <span className="taskBadge">↻ {task.repeatPolicy.type}</span>
+                      )}
                       {childStats(state, task.id).count > 0 && (
                         <span className="taskBadge highlightBadge">
                           {childStats(state, task.id).count} subtasks · {childStats(state, task.id).done}/{childStats(state, task.id).count} done · {childStats(state, task.id).minutes}m
@@ -1347,6 +1362,25 @@ function SecondaryPanel({
                             <label className="fieldLabel">
                               Max (min)
                               <input name="maxMinutes" type="number" min="1" max="720" defaultValue={task.maxMinutes ?? ""} aria-label={`Max minutes ${task.title}`} />
+                            </label>
+                          </div>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Repeats
+                              <select name="repeatType" defaultValue={task.repeatPolicy?.type ?? "none"} aria-label={`Repeats ${task.title}`}>
+                                {["none", "daily", "weekly"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="fieldLabel">
+                              Weekly days (0-6)
+                              <input
+                                name="repeatDays"
+                                defaultValue={task.repeatPolicy?.type === "weekly" ? (task.repeatPolicy.days ?? []).join(", ") : ""}
+                                placeholder="1, 3, 5"
+                                aria-label={`Repeat days ${task.title}`}
+                              />
                             </label>
                           </div>
                           <input name="tags" defaultValue={(task.tags ?? []).join(", ")} placeholder="tags, comma, separated" aria-label={`Tags ${task.title}`} />
