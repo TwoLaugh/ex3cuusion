@@ -457,4 +457,6 @@ export interface AppState {
   dailyReviews: DailyReview[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];
+  // Local date of the last auto-triggered organizer pass (T069); guards once-per-day runs.
+  lastAutoOrganizeDate?: string;
 }

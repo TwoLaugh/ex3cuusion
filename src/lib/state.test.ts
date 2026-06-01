@@ -12,6 +12,7 @@ import {
   deferPlanItem,
   getState,
   listChangeHistory,
+  maybeRunDailyOrganizer,
   recordPlanItemOutcome,
   rejectAiAction,
   resetState,
@@ -142,6 +143,19 @@ describe("state integration", () => {
     const liveAfter = getState().tasks.filter((task) => task.title === "Duplicate me" && task.status !== "archived").length;
     expect(liveAfter).toBe(1);
     expect(listChangeHistory()[0].source).toBe("organizer");
+  });
+
+  it("auto organizer runs once per day then no-ops (T069)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup once" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup once" } });
+
+    await maybeRunDailyOrganizer();
+    expect(getState().tasks.filter((task) => task.title === "Dup once" && task.status !== "archived").length).toBe(1);
+    expect(getState().lastAutoOrganizeDate).toBe("2026-06-01");
+
+    const historyLen = listChangeHistory().length;
+    await maybeRunDailyOrganizer(); // same day -> no-op
+    expect(listChangeHistory().length).toBe(historyLen);
   });
 
   it("records AI changes and undoes them (auto-apply with undo)", async () => {

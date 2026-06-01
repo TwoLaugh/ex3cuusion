@@ -689,6 +689,19 @@ export async function runOrganizerPass(interpreter: AiInterpreter = defaultOrgan
   });
 }
 
+// Run the organizer at most once per local day (T069). Stamps the date after running so a second
+// open the same day is a no-op. Undoable like any organizer pass.
+export async function maybeRunDailyOrganizer(interpreter: AiInterpreter = defaultOrganizerInterpreter): Promise<AppState> {
+  const today = currentState().currentDate;
+  if (currentState().lastAutoOrganizeDate === today) return getState();
+  await submitInbox("Daily maintenance: propose small, safe tidy-up edits.", interpreter, {
+    source: "organizer",
+    summary: "Daily tidy-up (auto)"
+  });
+  currentState().lastAutoOrganizeDate = today;
+  return getState();
+}
+
 export function answerCaptureQuestion(sessionId: string, questionId: string, answer: string): AppState {
   const state = currentState();
   const session = state.captureSessions.find((candidate) => candidate.id === sessionId);

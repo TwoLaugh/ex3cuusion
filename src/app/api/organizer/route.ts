@@ -1,10 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { buildDayPlan } from "@/lib/planner";
-import { listChangeHistory, runOrganizerPass } from "@/lib/state";
+import { listChangeHistory, maybeRunDailyOrganizer, runOrganizerPass } from "@/lib/state";
 
-// Trigger a conservative proactive maintenance pass (T066). Auto-applied; reversible via
-// /api/history (the pass is one "organizer" change entry).
-export async function POST() {
-  const state = await runOrganizerPass();
+const organizerSchema = z.object({ auto: z.boolean().optional() });
+
+// Conservative proactive maintenance pass (T066). `auto: true` runs the once-per-day guarded
+// version (T069); otherwise an explicit on-demand pass. Auto-applied; reversible via /api/history.
+export async function POST(request: NextRequest) {
+  const { auto } = organizerSchema.parse(await request.json().catch(() => ({})));
+  const state = auto ? await maybeRunDailyOrganizer() : await runOrganizerPass();
   return NextResponse.json({ state, plan: buildDayPlan(state), history: listChangeHistory() });
 }

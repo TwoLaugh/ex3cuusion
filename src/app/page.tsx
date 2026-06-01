@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
-import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 
@@ -32,18 +32,26 @@ export default function Home() {
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [todayIndex, setTodayIndex] = useState<number | null>(null);
   const [history, setHistory] = useState<{ id: string; source: string; summary: string; createdAt: string }[]>([]);
+  // True while the view should track real "today" (T068). Manual day navigation turns it off so
+  // the live tick does not yank the user back; the "Today" control turns it back on.
+  const followingTodayRef = useRef(true);
 
   async function refresh() {
     const response = await fetch("/api/state", { cache: "no-store" });
     setPayload(await response.json());
   }
 
-  // Anchor the app to the user's real local time on load. Manual day navigation (prev/next)
-  // still works afterwards; we deliberately do not auto-tick, so navigating away from today is
-  // not yanked back. (A guarded live-tick while viewing today is a follow-up.)
+  // Anchor the app to the user's real local time. Sets "following today" so the guarded tick
+  // (below) keeps it current until the user navigates to another day.
   async function syncClock() {
+    followingTodayRef.current = true;
     const { date, time } = localNowParts();
     await post("/api/time", { date, time });
+  }
+
+  // Return to today and resume auto-following (T068).
+  async function goToToday() {
+    await syncClock();
   }
 
   // Undo an AI change (auto-apply-with-undo, T061). post() updates the plan/state; the
@@ -98,10 +106,23 @@ export default function Home() {
   }
 
   useEffect(() => {
-    syncClock().catch(() => {
-      void refresh();
-    });
+    // Sync to real local time, then run the once-per-day auto organizer (T069).
+    syncClock()
+      .catch(() => refresh())
+      .then(() => post("/api/organizer", { auto: true }))
+      .catch(() => {});
     setTodayIndex(systemWeekdayIndex());
+  }, []);
+
+  // Guarded live clock tick (T068): keep "today" current and roll past midnight, but only while
+  // the user is following today (manual day navigation pauses it).
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!followingTodayRef.current) return;
+      const { date, time } = localNowParts();
+      post("/api/time", { date, time }).catch(() => {});
+    }, 60_000);
+    return () => clearInterval(id);
   }, []);
 
   const plan = payload?.plan;
@@ -270,16 +291,35 @@ export default function Home() {
             ))}
           </div>
           <div className="dateControls">
-            <button className="iconButton dateStep" onClick={() => post("/api/time", { retreat: true })} aria-label="Previous day">
+            <button
+              className="iconButton dateStep"
+              onClick={() => {
+                followingTodayRef.current = false;
+                post("/api/time", { retreat: true });
+              }}
+              aria-label="Previous day"
+            >
               <ChevronLeft size={20} />
             </button>
             <div className="dateDisplay">
               <h1 aria-label={formatDate(plan.date)}>{formatShortDate(plan.date)}</h1>
               <p>{formatDay(plan.date)}</p>
             </div>
-            <button className="iconButton dateStep" onClick={() => post("/api/time", { advance: true })} aria-label="Next day">
+            <button
+              className="iconButton dateStep"
+              onClick={() => {
+                followingTodayRef.current = false;
+                post("/api/time", { advance: true });
+              }}
+              aria-label="Next day"
+            >
               <ChevronRight size={20} />
             </button>
+            {plan.date !== localNowParts().date && (
+              <button className="todayButton" onClick={goToToday} aria-label="Jump to today">
+                Today
+              </button>
+            )}
           </div>
         </div>
         <div className="loadBadge" data-testid="load-level">
