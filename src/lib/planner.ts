@@ -25,6 +25,11 @@ function isInCompletionCooldown(task: Task, date: string): boolean {
   return daysUntil(completedDate, date) < task.repeatPolicy.cooldownDays;
 }
 
+// True if the task has at least one non-archived, non-completed subtask (T071).
+export function hasActiveChildren(state: AppState, taskId: string): boolean {
+  return state.tasks.some((task) => task.parentTaskId === taskId && !["archived", "completed"].includes(task.status));
+}
+
 function isTaskPlannable(task: Task, date: string): boolean {
   if (task.status === "blocked") return Boolean(task.blocked?.unblockAction);
   if (task.status === "waiting") return Boolean(task.waiting?.followUpDate && daysUntil(date, task.waiting.followUpDate) <= 0);
@@ -128,7 +133,9 @@ export function buildDayPlan(state: AppState): DayPlan {
     });
   }
 
-  const activeTasks = state.tasks.filter((task) => isTaskPlannable(task, date));
+  // A parent task with active subtasks acts as a container (T071): its subtasks are scheduled,
+  // not the parent itself, so effort isn't double-counted.
+  const activeTasks = state.tasks.filter((task) => isTaskPlannable(task, date) && !hasActiveChildren(state, task.id));
   const projectTasks = activeTasks
     .filter((task) => task.projectId && shouldAppearInProjectBlock(state, task))
     .sort((a, b) => taskScore(state, b, date) - taskScore(state, a, date));

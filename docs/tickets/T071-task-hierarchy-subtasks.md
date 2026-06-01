@@ -1,6 +1,22 @@
 # T071: Task Hierarchy (Subtasks)
 
-Status: planned.
+Status: implemented (single level).
+
+## Implementation
+
+- Backend: `parentTaskId` now wired into task create + update via `resolveParentForChild` —
+  single-level guard (no self-parent, no nesting under a subtask, a task with children can't
+  become a child). A nested child inherits its parent's project/domain.
+- Container behavior: `hasActiveChildren` (planner.ts, exported) excludes a parent with active
+  subtasks from the day plan candidates and from the week-plan backlog/someday lists, so its
+  subtasks are scheduled instead and effort isn't double-counted.
+- UI: a "Parent task (subtask of)" selector in the editor Advanced section (eligible parents =
+  non-subtask, non-self, active tasks); task cards show a "↳ subtask" badge and a parent rollup
+  badge ("N subtasks · X/N done · Mm").
+- Verified: unit test (nest + container exclusion + single-level guard) + HTTP round-trip; page
+  renders. tsc + 51 unit tests green.
+- Scope: single level only (decision). Arbitrary nesting and visual tree-indentation in the list
+  are deferred as later polish.
 
 ## Goal
 

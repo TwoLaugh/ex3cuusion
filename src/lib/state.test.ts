@@ -132,6 +132,26 @@ describe("state integration", () => {
     expect(updated?.urgency).toBe(1);
   });
 
+  it("nests a subtask under a parent and treats the parent as a container (T071)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Parent task", scheduledDate: "2026-06-01" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Child task", scheduledDate: "2026-06-01" } });
+    const parent = getState().tasks.find((task) => task.title === "Parent task")!;
+    const child = getState().tasks.find((task) => task.title === "Child task")!;
+
+    applyStructureMutation({ entity: "task", action: "update", id: child.id, patch: { parentTaskId: parent.id } });
+    expect(getState().tasks.find((task) => task.id === child.id)?.parentTaskId).toBe(parent.id);
+
+    // Parent with an active child is excluded from the day plan (container); child still plans.
+    const plan = buildDayPlan(getState());
+    const titles = plan.items.flatMap((item) => [item.title, ...(item.selectedTaskIds ?? [])]);
+    expect(plan.items.some((item) => item.title === "Parent task")).toBe(false);
+    expect(plan.items.some((item) => item.title === "Child task")).toBe(true);
+
+    // Single-level guard: the parent (which has a child) cannot itself become a subtask.
+    applyStructureMutation({ entity: "task", action: "update", id: parent.id, patch: { parentTaskId: child.id } });
+    expect(getState().tasks.find((task) => task.id === parent.id)?.parentTaskId).toBeUndefined();
+  });
+
   it("manually sets tags, overlap mode, and min/max minutes on a task (T070)", async () => {
     const target = getState().tasks.find((task) => task.status !== "archived")!;
     applyStructureMutation({

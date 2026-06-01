@@ -1,5 +1,5 @@
 import { addDays, isDateInRange, nextWeekRange, weekRange } from "./dates";
-import { buildDayPlan } from "./planner";
+import { buildDayPlan, hasActiveChildren } from "./planner";
 import type { AppState, DateIntent, Task, WeekBacklogItem, WeekPlan } from "./types";
 
 export function buildWeekPlan(state: AppState): WeekPlan {
@@ -23,13 +23,18 @@ export function buildWeekPlan(state: AppState): WeekPlan {
     days,
     thisWeekBacklog: weekBacklog(state, currentWeek.startDate, currentWeek.endDate),
     nextWeekBacklog: weekBacklog(state, nextWeek.startDate, nextWeek.endDate),
-    someday: state.tasks.filter(isOpenTask).filter((task) => effectiveDateIntent(task).kind === "someday").map(toBacklogItem)
+    someday: state.tasks
+      .filter(isOpenTask)
+      .filter((task) => !hasActiveChildren(state, task.id))
+      .filter((task) => effectiveDateIntent(task).kind === "someday")
+      .map(toBacklogItem)
   };
 }
 
 function weekBacklog(state: AppState, startDate: string, endDate: string): WeekBacklogItem[] {
   return state.tasks
     .filter(isOpenTask)
+    .filter((task) => !hasActiveChildren(state, task.id))
     .filter((task) => isTaskInWeekBacklog(task, startDate, endDate))
     .sort((a, b) => (b.priority + b.importance + b.urgency) - (a.priority + a.importance + a.urgency))
     .map(toBacklogItem);

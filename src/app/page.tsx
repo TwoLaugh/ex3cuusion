@@ -918,6 +918,7 @@ function structurePatch(entity: "domain" | "project" | "task" | "routine", formD
     title: fieldText(formData, "title"),
     domainId: fieldText(formData, "domainId"),
     projectId: fieldText(formData, "projectId"),
+    parentTaskId: fieldText(formData, "parentTaskId"),
     status: fieldText(formData, "status"),
     priority,
     // If the Advanced importance/urgency fields are absent (simple view), mirror priority so the
@@ -1140,6 +1141,12 @@ function SecondaryPanel({
                       <span className="taskBadge">{dateIntentLabel(task)}</span>
                       <span className="taskBadge">{task.effortMinutes}m</span>
                       {task.projectId && <span className="taskBadge">{projectName(state, task.projectId)}</span>}
+                      {task.parentTaskId && <span className="taskBadge">↳ subtask</span>}
+                      {childStats(state, task.id).count > 0 && (
+                        <span className="taskBadge highlightBadge">
+                          {childStats(state, task.id).count} subtasks · {childStats(state, task.id).done}/{childStats(state, task.id).count} done · {childStats(state, task.id).minutes}m
+                        </span>
+                      )}
                       {task.scheduling?.mode && task.scheduling.mode !== "exclusive" && (
                         <span className="taskBadge highlightBadge">
                           {task.scheduling.mode}/{task.scheduling.attentionLoad}
@@ -1256,6 +1263,17 @@ function SecondaryPanel({
                             </label>
                           </div>
                           <input name="tags" defaultValue={(task.tags ?? []).join(", ")} placeholder="tags, comma, separated" aria-label={`Tags ${task.title}`} />
+                          <label className="fieldLabel">
+                            Parent task (subtask of)
+                            <select name="parentTaskId" defaultValue={task.parentTaskId ?? ""} aria-label={`Parent task ${task.title}`}>
+                              <option value="">No parent</option>
+                              {state.tasks
+                                .filter((candidate) => candidate.id !== task.id && !candidate.parentTaskId && candidate.status !== "archived")
+                                .map((candidate) => (
+                                  <option value={candidate.id} key={candidate.id}>{candidate.title}</option>
+                                ))}
+                            </select>
+                          </label>
                         </details>
                         <textarea name="definitionOfDone" defaultValue={task.definitionOfDone ?? ""} aria-label={`Definition of done ${task.title}`} />
                         <textarea name="notes" defaultValue={task.notes ?? ""} aria-label={`Notes ${task.title}`} />
@@ -1766,6 +1784,16 @@ function weekDots(dateOnly: string, todayIndex: number | null) {
 function systemWeekdayIndex() {
   const jsDay = new Date().getDay();
   return (jsDay + 6) % 7;
+}
+
+// Subtask rollup for a parent task (T071): count, completed count, and aggregate effort.
+function childStats(state: AppState, taskId: string) {
+  const children = state.tasks.filter((task) => task.parentTaskId === taskId && task.status !== "archived");
+  return {
+    count: children.length,
+    done: children.filter((task) => task.status === "completed").length,
+    minutes: children.reduce((sum, task) => sum + task.effortMinutes, 0)
+  };
 }
 
 // Real local wall-clock now, as the app's date/time format. Used to anchor the app to the
