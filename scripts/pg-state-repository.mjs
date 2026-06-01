@@ -81,9 +81,9 @@ async function projectState(client, state) {
   await client.query(
     `
       insert into app_runtime_state (
-        user_id, current_day, current_clock, available_minutes, deferrals_json, completions_json, project_block_selections_json, daily_reviews_json, entity_order_json, updated_at
+        user_id, current_day, current_clock, available_minutes, deferrals_json, completions_json, project_block_selections_json, folder_block_selections_json, daily_reviews_json, entity_order_json, updated_at
       )
-      values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, now())
+      values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, now())
       on conflict (user_id)
       do update set
         current_day = excluded.current_day,
@@ -92,6 +92,7 @@ async function projectState(client, state) {
         deferrals_json = excluded.deferrals_json,
         completions_json = excluded.completions_json,
         project_block_selections_json = excluded.project_block_selections_json,
+        folder_block_selections_json = excluded.folder_block_selections_json,
         daily_reviews_json = excluded.daily_reviews_json,
         entity_order_json = excluded.entity_order_json,
         updated_at = now()
@@ -103,62 +104,54 @@ async function projectState(client, state) {
       state.availableMinutes,
       JSON.stringify(state.deferrals ?? []),
       JSON.stringify(state.completions ?? []),
-      JSON.stringify(state.projectBlockSelections ?? []),
+      JSON.stringify([]),
+      JSON.stringify(state.folderBlockSelections ?? []),
       JSON.stringify(state.dailyReviews ?? []),
       JSON.stringify(entityOrder(state))
     ]
   );
 
-  const domainIds = new Map();
-  for (const domain of state.domains ?? []) {
+  // First pass: upsert every folder WITHOUT parent_folder_id, building external->uuid map.
+  const folderIds = new Map();
+  for (const folder of state.folders ?? []) {
     const result = await client.query(
       `
-        insert into domains (user_id, external_id, name, weight, status, updated_at)
-        values ($1, $2, $3, $4, 'active', now())
-        on conflict (user_id, external_id) where external_id is not null
-        do update set name = excluded.name, weight = excluded.weight, updated_at = now()
-        returning id
-      `,
-      [userId, domain.id, domain.name, domain.weight]
-    );
-    domainIds.set(domain.id, result.rows[0].id);
-  }
-
-  const containerIds = new Map();
-  for (const project of state.projects ?? []) {
-    const result = await client.query(
-      `
-        insert into containers (
-          user_id, external_id, domain_id, name, kind, planning_mode, status, priority_weight, default_block_minutes, context_note, updated_at
+        insert into folders (
+          user_id, external_id, name, weight, can_block, default_block_minutes, context_note, status, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+        values ($1, $2, $3, $4, $5, $6, $7, $8, now())
         on conflict (user_id, external_id) where external_id is not null
         do update set
-          domain_id = excluded.domain_id,
           name = excluded.name,
-          kind = excluded.kind,
-          planning_mode = excluded.planning_mode,
-          status = excluded.status,
-          priority_weight = excluded.priority_weight,
+          weight = excluded.weight,
+          can_block = excluded.can_block,
           default_block_minutes = excluded.default_block_minutes,
           context_note = excluded.context_note,
+          status = excluded.status,
           updated_at = now()
         returning id
       `,
       [
         userId,
-        project.id,
-        domainIds.get(project.domainId) ?? null,
-        project.name,
-        project.kind,
-        project.planningMode,
-        project.status,
-        project.priorityWeight,
-        project.defaultBlockMinutes,
-        project.contextNote ?? ""
+        folder.id,
+        folder.name,
+        folder.weight ?? null,
+        folder.canBlock ?? false,
+        folder.defaultBlockMinutes ?? null,
+        folder.contextNote ?? null,
+        folder.status ?? "active"
       ]
     );
-    containerIds.set(project.id, result.rows[0].id);
+    folderIds.set(folder.id, result.rows[0].id);
+  }
+
+  // Second pass: wire up parent_folder_id now that every folder has a uuid.
+  for (const folder of state.folders ?? []) {
+    if (!folder.parentFolderId) continue;
+    await client.query(
+      "update folders set parent_folder_id = $1 where user_id = $2 and external_id = $3",
+      [folderIds.get(folder.parentFolderId) ?? null, userId, folder.id]
+    );
   }
 
   const taskIds = new Map();
@@ -166,23 +159,24 @@ async function projectState(client, state) {
     const result = await client.query(
       `
         insert into tasks (
-          user_id, external_id, domain_id, container_id, parent_task_id, source_inbox_item_external_id, title, description, type, status,
+          user_id, external_id, domain_id, container_id, folder_id, parent_task_id, source_inbox_item_external_id, title, description, type, status,
           repeat_policy, completion_behavior, completion_mode, definition_of_done, planner_fields, planner_signals, tags, field_confidence,
           priority, importance, urgency, due_on, scheduled_for, scheduled_time, date_intent, scheduling, effort_minutes, min_minutes,
           max_minutes, estimate_confidence, energy, strictness, notes, blocked_reason, blocked_json, waiting_json, delegation_json,
           completed_at, last_completed_at, source, updated_at
         )
         values (
-          $1, $2, $3, $4, null, $5, $6, $7, $8, $9,
-          $10::jsonb, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17::jsonb,
-          $18, $19, $20, $21, $22, $23, $24::jsonb, $25::jsonb, $26, $27,
-          $28, $29, $30, $31, $32, $33, $34::jsonb, $35::jsonb, $36::jsonb,
-          $37, $38, $39, now()
+          $1, $2, null, null, $3, null, $4, $5, $6, $7, $8,
+          $9::jsonb, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16::jsonb,
+          $17, $18, $19, $20, $21, $22, $23::jsonb, $24::jsonb, $25, $26,
+          $27, $28, $29, $30, $31, $32, $33::jsonb, $34::jsonb, $35::jsonb,
+          $36, $37, $38, now()
         )
         on conflict (user_id, external_id) where external_id is not null
         do update set
           domain_id = excluded.domain_id,
           container_id = excluded.container_id,
+          folder_id = excluded.folder_id,
           source_inbox_item_external_id = excluded.source_inbox_item_external_id,
           title = excluded.title,
           description = excluded.description,
@@ -224,8 +218,7 @@ async function projectState(client, state) {
       [
         userId,
         task.id,
-        domainIds.get(task.domainId),
-        task.projectId ? containerIds.get(task.projectId) ?? null : null,
+        task.folderId ? folderIds.get(task.folderId) ?? null : null,
         task.sourceInboxItemId ?? null,
         task.title,
         task.description ?? null,
@@ -271,40 +264,6 @@ async function projectState(client, state) {
     await client.query(
       "update tasks set parent_task_id = $1 where user_id = $2 and external_id = $3",
       [taskIds.get(task.parentTaskId) ?? null, userId, task.id]
-    );
-  }
-
-  for (const routine of state.routines ?? []) {
-    await client.query(
-      `
-        insert into routine_templates (
-          user_id, external_id, domain_id, title, recurrence, default_effort_minutes, energy, strictness, preferred_window, active, updated_at
-        )
-        values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, now())
-        on conflict (user_id, external_id) where external_id is not null
-        do update set
-          domain_id = excluded.domain_id,
-          title = excluded.title,
-          recurrence = excluded.recurrence,
-          default_effort_minutes = excluded.default_effort_minutes,
-          energy = excluded.energy,
-          strictness = excluded.strictness,
-          preferred_window = excluded.preferred_window,
-          active = excluded.active,
-          updated_at = now()
-      `,
-      [
-        userId,
-        routine.id,
-        domainIds.get(routine.domainId),
-        routine.title,
-        JSON.stringify(routine.recurrence),
-        routine.defaultEffortMinutes,
-        routine.energy,
-        routine.strictness,
-        routine.preferredWindow ?? null,
-        routine.active
-      ]
     );
   }
 
@@ -591,7 +550,10 @@ async function projectState(client, state) {
 
   await deleteProjectedRows(client, "execution_events", userId, (state.executionEvents ?? []).map((event) => event.id));
   await deleteProjectedRows(client, "tasks", userId, (state.tasks ?? []).map((task) => task.id));
-  await deleteProjectedRows(client, "routine_templates", userId, (state.routines ?? []).map((routine) => routine.id));
+  // Folders are deleted AFTER tasks: a task FK references folder_id (on delete set null), so clearing
+  // tasks first avoids leaving dangling references mid-transaction. Child folders self-reference their
+  // parent via parent_folder_id (on delete set null), so deleting a parent clears children's pointer.
+  await deleteProjectedRows(client, "folders", userId, (state.folders ?? []).map((f) => f.id));
   await deleteProjectedRows(
     client,
     "ai_actions",
@@ -600,8 +562,10 @@ async function projectState(client, state) {
   );
   await deleteProjectedRows(client, "capture_sessions", userId, (state.captureSessions ?? []).map((session) => session.id));
   await deleteProjectedRows(client, "inbox_items", userId, (state.inbox ?? []).map((entry) => entry.id));
-  await deleteProjectedRows(client, "containers", userId, (state.projects ?? []).map((project) => project.id));
-  await deleteProjectedRows(client, "domains", userId, (state.domains ?? []).map((domain) => domain.id));
+  // Clear all legacy structure rows so stale domains/containers/routines never linger.
+  await deleteProjectedRows(client, "routine_templates", userId, []);
+  await deleteProjectedRows(client, "containers", userId, []);
+  await deleteProjectedRows(client, "domains", userId, []);
 }
 
 async function readProjectedState(client) {
@@ -612,29 +576,20 @@ async function readProjectedState(client) {
   const runtimeRow = runtime.rows[0];
   const order = runtimeRow.entity_order_json ?? {};
 
-  const domains = await client.query(
-    `
-      select external_id, name, weight
-      from domains
-      where user_id = $1 and external_id is not null
-    `,
-    [userId]
-  );
-  const projects = await client.query(
+  const folders = await client.query(
     `
       select
-        containers.external_id,
-        domains.external_id as domain_external_id,
-        containers.name,
-        containers.kind,
-        containers.planning_mode,
-        containers.status,
-        containers.priority_weight,
-        containers.default_block_minutes,
-        containers.context_note
-      from containers
-      left join domains on domains.id = containers.domain_id
-      where containers.user_id = $1 and containers.external_id is not null
+        f.external_id,
+        p.external_id as parent_external_id,
+        f.name,
+        f.weight,
+        f.can_block,
+        f.default_block_minutes,
+        f.context_note,
+        f.status
+      from folders f
+      left join folders p on p.id = f.parent_folder_id
+      where f.user_id = $1 and f.external_id is not null
     `,
     [userId]
   );
@@ -642,8 +597,7 @@ async function readProjectedState(client) {
     `
       select
         tasks.external_id,
-        domains.external_id as domain_external_id,
-        containers.external_id as container_external_id,
+        folders.external_id as folder_external_id,
         parent.external_id as parent_task_external_id,
         tasks.source_inbox_item_external_id,
         tasks.title,
@@ -681,28 +635,9 @@ async function readProjectedState(client) {
         tasks.last_completed_at,
         tasks.source
       from tasks
-      join domains on domains.id = tasks.domain_id
-      left join containers on containers.id = tasks.container_id
+      left join folders on folders.id = tasks.folder_id
       left join tasks parent on parent.id = tasks.parent_task_id
       where tasks.user_id = $1 and tasks.external_id is not null
-    `,
-    [userId]
-  );
-  const routines = await client.query(
-    `
-      select
-        routine_templates.external_id,
-        domains.external_id as domain_external_id,
-        routine_templates.title,
-        routine_templates.recurrence,
-        routine_templates.default_effort_minutes,
-        routine_templates.energy,
-        routine_templates.strictness,
-        routine_templates.preferred_window,
-        routine_templates.active
-      from routine_templates
-      join domains on domains.id = routine_templates.domain_id
-      where routine_templates.user_id = $1 and routine_templates.external_id is not null
     `,
     [userId]
   );
@@ -847,29 +782,22 @@ async function readProjectedState(client) {
     currentDate: formatDateOnly(runtimeRow.current_day),
     currentTime: formatTimeOnly(runtimeRow.current_clock),
     availableMinutes: runtimeRow.available_minutes,
-    domains: sortRows(domains.rows, order.domains).map((row) => ({
+    folders: sortRows(folders.rows, order.folders).map((row) => omitUndefined({
       id: row.external_id,
       name: row.name,
-      weight: Number(row.weight)
-    })),
-    projects: sortRows(projects.rows, order.projects).map((row) => ({
-      id: row.external_id,
-      domainId: row.domain_external_id,
-      name: row.name,
-      kind: row.kind,
-      planningMode: row.planning_mode,
-      status: row.status,
-      priorityWeight: Number(row.priority_weight),
-      defaultBlockMinutes: row.default_block_minutes,
-      contextNote: row.context_note
+      parentFolderId: row.parent_external_id ?? undefined,
+      weight: row.weight === null ? undefined : Number(row.weight),
+      canBlock: row.can_block,
+      defaultBlockMinutes: row.default_block_minutes ?? undefined,
+      contextNote: row.context_note ?? undefined,
+      status: row.status
     })),
     tasks: sortRows(tasks.rows, order.tasks).map((row) => omitUndefined({
       id: row.external_id,
       title: row.title,
       description: row.description ?? undefined,
       type: row.type,
-      domainId: row.domain_external_id,
-      projectId: row.container_external_id ?? undefined,
+      folderId: row.folder_external_id ?? undefined,
       parentTaskId: row.parent_task_external_id ?? undefined,
       sourceInboxItemId: row.source_inbox_item_external_id ?? undefined,
       status: row.status,
@@ -904,20 +832,9 @@ async function readProjectedState(client) {
       lastCompletedAt: row.last_completed_at ? formatIso(row.last_completed_at) : undefined,
       source: row.source ?? undefined
     })),
-    routines: sortRows(routines.rows, order.routines).map((row) => omitUndefined({
-      id: row.external_id,
-      title: row.title,
-      domainId: row.domain_external_id,
-      recurrence: row.recurrence,
-      defaultEffortMinutes: row.default_effort_minutes,
-      energy: row.energy,
-      strictness: row.strictness,
-      preferredWindow: row.preferred_window ?? undefined,
-      active: row.active
-    })),
     deferrals: runtimeRow.deferrals_json ?? [],
     completions: runtimeRow.completions_json ?? [],
-    projectBlockSelections: runtimeRow.project_block_selections_json ?? [],
+    folderBlockSelections: runtimeRow.folder_block_selections_json ?? [],
     dailyReviews: runtimeRow.daily_reviews_json ?? [],
     executionEvents: sortRows(executionEvents.rows, order.executionEvents).map((row) => omitUndefined({
       id: row.external_id,
@@ -1016,6 +933,7 @@ async function deleteProjectedState(client) {
   await deleteProjectedRows(client, "capture_sessions", userId, []);
   await deleteProjectedRows(client, "inbox_items", userId, []);
   await deleteProjectedRows(client, "tasks", userId, []);
+  await deleteProjectedRows(client, "folders", userId, []);
   await deleteProjectedRows(client, "routine_templates", userId, []);
   await deleteProjectedRows(client, "containers", userId, []);
   await deleteProjectedRows(client, "domains", userId, []);
@@ -1039,10 +957,8 @@ function localUserEmail(userId) {
 
 function entityOrder(state) {
   return {
-    domains: (state.domains ?? []).map((entry) => entry.id),
-    projects: (state.projects ?? []).map((entry) => entry.id),
+    folders: (state.folders ?? []).map((f) => f.id),
     tasks: (state.tasks ?? []).map((entry) => entry.id),
-    routines: (state.routines ?? []).map((entry) => entry.id),
     executionEvents: (state.executionEvents ?? []).map((entry) => entry.id),
     inbox: (state.inbox ?? []).map((entry) => entry.id),
     aiActions: (state.inbox ?? []).flatMap((entry) => (entry.actions ?? []).map((action) => action.id)),
@@ -1108,6 +1024,7 @@ async function deleteProjectedRows(client, tableName, userId, externalIds) {
   const allowedTables = new Set([
     "domains",
     "containers",
+    "folders",
     "tasks",
     "routine_templates",
     "execution_events",
