@@ -335,6 +335,7 @@ export interface AiAction {
     | "assign_task_to_project"
     | "assign_task_to_domain"
     | "schedule_task"
+    | "update_task"
     | "archive_task"
     | "archive_project"
     | "move_deadline"

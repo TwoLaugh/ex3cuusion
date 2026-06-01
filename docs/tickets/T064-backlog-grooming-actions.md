@@ -1,6 +1,21 @@
 # T064: Backlog Grooming Actions
 
-Status: planned.
+Status: implemented.
+
+## Implementation
+
+- New `update_task` action (schema enum + `dateIntent` field added to the action schema). It
+  changes an existing task's priority/importance/urgency and/or moves it between today,
+  tomorrow, this_week, next_week, someday, specific_date, deadline (`unchanged` leaves dates
+  alone). `applyTaskDateIntent` (state.ts) maps the intent onto scheduledDate/dueDate/pressure
+  and the task's DateIntent. Promote = schedule_task (existing); split = create_project +
+  create_task per step + archive_task (reuses T062 grouping); reprioritize/demote = update_task.
+- Validation requires a real targetTaskId; auto-applies (undoable via T061).
+- Prompt guidance for grooming + split added.
+- Verified: unit test (demote-to-someday + reprioritize) and live `backlog-demote` scenario
+  3/3; full dev set 11/11. tsc + 47 unit tests green.
+- Side finding: the `recurring-habit` scenario was flawed (asked for a habit already in seed, so
+  the model correctly deduped) — fixed the scenario, not the model.
 
 ## Goal
 

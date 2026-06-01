@@ -894,6 +894,44 @@ function applyRank(action: AiAction): number {
   return action.type === "create_project" ? 0 : 1;
 }
 
+function clampTaskScore(value: number): number {
+  return Math.max(1, Math.min(9, Math.round(value)));
+}
+
+// Apply a backlog/grooming date-intent change to an existing task (T064): promote, demote to
+// someday, or move to a week window. "unchanged"/undefined leaves dates untouched.
+function applyTaskDateIntent(state: AppState, task: Task, kind: string | undefined, scheduledDate?: string, dueDate?: string): void {
+  if (!kind || kind === "unchanged") return;
+  const today = state.currentDate;
+  if (kind === "today" || kind === "tomorrow") {
+    const date = kind === "today" ? today : addDays(today, 1);
+    task.scheduledDate = date;
+    task.scheduledTime = undefined;
+    task.plannerFields.pressureLevel = "scheduled";
+    task.dateIntent = { kind, scheduledDate: date, confidence: 0.8 };
+  } else if (kind === "this_week" || kind === "next_week") {
+    const range = kind === "this_week" ? weekRange(today) : nextWeekRange(today);
+    task.scheduledDate = undefined;
+    task.plannerFields.pressureLevel = "soft";
+    task.dateIntent = { kind: "week_window", startDate: range.startDate, endDate: range.endDate, confidence: 0.7 };
+  } else if (kind === "someday") {
+    task.scheduledDate = undefined;
+    task.dueDate = undefined;
+    task.scheduledTime = undefined;
+    task.plannerFields.pressureLevel = "someday";
+    task.dateIntent = { kind: "someday", confidence: 0.6 };
+  } else if (kind === "specific_date" && scheduledDate) {
+    task.scheduledDate = scheduledDate;
+    task.plannerFields.pressureLevel = "scheduled";
+    task.dateIntent = { kind: "specific_date", scheduledDate, confidence: 0.7 };
+  } else if (kind === "deadline" && dueDate) {
+    task.dueDate = dueDate;
+    task.scheduledDate = undefined;
+    task.plannerFields.pressureLevel = "due";
+    task.dateIntent = { kind: "deadline", dueDate, confidence: 0.7 };
+  }
+}
+
 // Resolve a create_task's intended project name to a real projectId at apply time — covers a
 // work-block created earlier in the same batch (T062 grouping).
 function linkPendingProject(state: AppState, action: AiAction, payload: Omit<Task, "id">): void {
@@ -966,6 +1004,24 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
       return;
     }
     applyTaskSchedulePatch(state, task, action.payload);
+    action.status = "applied";
+    action.appliedEntityId = task.id;
+    action.skippedReason = undefined;
+    return;
+  }
+
+  if (action.type === "update_task") {
+    const task = findTaskForAction(state, action);
+    if (!task) {
+      action.status = "failed";
+      action.skippedReason = "Could not find the task to update.";
+      return;
+    }
+    const payload = action.payload as { priority?: number; importance?: number; urgency?: number; dateIntent?: string; scheduledDate?: string; dueDate?: string };
+    if (typeof payload.priority === "number") task.priority = clampTaskScore(payload.priority);
+    if (typeof payload.importance === "number") task.importance = clampTaskScore(payload.importance);
+    if (typeof payload.urgency === "number") task.urgency = clampTaskScore(payload.urgency);
+    applyTaskDateIntent(state, task, payload.dateIntent, payload.scheduledDate, payload.dueDate);
     action.status = "applied";
     action.appliedEntityId = task.id;
     action.skippedReason = undefined;

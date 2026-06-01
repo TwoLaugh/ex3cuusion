@@ -26,6 +26,15 @@ export const devScenarios = [
     minPassRate: 0.6
   },
   {
+    id: "backlog-demote",
+    date: "2026-06-01",
+    time: "08:30",
+    input: "the optimizer tests aren't urgent — push them to someday",
+    rubric:
+      "The user wants to defer/deprioritize an EXISTING task (the seed has a task about optimizer tests) to someday. GOOD: update that existing task to someday (unscheduled, low pressure) and/or lower its urgency — e.g. an update_task with dateIntent someday targeting it. BAD: creating a new task, scheduling it soon, or asking an unnecessary question.",
+    minPassRate: 0.5
+  },
+  {
     id: "obvious-simple",
     date: "2026-06-01",
     time: "08:30",
@@ -74,9 +83,11 @@ export const devScenarios = [
     id: "recurring-habit",
     date: "2026-06-01",
     time: "08:30",
-    input: "I want to stretch my back every morning",
+    // Use a habit NOT already present in the seed (the seed has a back-rehab routine, so a
+    // back-stretch request correctly dedupes to the existing one — a flawed test, not a model bug).
+    input: "I want to drink a glass of water every morning when I wake up",
     rubric:
-      "An explicit recurring daily habit. GOOD: create a recurring routine (daily). BAD: a single one-off task, or asking an unnecessary question.",
+      "An explicit recurring daily habit not already in the system. GOOD: create a recurring routine (daily). BAD: a single one-off task, or asking an unnecessary question.",
     minPassRate: 0.7
   },
   {

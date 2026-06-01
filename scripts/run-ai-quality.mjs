@@ -128,7 +128,8 @@ function observe(debug) {
       scheduledDate: p.scheduledDate,
       scheduledTime: p.scheduledTime,
       dueDate: p.dueDate,
-      dateIntent: p.dateIntent?.kind,
+      dateIntent: typeof p.dateIntent === "string" ? p.dateIntent : p.dateIntent?.kind,
+      priority: p.priority,
       effortMinutes: p.effortMinutes,
       projectId: p.projectId
     });

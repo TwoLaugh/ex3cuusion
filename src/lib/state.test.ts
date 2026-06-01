@@ -64,7 +64,8 @@ describe("state integration", () => {
       question: null,
       clarificationKind: null,
       clarificationOptions: null,
-      schedulingMode: null
+      schedulingMode: null,
+      dateIntent: null
     };
     const after = await submitInbox("launch prep: write copy, design banner", async () => ({
       model: "grouping-fixture",
@@ -82,6 +83,51 @@ describe("state integration", () => {
     const banner = after.tasks.find((task) => task.title === "Design banner");
     expect(copy?.projectId).toBe(project!.id);
     expect(banner?.projectId).toBe(project!.id);
+  });
+
+  it("reprioritizes and demotes an existing task to someday (T064 update_task)", async () => {
+    const seed = getState();
+    const target = seed.tasks.find((task) => task.status !== "archived");
+    expect(target).toBeDefined();
+
+    const after = await submitInbox(`push ${target!.title} to someday`, async () => ({
+      model: "groom-fixture",
+      summary: "Demoted to someday.",
+      actions: [
+        {
+          type: "update_task" as const,
+          label: `Demote ${target!.title}`,
+          title: target!.title,
+          targetTaskId: target!.id,
+          domainName: "Job Work",
+          projectName: null,
+          dueDate: null,
+          scheduledDate: null,
+          scheduledTime: null,
+          effortMinutes: 30,
+          energy: "low" as const,
+          strictness: "flexible" as const,
+          priority: 2,
+          importance: 2,
+          urgency: 1,
+          recurrenceDays: null,
+          completionBehavior: null,
+          completionMode: null,
+          definitionOfDone: null,
+          tags: null,
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null,
+          schedulingMode: null,
+          dateIntent: "someday" as const
+        }
+      ]
+    }));
+
+    const updated = after.tasks.find((task) => task.id === target!.id);
+    expect(updated?.scheduledDate).toBeUndefined();
+    expect(updated?.plannerFields.pressureLevel).toBe("someday");
+    expect(updated?.urgency).toBe(1);
   });
 
   it("records AI changes and undoes them (auto-apply with undo)", async () => {
@@ -496,7 +542,8 @@ describe("state integration", () => {
           question: null,
           clarificationKind: null,
           clarificationOptions: null,
-          schedulingMode: null
+          schedulingMode: null,
+          dateIntent: null
         }
       ]
     }));
@@ -539,7 +586,8 @@ describe("state integration", () => {
           question: null,
           clarificationKind: null,
           clarificationOptions: null,
-          schedulingMode: null
+          schedulingMode: null,
+          dateIntent: null
         }
       ]
     }));
@@ -590,7 +638,8 @@ describe("state integration", () => {
           question: null,
           clarificationKind: null,
           clarificationOptions: null,
-          schedulingMode: null
+          schedulingMode: null,
+          dateIntent: null
         }
       ]
     }));
@@ -634,7 +683,8 @@ describe("state integration", () => {
           question: null,
           clarificationKind: null,
           clarificationOptions: null,
-          schedulingMode: null
+          schedulingMode: null,
+          dateIntent: null
         }
       ]
     }));

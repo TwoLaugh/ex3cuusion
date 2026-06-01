@@ -11,7 +11,7 @@ const aiActionSchema = z.object({
   summary: z.string(),
   actions: z.array(
     z.object({
-      type: z.enum(["create_task", "create_routine", "create_project", "schedule_block", "schedule_task", "archive_task", "ask_clarification"]),
+      type: z.enum(["create_task", "create_routine", "create_project", "schedule_block", "schedule_task", "update_task", "archive_task", "ask_clarification"]),
       label: z.string(),
       title: z.string(),
       targetTaskId: z.string().nullable().optional(),
@@ -36,7 +36,8 @@ const aiActionSchema = z.object({
       question: z.string().nullable(),
       clarificationKind: z.enum(["definition_of_done", "completion_behavior", "container_kind", "repeat_policy", "date", "split", "next_action"]).nullable(),
       clarificationOptions: z.array(z.string()).nullable(),
-      schedulingMode: z.enum(["exclusive", "concurrent", "background"]).nullable()
+      schedulingMode: z.enum(["exclusive", "concurrent", "background"]).nullable(),
+      dateIntent: z.enum(["unchanged", "today", "tomorrow", "this_week", "next_week", "someday", "specific_date", "deadline"]).nullable()
     })
   )
 });
@@ -160,6 +161,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "Do not ask a clarification merely to pin down a vague but acceptable time window such as 'sometime next week' — store it as a week-level window without asking. Only ask about dates when the wording is genuinely contradictory or there is a hard deadline conflict. " +
     "For deadline wording such as 'by <day>' or 'before <day>', set dueDate, not scheduledDate. For execution wording such as 'on <day>' or 'today', set scheduledDate. " +
     "For week-level requests (plan my week, lay out the week, rebalance, I'm behind or ahead), distribute this-week, deadline, and open backlog tasks across the days of the week: return one schedule_task per task with targetTaskId and a scheduledDate on the chosen day. Use the provided week plan to respect each day's remaining capacity (do not cram one day past its available minutes), keep tasks before their deadlines, leave fixed anchors alone, and prefer a realistic spread. You may move an already-scheduled task to another day with schedule_task. " +
+    "For backlog grooming on an EXISTING task — changing its priority/importance/urgency, or moving it between today, this week, next week, or someday — use update_task with targetTaskId plus the new score values and/or dateIntent (one of today, tomorrow, this_week, next_week, someday, specific_date, deadline; use unchanged to leave dates as they are). To split a large or vague task into concrete steps, return a create_project for it, a create_task per step with projectName set to that project, and archive_task on the original. To surface what is ready, schedule the clearest capacity-fitting backlog items rather than asking. " +
     "For explicit recurring habits, return create_routine with recurrenceDays when known, mapping weekday names to 0-6 with Sunday as 0. " +
     "For sleep or bed time, return create_task titled 'Sleep', not schedule_block. " +
     "Set schedulingMode on every create_task: 'exclusive' for normal focused work (the default), 'concurrent' for a light-attention activity the user does while something else runs, and 'background' for work that proceeds largely unattended. " +
@@ -850,6 +852,7 @@ function baseAction(
     clarificationKind: null,
     clarificationOptions: null,
     schedulingMode: null,
+    dateIntent: null,
     ...overrides
   };
 }
@@ -928,12 +931,23 @@ function buildAction(
                     dueDate: normalizeDate(action.dueDate ?? undefined, state.currentDate),
                     effortMinutes: action.effortMinutes
                   }
-                : normalizedType === "archive_task"
+                : normalizedType === "update_task"
                   ? {
                       taskId: action.targetTaskId,
                       title: targetTask?.title ?? action.title,
-                      reason: action.label
+                      priority: action.priority,
+                      importance: action.importance,
+                      urgency: action.urgency,
+                      dateIntent: action.dateIntent ?? "unchanged",
+                      scheduledDate: normalizeDate(action.scheduledDate ?? undefined, state.currentDate),
+                      dueDate: normalizeDate(action.dueDate ?? undefined, state.currentDate)
                     }
+                  : normalizedType === "archive_task"
+                    ? {
+                        taskId: action.targetTaskId,
+                        title: targetTask?.title ?? action.title,
+                        reason: action.label
+                      }
                   : {
                       question: action.question ?? "What should this become?",
                       questionKind: action.clarificationKind ?? "next_action",
@@ -1162,7 +1176,7 @@ function validateStructuredAction(action: ParsedAiAction, state: AppState): stri
   if (action.projectName && !findProjectId(state, action.projectName)) {
     errors.push("Project match is ambiguous or missing.");
   }
-  if (action.type === "schedule_task" || action.type === "archive_task") {
+  if (action.type === "schedule_task" || action.type === "archive_task" || action.type === "update_task") {
     if (!action.targetTaskId) {
       errors.push("Target task is required.");
     } else if (!state.tasks.some((task) => task.id === action.targetTaskId && task.status !== "archived")) {
