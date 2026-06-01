@@ -80,26 +80,22 @@ flags.
 - `AppState`: `folders` (replaces `domains` + `projects`), `folderBlockSelections` (replaces
   `projectBlockSelections`); drop `routines`.
 
-### Decisions to confirm before coding
+### Decisions (CONFIRMED)
 
-1. **Internal rename vs UI-relabel.** Cleanest is to rename `domain`→`folder` everywhere (kills
-   confusing tech debt) — but it's the bulk of the mechanical churn (~150 `domain*` refs). Lower
-   effort: keep internal `domainId` naming, only remove `project` and relabel in the UI. RECOMMEND
-   the full internal rename for a genuinely simple model.
-2. **Folder block scope (NEW with nesting).** When a folder renders as a day block, does it include
-   only its DIRECT-child tasks, or all tasks in its subtree (descendant folders too)? RECOMMEND
-   direct-child tasks (predictable, avoids a giant block); the tree view shows the full hierarchy
-   separately. Pairs with an explicit `canBlock` flag on the folder.
-3. **Folder rollups recursive.** Folder task counts / effort in the tree aggregate the whole subtree
-   (like `childStats` for tasks). Scheduling stays task-level (folders only group, they aren't
-   scheduled), so no double-counting.
-4. **AI action shape.** Drop `create_project`/`create_routine`. Grouping (T062) becomes
-   `create_folder` (with optional `parentFolderName` so the model can nest) + create_task with
-   `folderName`; recurring capture sets `repeatPolicy` on a create_task. Confirm the enum change.
-5. **Postgres now or later.** The normalized Postgres projection (pg-state-repository.mjs ~83 refs +
-   migrations 001/002/004/008) maps projects/routines/domains to tables. Default dev is in-memory,
-   so RECOMMEND: do the in-memory/file path now; stage the Postgres schema migration (self-
-   referencing folders table) as a follow-up unless the durable path is in active use.
+1. **Full internal rename** — rename `domain`→`folder` everywhere (one clean recursive `folder`
+   concept; no leftover `domain`/`project` naming).
+2. **Folder block scope = full subtree** — when a folder renders as a day block it includes the
+   scheduled tasks from ALL descendant folders (recursive), not just its direct children. Pairs
+   with an explicit `canBlock` flag on the folder. (Implies the planner gathers folder-block tasks
+   via `tasksInSubtree(folderId)`.)
+3. **Folder rollups recursive** — folder task counts / effort aggregate the whole subtree.
+   Scheduling stays task-level (folders only group, never scheduled themselves) so no
+   double-counting.
+4. **AI action shape** — drop `create_project`/`create_routine`. Grouping becomes `create_folder`
+   (optional `parentFolderName` to nest) + create_task with `folderName`; recurring capture sets
+   `repeatPolicy` on a create_task.
+5. **Postgres deferred** — do the in-memory/file path now; stage the (self-referencing folders
+   table) Postgres migration as a follow-up. Default dev is in-memory.
 
 ### File-by-file change map
 
