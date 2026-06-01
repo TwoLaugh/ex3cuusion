@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createSeedState } from "./seed";
-import type { AppState } from "./types";
+import type { AppState, Domain, Folder, Project } from "./types";
 
 export interface AppStateRepository {
   read(): AppState;
@@ -124,6 +124,9 @@ function buildDefaultRepository(): AppStateRepository {
 }
 
 function normalizeState(state: AppState): AppState {
+  // T088 Stage 2b: folders are now the canonical store. Build/repair the folder tree first, then
+  // (re)derive domains/projects/task.domainId/task.projectId FROM folders for back-compat below.
+  deriveStructureFromFolders(state);
   state.domains ??= [];
   if (state.domains.length === 0) {
     state.domains.push({ id: "domain_personal", name: "Personal", weight: 5 });
@@ -188,34 +191,178 @@ function normalizeState(state: AppState): AppState {
     session.revisionEvents ??= [];
     session.unresolvedFields ??= [];
   }
-  deriveFolders(state);
   return state;
 }
 
-// T088 Stage 2a: derive the recursive folder tree from domains + projects (ids preserved, so all
-// existing references stay valid). Each domain -> a top-level folder; each project -> a child
-// folder under its domain; every task gets folderId = projectId ?? domainId. Block selections are
-// mirrored onto folders. Stage 2b switches consumers to read these; Stage 2c removes the originals.
-function deriveFolders(state: AppState): void {
-  state.folders = [
-    ...state.domains.map((domain) => ({ id: domain.id, name: domain.name, weight: domain.weight })),
-    ...(state.projects ?? []).map((project) => ({
-      id: project.id,
-      name: project.name,
-      parentFolderId: project.domainId,
-      canBlock: true,
-      defaultBlockMinutes: project.defaultBlockMinutes,
-      contextNote: project.contextNote,
-      status: project.status === "completed" ? ("archived" as const) : ("active" as const)
-    }))
-  ];
-  for (const task of state.tasks) {
-    task.folderId = task.projectId ?? task.domainId;
+// T088 Stage 2b: `folders` is the canonical recursive structure store. This walks the folder tree
+// up to its root, guarding against cycles with a seen-set; used to map any folder to the top-level
+// folder that plays the role of its legacy "domain".
+function topAncestorFolderId(folders: Folder[], folderId: string): string {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const seen = new Set<string>();
+  let current = byId.get(folderId);
+  if (!current) return folderId;
+  while (current.parentFolderId && byId.has(current.parentFolderId) && !seen.has(current.id)) {
+    seen.add(current.id);
+    current = byId.get(current.parentFolderId)!;
   }
-  state.folderBlockSelections = (state.projectBlockSelections ?? []).map((selection) => ({
+  return current.id;
+}
+
+// T088 Stage 2b: make `folders` canonical. If folders are missing/empty but legacy domains exist,
+// first build folders from domains+projects (the old Stage 2a derivation; ids preserved). Then
+// always (re)derive domains, projects, each task's domainId/projectId, and projectBlockSelections
+// FROM folders + task.folderId so every existing consumer keeps working unchanged.
+function deriveStructureFromFolders(state: AppState): void {
+  state.folders ??= [];
+
+  // Legacy migration: no folders yet but we have domains -> seed folders from domains+projects.
+  if (state.folders.length === 0 && (state.domains?.length ?? 0) > 0) {
+    state.folders = [
+      ...state.domains.map((domain) => ({ id: domain.id, name: domain.name, weight: domain.weight })),
+      ...(state.projects ?? []).map((project) => ({
+        id: project.id,
+        name: project.name,
+        parentFolderId: project.domainId,
+        canBlock: true,
+        defaultBlockMinutes: project.defaultBlockMinutes,
+        contextNote: project.contextNote,
+        status: project.status === "completed" ? ("archived" as const) : ("active" as const)
+      }))
+    ];
+    for (const task of state.tasks ?? []) {
+      task.folderId = task.projectId ?? task.domainId;
+    }
+    state.folderBlockSelections = (state.projectBlockSelections ?? []).map((selection) => ({
+      date: selection.date,
+      folderId: selection.projectId,
+      selectedTaskIds: selection.selectedTaskIds,
+      updatedAt: selection.updatedAt
+    }));
+  }
+
+  // Reconcile folders FROM any legacy edits before deriving back out. Existing consumers (and AI
+  // actions) still create domains/projects and set task.projectId/domainId directly; fold those into
+  // the canonical folder tree so the edits survive. A task's projectId ?? domainId is the placement
+  // signal: when it points at an existing folder and differs from the current folderId, the task
+  // moved via the legacy fields, so retarget folderId. The folder-mutation/folderId-write paths keep
+  // projectId/domainId in sync with folderId, so there is no conflict there.
+  reconcileFoldersFromLegacy(state);
+
+  const folders = state.folders;
+  if (folders.length === 0) return; // nothing canonical to derive from; let domain defaults apply.
+
+  const folderIds = new Set(folders.map((folder) => folder.id));
+  const topLevel = folders.filter((folder) => !folder.parentFolderId || !folderIds.has(folder.parentFolderId));
+  const fallbackTopId = topLevel[0]?.id ?? folders[0].id;
+
+  // The folder status enum (active/archived) can't distinguish a legacy project's paused vs
+  // completed; preserve the prior legacy status for an archived folder so existing edits survive.
+  const priorProjectStatus = new Map((state.projects ?? []).map((project) => [project.id, project.status]));
+
+  // domains <- top-level folders
+  state.domains = topLevel.map<Domain>((folder) => ({ id: folder.id, name: folder.name, weight: folder.weight ?? 5 }));
+
+  // projects <- non-top folders, with domainId = their top-level ancestor folder id
+  state.projects = folders
+    .filter((folder) => folder.parentFolderId && folderIds.has(folder.parentFolderId))
+    .map<Project>((folder) => {
+      const prior = priorProjectStatus.get(folder.id);
+      const status: Project["status"] =
+        folder.status === "archived" ? (prior === "paused" || prior === "completed" ? prior : "completed") : "active";
+      return {
+        id: folder.id,
+        name: folder.name,
+        domainId: topAncestorFolderId(folders, folder.id),
+        kind: "project",
+        planningMode: "open_backlog",
+        status,
+        priorityWeight: 0,
+        defaultBlockMinutes: folder.defaultBlockMinutes ?? 30,
+        contextNote: folder.contextNote ?? ""
+      };
+    });
+
+  // Each task's derived domainId/projectId follow from its folderId (canonical placement).
+  for (const task of state.tasks ?? []) {
+    const folder = (task.folderId && folders.find((entry) => entry.id === task.folderId)) || topLevel[0] || folders[0];
+    const isTop = !folder.parentFolderId || !folderIds.has(folder.parentFolderId);
+    task.folderId = folder.id;
+    task.domainId = topAncestorFolderId(folders, folder.id) || fallbackTopId;
+    task.projectId = isTop ? undefined : folder.id;
+  }
+
+  // projectBlockSelections <- folderBlockSelections (folderId -> projectId) for the planner.
+  state.folderBlockSelections ??= [];
+  state.projectBlockSelections = state.folderBlockSelections.map((selection) => ({
     date: selection.date,
-    folderId: selection.projectId,
+    projectId: selection.folderId,
     selectedTaskIds: selection.selectedTaskIds,
     updatedAt: selection.updatedAt
   }));
+}
+
+// Fold legacy domain/project/task edits back into the canonical folder tree (T088 Stage 2b). Lets
+// the still-present domain/project structure mutations and AI actions keep working: a newly created
+// domain becomes a top-level folder, a new project becomes a child folder under its domain, and a
+// task whose projectId/domainId was set by legacy code is retargeted to the matching folder.
+function reconcileFoldersFromLegacy(state: AppState): void {
+  const folders = state.folders!;
+  const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+
+  // Legacy domains -> ensure a top-level folder exists for each (id preserved).
+  for (const domain of state.domains ?? []) {
+    const existing = folderById.get(domain.id);
+    if (existing) {
+      existing.parentFolderId = undefined;
+      existing.weight ??= domain.weight;
+    } else {
+      const folder: Folder = { id: domain.id, name: domain.name, weight: domain.weight };
+      folders.push(folder);
+      folderById.set(folder.id, folder);
+    }
+  }
+
+  // Legacy projects -> ensure a child folder exists for each, parented to its domain folder.
+  for (const project of state.projects ?? []) {
+    const existing = folderById.get(project.id);
+    if (existing) {
+      if (folderById.has(project.domainId)) existing.parentFolderId = project.domainId;
+      existing.status = project.status === "completed" || project.status === "paused" ? "archived" : existing.status ?? "active";
+    } else {
+      const folder: Folder = {
+        id: project.id,
+        name: project.name,
+        parentFolderId: folderById.has(project.domainId) ? project.domainId : undefined,
+        canBlock: true,
+        defaultBlockMinutes: project.defaultBlockMinutes,
+        contextNote: project.contextNote,
+        status: project.status === "completed" ? "archived" : "active"
+      };
+      folders.push(folder);
+      folderById.set(folder.id, folder);
+    }
+  }
+
+  // Block selections: the planner reads/writes projectBlockSelections; mirror them onto the canonical
+  // folderBlockSelections (projectId -> folderId, same ids) so block-selection edits (including
+  // clearing them on regenerate) survive the re-derivation below.
+  if (state.projectBlockSelections !== undefined) {
+    state.folderBlockSelections = state.projectBlockSelections.map((selection) => ({
+      date: selection.date,
+      folderId: selection.projectId,
+      selectedTaskIds: selection.selectedTaskIds,
+      updatedAt: selection.updatedAt
+    }));
+  }
+
+  // Task placement: projectId ?? domainId is the legacy signal. When it points at an existing folder
+  // and disagrees with folderId, the task was moved via legacy fields, so retarget folderId. (The
+  // folder-mutation and folderId-write paths keep projectId/domainId in sync, so no false move here.)
+  for (const task of state.tasks ?? []) {
+    const legacyPlacement = task.projectId ?? task.domainId;
+    if (legacyPlacement && legacyPlacement !== task.folderId && folderById.has(legacyPlacement)) {
+      task.folderId = legacyPlacement;
+    }
+  }
 }

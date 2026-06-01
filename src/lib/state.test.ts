@@ -293,17 +293,68 @@ describe("state integration", () => {
     expect(listChangeHistory().length).toBe(historyLen);
   });
 
-  it("derives a folder tree from domains and projects (T088 Stage 2a)", () => {
+  it("treats folders as the canonical structure store and derives domains/projects from them (T088 Stage 2b)", () => {
     const state = getState();
     expect(state.folders && state.folders.length).toBeTruthy();
+    // Every derived domain is a top-level folder (no parentFolderId).
     for (const domain of state.domains) {
       expect(state.folders!.some((folder) => folder.id === domain.id && !folder.parentFolderId)).toBe(true);
     }
+    // Every derived project is a child folder (parentFolderId points at its domain folder).
     for (const project of state.projects) {
       expect(state.folders!.some((folder) => folder.id === project.id && folder.parentFolderId === project.domainId)).toBe(true);
     }
-    const sample = state.tasks[0];
-    expect(sample.folderId).toBe(sample.projectId ?? sample.domainId);
+    // Every task has a folderId, and its derived domainId/projectId follow from that folder.
+    for (const task of state.tasks) {
+      expect(task.folderId).toBeTruthy();
+      expect(task.folderId).toBe(task.projectId ?? task.domainId);
+    }
+  });
+
+  it("creates a folder via a structure mutation and derives a project from it (T088)", () => {
+    const before = getState();
+    const topFolderId = before.folders!.find((folder) => !folder.parentFolderId)!.id;
+    const beforeFolderCount = before.folders!.length;
+
+    applyStructureMutation({
+      entity: "folder",
+      action: "create",
+      patch: { name: "Side project", parentFolderId: topFolderId, canBlock: true }
+    });
+
+    const after = getState();
+    expect(after.folders!.length).toBe(beforeFolderCount + 1);
+    const created = after.folders!.find((folder) => folder.name === "Side project")!;
+    expect(created.parentFolderId).toBe(topFolderId);
+    // A non-top folder is derived into a project whose domainId is its top-level ancestor.
+    const derivedProject = after.projects.find((project) => project.id === created.id)!;
+    expect(derivedProject).toBeTruthy();
+    expect(derivedProject.domainId).toBe(topFolderId);
+  });
+
+  it("moves a task between folders via folderId and re-derives its domain/project (T088)", () => {
+    const state = getState();
+    const childFolder = state.folders!.find((folder) => folder.parentFolderId)!;
+    const topAncestor = childFolder.parentFolderId!;
+    const task = state.tasks.find((entry) => entry.folderId !== childFolder.id && entry.status !== "archived")!;
+
+    applyStructureMutation({ entity: "task", action: "update", id: task.id, patch: { folderId: childFolder.id } });
+
+    const moved = getState().tasks.find((entry) => entry.id === task.id)!;
+    expect(moved.folderId).toBe(childFolder.id);
+    expect(moved.projectId).toBe(childFolder.id);
+    expect(moved.domainId).toBe(topAncestor);
+  });
+
+  it("rejects making a folder a child of its own descendant (cycle guard) (T088)", () => {
+    const parentFolderId = getState().folders!.find((folder) => !folder.parentFolderId)!.id;
+    applyStructureMutation({ entity: "folder", action: "create", patch: { name: "Cycle child", parentFolderId } });
+    const child = getState().folders!.find((folder) => folder.name === "Cycle child")!;
+
+    // Attempt to reparent the original parent under its own child -> rejected (parent stays top-level).
+    applyStructureMutation({ entity: "folder", action: "update", id: parentFolderId, patch: { parentFolderId: child.id } });
+    const parentAfter = getState().folders!.find((folder) => folder.id === parentFolderId)!;
+    expect(parentAfter.parentFolderId).toBeUndefined();
   });
 
   it("records and undoes manual edits and completions, not just AI actions (T073)", async () => {

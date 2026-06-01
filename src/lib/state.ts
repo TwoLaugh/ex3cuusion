@@ -16,6 +16,7 @@ import type {
   DeferralReason,
   ExecutionEvent,
   ExecutionEventType,
+  Folder,
   Task,
   WaitingMetadata
 } from "./types";
@@ -26,6 +27,9 @@ export type StructureMutation =
   | { entity: "project"; action: "create"; patch: Partial<AppState["projects"][number]> }
   | { entity: "project"; action: "update"; id: string; patch: Partial<AppState["projects"][number]> }
   | { entity: "project"; action: "archive"; id: string }
+  | { entity: "folder"; action: "create"; patch: Partial<Folder> }
+  | { entity: "folder"; action: "update"; id: string; patch: Partial<Folder> }
+  | { entity: "folder"; action: "archive"; id: string }
   | { entity: "task"; action: "create"; patch: Partial<Task> }
   | {
       entity: "task";
@@ -178,6 +182,32 @@ function resolveParentForChild(state: AppState, requested: string | undefined, s
   return parent.id;
 }
 
+// T088: true if folder `nodeId` is within the subtree rooted at `ancestorId` (walks up the
+// parentFolderId chain), used to reject folder-parenting choices that would create a cycle.
+function isFolderDescendantOf(state: AppState, nodeId: string, ancestorId: string): boolean {
+  const folders = state.folders ?? [];
+  let current = folders.find((folder) => folder.id === nodeId);
+  const seen = new Set<string>();
+  while (current?.parentFolderId && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.parentFolderId === ancestorId) return true;
+    current = folders.find((folder) => folder.id === current!.parentFolderId);
+  }
+  return false;
+}
+
+// Resolve a requested parent folder id. Returns the parent id, or undefined to clear/reject.
+// Rejects self-parenting and any choice that would create a cycle (parenting a folder under one of
+// its own descendants). Analogous to resolveParentForChild for tasks.
+function resolveFolderParent(state: AppState, requested: string | undefined, selfId?: string): string | undefined {
+  if (!requested) return undefined;
+  if (requested === selfId) return undefined;
+  const parent = (state.folders ?? []).find((folder) => folder.id === requested);
+  if (!parent) return undefined;
+  if (selfId && isFolderDescendantOf(state, requested, selfId)) return undefined; // would create a cycle
+  return parent.id;
+}
+
 export function applyStructureMutation(mutation: StructureMutation): AppState {
   recordChange("manual_edit", `Manual ${mutation.action} ${mutation.entity}`);
   const state = currentState();
@@ -244,6 +274,47 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
     return getState();
   }
 
+  if (mutation.entity === "folder") {
+    state.folders ??= [];
+    if (mutation.action === "create") {
+      const id = uniqueFolderId(state);
+      const parentFolderId = resolveFolderParent(state, mutation.patch.parentFolderId);
+      state.folders.push({
+        id,
+        name: cleanText(mutation.patch.name) || "New folder",
+        parentFolderId,
+        weight: mutation.patch.weight === undefined ? undefined : clampNumber(mutation.patch.weight, 1, 10, 5),
+        canBlock: mutation.patch.canBlock,
+        defaultBlockMinutes:
+          mutation.patch.defaultBlockMinutes === undefined ? undefined : clampNumber(mutation.patch.defaultBlockMinutes, 5, 480, 30),
+        contextNote: optionalText(mutation.patch.contextNote, undefined),
+        status: validFolderStatus(mutation.patch.status) ?? "active"
+      });
+      return getState();
+    }
+
+    const folder = state.folders.find((entry) => entry.id === mutation.id);
+    if (!folder) return getState();
+    if (mutation.action === "archive") {
+      folder.status = "archived";
+      return getState();
+    }
+
+    folder.name = cleanText(mutation.patch.name) || folder.name;
+    if (mutation.patch.parentFolderId !== undefined) {
+      folder.parentFolderId =
+        mutation.patch.parentFolderId === "" ? undefined : resolveFolderParent(state, mutation.patch.parentFolderId, folder.id);
+    }
+    if (mutation.patch.weight !== undefined) folder.weight = clampNumber(mutation.patch.weight, 1, 10, folder.weight ?? 5);
+    if (mutation.patch.canBlock !== undefined) folder.canBlock = mutation.patch.canBlock;
+    if (mutation.patch.defaultBlockMinutes !== undefined) {
+      folder.defaultBlockMinutes = clampNumber(mutation.patch.defaultBlockMinutes, 5, 480, folder.defaultBlockMinutes ?? 30);
+    }
+    if (mutation.patch.contextNote !== undefined) folder.contextNote = optionalText(mutation.patch.contextNote, folder.contextNote);
+    folder.status = validFolderStatus(mutation.patch.status) ?? folder.status;
+    return getState();
+  }
+
   if (mutation.entity === "task") {
     if (mutation.action === "create") {
       const domainId = validDomainId(state, mutation.patch.domainId) ?? state.domains[0]?.id;
@@ -251,6 +322,10 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
       const parentTaskId = resolveParentForChild(state, mutation.patch.parentTaskId);
       const parentTask = parentTaskId ? state.tasks.find((entry) => entry.id === parentTaskId) : undefined;
       const projectId = parentTask ? parentTask.projectId : validProjectId(state, mutation.patch.projectId);
+      // Folders are canonical (T088): folderId placement wins; otherwise default it to
+      // parent/project/domain so normalizeState re-derives domainId/projectId consistently.
+      const folderId =
+        (parentTask ? parentTask.folderId : undefined) ?? validFolderId(state, mutation.patch.folderId) ?? projectId ?? domainId;
       state.tasks.push({
         id: uniqueStateId(state, "task"),
         title: cleanText(mutation.patch.title) || "New task",
@@ -258,6 +333,7 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
         type: projectId ? "project_task" : validTaskType(mutation.patch.type) ?? "atomic",
         domainId: parentTask ? parentTask.domainId : projectId ? state.projects.find((project) => project.id === projectId)!.domainId : domainId,
         projectId,
+        folderId,
         parentTaskId,
         status: validTaskStatus(mutation.patch.status) ?? "active",
         repeatPolicy: normalizeRepeatPolicy(mutation.patch.repeatPolicy),
@@ -321,8 +397,25 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
         const parent = state.tasks.find((entry) => entry.id === resolvedParent)!;
         task.projectId = parent.projectId;
         task.domainId = parent.domainId;
+        task.folderId = parent.folderId;
         task.type = parent.projectId ? "project_task" : "atomic";
       }
+    }
+    // Folders are canonical (T088): folderId is the way to move a task between folders. If the
+    // patch supplies a folderId it wins; we also point projectId/domainId at that folder so they stay
+    // in sync (normalizeState re-derives them from folderId). Otherwise keep folderId aligned with any
+    // projectId/domainId change above so the placement signal stays consistent.
+    if (mutation.patch.folderId !== undefined) {
+      const targetFolderId = mutation.patch.folderId === "" ? task.domainId : validFolderId(state, mutation.patch.folderId) ?? task.folderId;
+      if (targetFolderId) {
+        task.folderId = targetFolderId;
+        const folder = (state.folders ?? []).find((entry) => entry.id === targetFolderId);
+        const isTop = !folder?.parentFolderId;
+        task.projectId = isTop ? undefined : targetFolderId;
+        task.type = isTop ? (task.type === "project_task" ? "atomic" : task.type) : task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
+      }
+    } else if (mutation.patch.projectId !== undefined || mutation.patch.domainId !== undefined) {
+      task.folderId = task.projectId ?? task.domainId;
     }
     task.title = cleanText(mutation.patch.title) || task.title;
     task.description = optionalText(mutation.patch.description, task.description);
@@ -1705,6 +1798,28 @@ function uniqueStateId(state: AppState, prefix: "domain" | "project" | "task"): 
     next = `${prefix}_${index.toString().padStart(4, "0")}`;
   } while (ids.includes(next));
   return next;
+}
+
+function uniqueFolderId(state: AppState): string {
+  const ids = (state.folders ?? []).map((folder) => folder.id);
+  let index = ids.reduce((max, id) => {
+    const match = id.match(/^folder_(\d+)$/);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  let next: string;
+  do {
+    index += 1;
+    next = `folder_${index.toString().padStart(4, "0")}`;
+  } while (ids.includes(next));
+  return next;
+}
+
+function validFolderStatus(value: unknown): Folder["status"] | undefined {
+  return value === "active" || value === "archived" ? value : undefined;
+}
+
+function validFolderId(state: AppState, value: unknown): string | undefined {
+  return typeof value === "string" && (state.folders ?? []).some((folder) => folder.id === value) ? value : undefined;
 }
 
 function validDomainId(state: AppState, value: unknown): string | undefined {

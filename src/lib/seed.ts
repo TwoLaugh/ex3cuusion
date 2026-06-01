@@ -10,6 +10,34 @@ export function createSeedState(): AppState {
     currentDate: toDateOnly(now),
     currentTime: toTimeOnly(now),
     availableMinutes: 300,
+    // T088 Stage 2b: folders are the canonical structure store. Top-level folders play the role of
+    // the legacy domains; child folders (parentFolderId set) play the role of legacy projects.
+    // normalizeState re-derives domains/projects/task.domainId/projectId from these.
+    folders: [
+      { id: "domain_health", name: "Health Repair", weight: 10 },
+      { id: "domain_work", name: "Job Work", weight: 9 },
+      { id: "domain_product", name: "Diet App", weight: 8 },
+      { id: "domain_house", name: "House Work", weight: 5 },
+      { id: "domain_social", name: "Social Maintenance", weight: 4 },
+      {
+        id: "project_diet_app",
+        name: "Diet App",
+        parentFolderId: "domain_product",
+        canBlock: true,
+        defaultBlockMinutes: 120,
+        contextNote: "Keep momentum on auth and optimizer work."
+      },
+      {
+        id: "container_emma",
+        name: "Emma",
+        parentFolderId: "domain_social",
+        canBlock: true,
+        defaultBlockMinutes: 45,
+        contextNote: "Relationship ideas and light-touch maintenance."
+      }
+    ],
+    // Legacy mirrors kept so createSeedState() is usable without normalizeState (planner/tests read
+    // these directly). normalizeState re-derives them from `folders`, which is canonical.
     domains: [
       { id: "domain_health", name: "Health Repair", weight: 10 },
       { id: "domain_work", name: "Job Work", weight: 9 },
@@ -48,6 +76,7 @@ export function createSeedState(): AppState {
         type: "project_task",
         domainId: "domain_product",
         projectId: "project_diet_app",
+        folderId: "project_diet_app",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -70,6 +99,7 @@ export function createSeedState(): AppState {
         type: "project_task",
         domainId: "domain_product",
         projectId: "project_diet_app",
+        folderId: "project_diet_app",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -91,6 +121,7 @@ export function createSeedState(): AppState {
         title: "Message Will",
         type: "atomic",
         domainId: "domain_social",
+        folderId: "domain_social",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -112,6 +143,7 @@ export function createSeedState(): AppState {
         title: "Clean garage",
         type: "atomic",
         domainId: "domain_house",
+        folderId: "domain_house",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -133,6 +165,7 @@ export function createSeedState(): AppState {
         type: "soft_invitation",
         domainId: "domain_social",
         projectId: "container_emma",
+        folderId: "container_emma",
         status: "active",
         repeatPolicy: { type: "weekly", days: [0, 3, 6], carryover: "skip", cooldownDays: 3 },
         completionBehavior: "keep_as_suggestion",
@@ -153,6 +186,7 @@ export function createSeedState(): AppState {
         title: "Back rehab",
         type: "atomic",
         domainId: "domain_health",
+        folderId: "domain_health",
         status: "active",
         repeatPolicy: { type: "daily", preferredWindow: "morning", carryover: "skip" },
         completionBehavior: "repeatable",
