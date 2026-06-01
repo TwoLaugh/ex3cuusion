@@ -1,4 +1,4 @@
-import { interpretCaptureRevision, interpretInboxInput, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
+import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
 import { buildDayPlan } from "./planner";
@@ -632,8 +632,12 @@ export function recordPlanItemOutcome(input: {
   return getState();
 }
 
-export async function submitInbox(input: string, interpreter?: AiInterpreter): Promise<AppState> {
-  recordChange("inbox", summarizeInbox(input));
+export async function submitInbox(
+  input: string,
+  interpreter?: AiInterpreter,
+  history?: { source: string; summary: string }
+): Promise<AppState> {
+  recordChange(history?.source ?? "inbox", history?.summary ?? summarizeInbox(input));
   const state = currentState();
   const entry = await interpretInboxInput(input, state, interpreter);
   const session = buildCaptureSession(state, input, entry);
@@ -674,6 +678,15 @@ export async function submitInbox(input: string, interpreter?: AiInterpreter): P
   state.inbox.unshift(entry);
   state.captureSessions.unshift(session);
   return getState();
+}
+
+// Proactive maintenance pass (T066): reuses the inbox apply/history machinery with an
+// organizer interpreter, recorded as one undoable "organizer" change.
+export async function runOrganizerPass(interpreter: AiInterpreter = defaultOrganizerInterpreter): Promise<AppState> {
+  return submitInbox("Review my tasks and propose small, safe maintenance edits.", interpreter, {
+    source: "organizer",
+    summary: "Tidy-up pass"
+  });
 }
 
 export function answerCaptureQuestion(sessionId: string, questionId: string, answer: string): AppState {

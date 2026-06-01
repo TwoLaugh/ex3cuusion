@@ -56,6 +56,19 @@ export default function Home() {
     }
   }
 
+  // Trigger a proactive maintenance pass (T066). Result is one undoable "organizer" change.
+  async function runOrganizer() {
+    setSending(true);
+    setInboxError(null);
+    try {
+      await post("/api/organizer", {});
+    } catch (error) {
+      setInboxError(error instanceof Error ? error.message : "Tidy-up failed.");
+    } finally {
+      setSending(false);
+    }
+  }
+
   // Keep the recent-AI-changes list in sync after any state change.
   useEffect(() => {
     if (!payload) return;
@@ -429,6 +442,9 @@ export default function Home() {
                 <Send size={18} />
               </button>
             </div>
+            <button className="tidyButton" onClick={runOrganizer} disabled={sending} aria-label="Run a tidy-up maintenance pass">
+              Tidy up
+            </button>
             {inboxError && (
               <p className="errorMessage" role="alert">
                 {inboxError}

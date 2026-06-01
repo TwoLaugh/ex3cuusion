@@ -1572,3 +1572,17 @@ textarea {
 .undoButton:hover {
   background: rgba(127, 127, 127, 0.15);
 }
+
+/* T066: tidy-up (organizer) button */
+.tidyButton {
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #2a2a2a);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+.tidyButton:hover { background: rgba(127, 127, 127, 0.15); }
+.tidyButton:disabled { opacity: 0.5; cursor: default; }

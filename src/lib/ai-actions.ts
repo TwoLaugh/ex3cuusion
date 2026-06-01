@@ -200,6 +200,66 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
   };
 }
 
+// --- Proactive organizer (T066) ------------------------------------------------------------
+const ORGANIZER_INSTRUCTIONS =
+  "You are doing a conservative maintenance pass over a personal execution planner's full state (provided as JSON). " +
+  "Propose only SMALL, high-confidence maintenance actions and nothing else: " +
+  "archive_task to remove an exact duplicate task (keep one copy) using the duplicate's targetTaskId; " +
+  "update_task to demote a clearly stale, long-undated, low-value task to someday, or to fix an obviously wrong priority; " +
+  "schedule_task to surface a clearly-ready backlog item into an upcoming day that has spare capacity; " +
+  "and to split a single bloated, vague task into concrete steps, a create_project plus a create_task per step (projectName set to that project) plus archive_task on the original. " +
+  "Do NOT churn a well-organized store: if nothing clearly needs maintenance, return an empty actions array. " +
+  "Never invent tasks the user did not imply, and never archive anything that is not a true duplicate. Prefer fewer, safe, reversible edits.";
+
+export async function defaultOrganizerInterpreter(input: string, state: AppState): Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (process.env.EX3CUUSION_AI_MODE === "fixture" || process.env.NODE_ENV === "test" || (!apiKey && process.env.NODE_ENV !== "production")) {
+    return fixtureOrganizerInterpreter(input, state);
+  }
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+  const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+  const openai = new OpenAI({
+    apiKey,
+    timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
+    maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 1)
+  });
+  const modelInput = `Conservative maintenance pass. Full planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
+  const response = await openai.responses.parse({
+    model,
+    instructions: ORGANIZER_INSTRUCTIONS,
+    input: [{ role: "user", content: modelInput }],
+    text: { format: zodTextFormat(aiActionSchema, "organizer_actions") }
+  });
+  if (!response.output_parsed) {
+    throw new Error("OpenAI response did not match the expected organizer schema");
+  }
+  return {
+    ...response.output_parsed,
+    model,
+    debugTrace: debugTraceForCall("Organizer pass", model, ORGANIZER_INSTRUCTIONS, modelInput, responseText(response), response.output_parsed)
+  };
+}
+
+// Deterministic test double: archive exact-duplicate non-archived tasks (keep the first seen).
+export async function fixtureOrganizerInterpreter(_input: string, state: AppState): Promise<ParsedAiResponse & { model: string }> {
+  const seen = new Set<string>();
+  const actions: ParsedAiAction[] = [];
+  for (const task of state.tasks) {
+    if (task.status === "archived") continue;
+    const key = task.title.trim().toLowerCase();
+    if (seen.has(key)) {
+      actions.push(baseAction("archive_task", `Archive duplicate ${task.title}`, task.title, state, { targetTaskId: task.id }));
+    } else {
+      seen.add(key);
+    }
+  }
+  return {
+    model: "fixture",
+    summary: actions.length ? `${actions.length} duplicate task${actions.length === 1 ? "" : "s"} archived.` : "No maintenance needed.",
+    actions
+  };
+}
+
 function debugTraceForCall(
   label: string,
   model: string,

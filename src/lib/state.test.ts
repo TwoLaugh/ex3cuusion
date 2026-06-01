@@ -15,6 +15,7 @@ import {
   recordPlanItemOutcome,
   rejectAiAction,
   resetState,
+  runOrganizerPass,
   undoChange,
   retreatDay,
   setClock,
@@ -128,6 +129,19 @@ describe("state integration", () => {
     expect(updated?.scheduledDate).toBeUndefined();
     expect(updated?.plannerFields.pressureLevel).toBe("someday");
     expect(updated?.urgency).toBe(1);
+  });
+
+  it("organizer archives duplicate tasks as one undoable pass (T066)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Duplicate me" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Duplicate me" } });
+    const liveBefore = getState().tasks.filter((task) => task.title === "Duplicate me" && task.status !== "archived").length;
+    expect(liveBefore).toBe(2);
+
+    await runOrganizerPass();
+
+    const liveAfter = getState().tasks.filter((task) => task.title === "Duplicate me" && task.status !== "archived").length;
+    expect(liveAfter).toBe(1);
+    expect(listChangeHistory()[0].source).toBe("organizer");
   });
 
   it("records AI changes and undoes them (auto-apply with undo)", async () => {
