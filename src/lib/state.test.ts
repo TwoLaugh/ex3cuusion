@@ -17,6 +17,7 @@ import {
   rejectAiAction,
   resetState,
   runOrganizerPass,
+  setAutoOrganizeEnabled,
   undoChange,
   retreatDay,
   setClock,
@@ -199,6 +200,19 @@ describe("state integration", () => {
     expect(listChangeHistory()[0].source).toBe("organizer");
   });
 
+  it("respects the auto-organizer enable/disable setting (T074)", async () => {
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup x" } });
+    applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup x" } });
+
+    setAutoOrganizeEnabled(false);
+    await maybeRunDailyOrganizer();
+    expect(getState().tasks.filter((task) => task.title === "Dup x" && task.status !== "archived").length).toBe(2);
+
+    setAutoOrganizeEnabled(true);
+    await maybeRunDailyOrganizer();
+    expect(getState().tasks.filter((task) => task.title === "Dup x" && task.status !== "archived").length).toBe(1);
+  });
+
   it("auto organizer runs once per day then no-ops (T069)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup once" } });
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Dup once" } });
@@ -210,6 +224,18 @@ describe("state integration", () => {
     const historyLen = listChangeHistory().length;
     await maybeRunDailyOrganizer(); // same day -> no-op
     expect(listChangeHistory().length).toBe(historyLen);
+  });
+
+  it("records and undoes manual edits and completions, not just AI actions (T073)", async () => {
+    const target = getState().tasks.find((task) => task.status !== "archived")!;
+    const originalTitle = target.title;
+
+    applyStructureMutation({ entity: "task", action: "update", id: target.id, patch: { title: "Renamed by hand" } });
+    expect(getState().tasks.find((task) => task.id === target.id)?.title).toBe("Renamed by hand");
+    expect(listChangeHistory()[0].source).toBe("manual_edit");
+
+    undoChange();
+    expect(getState().tasks.find((task) => task.id === target.id)?.title).toBe(originalTitle);
   });
 
   it("records AI changes and undoes them (auto-apply with undo)", async () => {

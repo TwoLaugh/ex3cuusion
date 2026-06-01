@@ -459,4 +459,6 @@ export interface AppState {
   captureSessions: CaptureSession[];
   // Local date of the last auto-triggered organizer pass (T069); guards once-per-day runs.
   lastAutoOrganizeDate?: string;
+  // When false, the once-per-day auto organizer (T069) is disabled (T074). Default (undefined) = on.
+  autoOrganizeEnabled?: boolean;
 }

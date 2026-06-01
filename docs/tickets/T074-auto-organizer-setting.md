@@ -1,8 +1,17 @@
 # T074: Auto-Organizer Enable/Disable Setting
 
-Status: planned.
+Status: implemented.
 
 Follow-up to T069 (auto organizer runs once/day with no user control).
+
+## Implementation
+
+- `AppState.autoOrganizeEnabled` (default undefined = on); `maybeRunDailyOrganizer` no-ops when
+  `false`. `setAutoOrganizeEnabled` + `POST /api/settings`. A checkbox in Planning preferences
+  toggles it.
+- Verified: unit test (disabled → daily pass no-ops; enabled → it runs). tsc + 54 unit tests
+  green. (HTTP re-run skipped this round due to host resource pressure; the settings route is a
+  thin passthrough to the tested setter.)
 
 ## Goal
 

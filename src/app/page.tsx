@@ -1390,6 +1390,18 @@ function SecondaryPanel({
               {backlogSummary.thisWeek} this week - {backlogSummary.nextWeek} next week - {backlogSummary.someday} someday
             </span>
           </article>
+          <article>
+            <h2>Automation</h2>
+            <label className="settingToggle">
+              <input
+                type="checkbox"
+                defaultChecked={state.autoOrganizeEnabled !== false}
+                onChange={(event) => post("/api/settings", { autoOrganizeEnabled: event.target.checked })}
+                aria-label="Run a daily tidy-up automatically"
+              />
+              Run a conservative tidy-up automatically once a day
+            </label>
+          </article>
         </div>
       )}
       {view === "AI activity" && (

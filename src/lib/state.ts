@@ -171,6 +171,7 @@ function resolveParentForChild(state: AppState, requested: string | undefined, s
 }
 
 export function applyStructureMutation(mutation: StructureMutation): AppState {
+  recordChange("manual_edit", `Manual ${mutation.action} ${mutation.entity}`);
   const state = currentState();
 
   if (mutation.entity === "domain") {
@@ -425,6 +426,7 @@ export function dailyReviewSummary(date?: string): DailyReviewSummary {
 }
 
 export function submitDailyReview(input: DailyReviewInput): AppState {
+  recordChange("review", "Daily review");
   const state = currentState();
   const date = input.date ?? state.currentDate;
   const summary = buildDailyReviewSummary(state, date);
@@ -460,6 +462,7 @@ export function updateProjectBlockSelection(input: {
   taskId?: string;
   action: ProjectBlockSelectionAction;
 }): AppState {
+  recordChange("block_selection", "Project block change");
   const state = currentState();
   const plan = buildDayPlan(state);
   const item = plan.items.find((entry) => entry.id === input.planItemId);
@@ -504,6 +507,7 @@ export function updateProjectBlockSelection(input: {
 }
 
 export function completePlanItem(planItemId: string, actualMinutes?: number, completedTaskIds?: string[]): AppState {
+  recordChange("complete", "Completed a plan item");
   const state = currentState();
   const plan = buildDayPlan(state);
   const item = plan.items.find((entry) => entry.id === planItemId);
@@ -591,6 +595,7 @@ export function completePlanItem(planItemId: string, actualMinutes?: number, com
 }
 
 export function deferPlanItem(planItemId: string, reason: DeferralReason, note?: string, deferredTo?: string): AppState {
+  recordChange("defer", "Deferred a plan item");
   const state = currentState();
   const plan = buildDayPlan(state);
   const item = plan.items.find((entry) => entry.id === planItemId);
@@ -644,6 +649,7 @@ export function recordPlanItemOutcome(input: {
   blocked?: BlockedMetadata;
   waiting?: WaitingMetadata;
 }): AppState {
+  recordChange("outcome", "Recorded a plan outcome");
   const state = currentState();
   const plan = buildDayPlan(state);
   const item = plan.items.find((entry) => entry.id === input.planItemId);
@@ -742,6 +748,7 @@ export async function runOrganizerPass(interpreter: AiInterpreter = defaultOrgan
 // Run the organizer at most once per local day (T069). Stamps the date after running so a second
 // open the same day is a no-op. Undoable like any organizer pass.
 export async function maybeRunDailyOrganizer(interpreter: AiInterpreter = defaultOrganizerInterpreter): Promise<AppState> {
+  if (currentState().autoOrganizeEnabled === false) return getState(); // T074: user-disabled
   const today = currentState().currentDate;
   if (currentState().lastAutoOrganizeDate === today) return getState();
   await submitInbox("Daily maintenance: propose small, safe tidy-up edits.", interpreter, {
@@ -749,6 +756,13 @@ export async function maybeRunDailyOrganizer(interpreter: AiInterpreter = defaul
     summary: "Daily tidy-up (auto)"
   });
   currentState().lastAutoOrganizeDate = today;
+  return getState();
+}
+
+// Enable/disable the once-per-day auto organizer (T074). Not recorded in undo history (a setting,
+// not a content change).
+export function setAutoOrganizeEnabled(enabled: boolean): AppState {
+  currentState().autoOrganizeEnabled = enabled;
   return getState();
 }
 
@@ -944,6 +958,7 @@ export function applyCaptureSession(sessionId: string): AppState {
 }
 
 export function confirmAiAction(actionId: string): AppState {
+  recordChange("confirm", "Confirmed an AI action");
   const state = currentState();
   const action = findAction(state, actionId);
   if (!action || action.status !== "proposed") return getState();

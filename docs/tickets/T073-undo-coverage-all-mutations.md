@@ -1,6 +1,16 @@
 # T073: Undo Coverage for All Mutations
 
-Status: planned.
+Status: implemented.
+
+## Implementation
+
+- `recordChange` now fires at the start of every user-facing mutation: `applyStructureMutation`
+  (source `manual_edit`), `completePlanItem` (`complete`), `deferPlanItem` (`defer`),
+  `recordPlanItemOutcome` (`outcome`), `submitDailyReview` (`review`),
+  `updateProjectBlockSelection` (`block_selection`), and `confirmAiAction` (`confirm`) — alongside
+  the existing AI inbox/capture/organizer sources.
+- Verified: unit test (a manual task rename is recorded as `manual_edit` and `undoChange`
+  restores the original title). tsc + 54 unit tests green.
 
 Hardens T061 (which only records AI inbox/capture operations).
 
