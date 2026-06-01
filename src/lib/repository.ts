@@ -124,6 +124,29 @@ function buildDefaultRepository(): AppStateRepository {
 }
 
 function normalizeState(state: AppState): AppState {
+  state.domains ??= [];
+  if (state.domains.length === 0) {
+    state.domains.push({ id: "domain_personal", name: "Personal", weight: 5 });
+  }
+  const fallbackDomainId = state.domains[0].id;
+  const domainIds = new Set(state.domains.map((domain) => domain.id));
+  for (const project of state.projects ?? []) {
+    if (!domainIds.has(project.domainId)) project.domainId = fallbackDomainId;
+  }
+  const projectsById = new Map((state.projects ?? []).map((project) => [project.id, project]));
+  for (const task of state.tasks ?? []) {
+    const project = task.projectId ? projectsById.get(task.projectId) : undefined;
+    if (project) {
+      task.domainId = project.domainId;
+      if (task.type === "atomic") task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
+    } else if (!domainIds.has(task.domainId)) {
+      task.projectId = undefined;
+      task.domainId = fallbackDomainId;
+    }
+  }
+  for (const routine of state.routines ?? []) {
+    if (!domainIds.has(routine.domainId)) routine.domainId = fallbackDomainId;
+  }
   state.executionEvents ??= [];
   state.projectBlockSelections ??= [];
   state.dailyReviews ??= [];

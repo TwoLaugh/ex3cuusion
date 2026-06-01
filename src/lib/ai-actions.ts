@@ -1253,7 +1253,10 @@ function findProjectName(state: AppState, pattern: RegExp): string | null {
 
 function findDomainId(state: AppState, name: string, fallback: string): string {
   const lower = name.toLowerCase();
-  return state.domains.find((domain) => domain.name.toLowerCase().includes(lower) || lower.includes(domain.name.toLowerCase()))?.id ?? fallback;
+  const matched = state.domains.find((domain) => domain.name.toLowerCase().includes(lower) || lower.includes(domain.name.toLowerCase()));
+  if (matched) return matched.id;
+  if (state.domains.some((domain) => domain.id === fallback)) return fallback;
+  return state.domains[0]?.id ?? fallback;
 }
 
 function findProjectId(state: AppState, name: string | null): string | undefined {

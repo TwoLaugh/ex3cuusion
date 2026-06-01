@@ -147,6 +147,52 @@ describe("interpretInboxInput", () => {
     });
   });
 
+  it("falls back to an existing domain when the model names a missing domain", async () => {
+    const state = createSeedState();
+    state.domains = [{ id: "domain_personal", name: "Personal", weight: 5 }];
+    state.projects = [];
+    state.tasks = [];
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+
+    const entry = await interpretInboxInput("figure out local setup today", state, async () => ({
+      model: "model-decides",
+      summary: "Created setup task.",
+      actions: [
+        {
+          type: "create_task",
+          label: "Add local setup task",
+          title: "Figure out local setup",
+          domainName: "Job Work",
+          projectName: null,
+          dueDate: null,
+          scheduledDate: "2026-06-01",
+          scheduledTime: null,
+          effortMinutes: 45,
+          energy: "high",
+          strictness: "normal",
+          priority: 4,
+          importance: 4,
+          urgency: 4,
+          recurrenceDays: null,
+          completionBehavior: "exhaust_once",
+          completionMode: "outcome_done",
+          definitionOfDone: "Local setup steps are documented.",
+          tags: ["work", "setup"],
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null,
+          schedulingMode: null
+        }
+      ]
+    }));
+
+    expect(entry.actions[0].payload).toMatchObject({
+      title: "Figure out local setup",
+      domainId: "domain_personal"
+    });
+  });
+
   it("keeps high-value clarification questions with materiality metadata", async () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";
