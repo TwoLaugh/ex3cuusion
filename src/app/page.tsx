@@ -37,6 +37,14 @@ export default function Home() {
     setPayload(await response.json());
   }
 
+  // Anchor the app to the user's real local time on load. Manual day navigation (prev/next)
+  // still works afterwards; we deliberately do not auto-tick, so navigating away from today is
+  // not yanked back. (A guarded live-tick while viewing today is a follow-up.)
+  async function syncClock() {
+    const { date, time } = localNowParts();
+    await post("/api/time", { date, time });
+  }
+
   async function post(url: string, body: Record<string, unknown> = {}) {
     const response = await fetch(url, {
       method: "POST",
@@ -51,7 +59,9 @@ export default function Home() {
   }
 
   useEffect(() => {
-    refresh();
+    syncClock().catch(() => {
+      void refresh();
+    });
     setTodayIndex(systemWeekdayIndex());
   }, []);
 
@@ -1589,6 +1599,18 @@ function weekDots(dateOnly: string, todayIndex: number | null) {
 function systemWeekdayIndex() {
   const jsDay = new Date().getDay();
   return (jsDay + 6) % 7;
+}
+
+// Real local wall-clock now, as the app's date/time format. Used to anchor the app to the
+// user's actual current time on load (the in-memory state would otherwise stay frozen at
+// whatever time the server process first created it).
+function localNowParts() {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return {
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`
+  };
 }
 
 function labelForSection(section: PlanItem["section"]): string {

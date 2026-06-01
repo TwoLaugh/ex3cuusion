@@ -1,6 +1,6 @@
 # T060: Live Current Time
 
-Status: planned.
+Status: implemented (mount-sync). Live-tick while viewing today is a noted follow-up.
 
 ## Goal
 
@@ -33,3 +33,14 @@ updated, so the app shows whatever time the server started at. `toDateOnly` also
 - Client-driven sync is the source of truth for real use (the browser knows the user's local
   clock and timezone); the seeded time is only a fallback.
 - Keep the change isolated to time sync + date helper; do not couple it to AI logic.
+
+### Implementation
+
+- `src/app/page.tsx`: added `localNowParts()` (real local date/time in the app's format) and a
+  `syncClock()` that POSTs it to `/api/time`; the mount effect now calls `syncClock()` (falling
+  back to a plain `refresh()` if it fails). No auto-tick, so prev/next-day navigation is not
+  yanked back to today.
+- Verified end-to-end against the running dev server: POSTing a local now to `/api/time` sets
+  `currentDate`/`currentTime`, and `/api/state` reads it back. tsc + unit tests green.
+- Follow-up: a guarded live-tick that re-syncs the time only while the user is viewing today
+  (so the clock advances / rolls past midnight without overriding manual day navigation).
