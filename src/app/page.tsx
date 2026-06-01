@@ -3,12 +3,12 @@
 import { Archive, Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
 import { Dispatch, DragEvent, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
-import type { AppState, DayPlan, PlanItem } from "@/lib/types";
+import type { AppState, DayPlan, Folder, PlanItem } from "@/lib/types";
 
 type ApiPayload = { state: AppState; plan: DayPlan };
 type PostFn = (url: string, body?: Record<string, unknown>) => Promise<void>;
-type SecondaryView = "Domains" | "Projects" | "Tasks" | "Planning preferences" | "AI activity";
-const secondaryViews: SecondaryView[] = ["Domains", "Projects", "Tasks", "Planning preferences", "AI activity"];
+type SecondaryView = "Folders" | "Tasks" | "Planning preferences" | "AI activity";
+const secondaryViews: SecondaryView[] = ["Folders", "Tasks", "Planning preferences", "AI activity"];
 const showAiDebugTrace = process.env.NODE_ENV !== "production";
 
 export default function Home() {
@@ -941,9 +941,6 @@ async function responseError(response: Response): Promise<string> {
   }
 }
 
-const projectKinds = ["project", "area", "person", "list", "idea_pool", "maintenance"] as const;
-const planningModes = ["deadline_driven", "maintenance", "suggestion_pool", "relationship", "open_backlog"] as const;
-const projectStatuses = ["active", "paused", "completed"] as const;
 const taskStatuses = ["active", "scheduled", "completed", "deferred", "blocked", "waiting", "archived"] as const;
 const completionBehaviors = ["exhaust_once", "repeatable", "keep_as_suggestion", "regenerate_after_completion"] as const;
 const completionModes = ["simple_done", "outcome_done", "timebox", "repeatable_checkoff", "progress_accumulating", "suggestion_used"] as const;
@@ -951,7 +948,7 @@ const completionModes = ["simple_done", "outcome_done", "timebox", "repeatable_c
 function submitStructureForm(
   event: FormEvent<HTMLFormElement>,
   post: PostFn,
-  entity: "domain" | "project" | "task" | "routine",
+  entity: "domain" | "project" | "task" | "routine" | "folder",
   action: "create" | "update",
   id?: string
 ) {
@@ -964,11 +961,22 @@ function submitStructureForm(
   });
 }
 
-function structurePatch(entity: "domain" | "project" | "task" | "routine", formData: FormData): Record<string, unknown> {
+function structurePatch(entity: "domain" | "project" | "task" | "routine" | "folder", formData: FormData): Record<string, unknown> {
   if (entity === "domain") {
     return {
       name: fieldText(formData, "name"),
       weight: fieldNumber(formData, "weight")
+    };
+  }
+
+  if (entity === "folder") {
+    return {
+      name: fieldText(formData, "name"),
+      // Empty string = top level; state.ts treats "" as clearing the parent.
+      parentFolderId: fieldText(formData, "parentFolderId"),
+      weight: fieldNumber(formData, "weight"),
+      canBlock: formData.get("canBlock") === "on",
+      defaultBlockMinutes: fieldNumber(formData, "defaultBlockMinutes")
     };
   }
 
@@ -1019,8 +1027,9 @@ function structurePatch(entity: "domain" | "project" | "task" | "routine", formD
   return {
     repeatPolicy,
     title: fieldText(formData, "title"),
-    domainId: fieldText(formData, "domainId"),
-    projectId: fieldText(formData, "projectId"),
+    // Folders are canonical (T088): the single folder picker drives placement; state.ts re-derives
+    // domainId/projectId from folderId.
+    folderId: fieldText(formData, "folderId"),
     parentTaskId: fieldText(formData, "parentTaskId"),
     status: fieldText(formData, "status"),
     priority,
@@ -1073,7 +1082,6 @@ function SecondaryPanel({
   organizerRunning: boolean;
 }) {
   const taskGroups = buildTaskGroups(state, plan);
-  const projectSummaries = buildProjectSummaries(state);
   const backlogSummary = buildBacklogSummary(state, plan);
 
   return (
@@ -1082,123 +1090,7 @@ function SecondaryPanel({
         <X size={18} />
       </button>
       <p className="eyebrow">{view}</p>
-      {view === "Domains" && (
-        <div className="panelGrid">
-          <form className="structureForm" aria-label="Create domain" onSubmit={(event) => submitStructureForm(event, post, "domain", "create")}>
-            <h2>New domain</h2>
-            <input name="name" placeholder="Domain name" aria-label="Domain name" />
-            <input name="weight" type="number" min="1" max="10" defaultValue="5" aria-label="Domain weight" />
-            <button type="submit">
-              <Plus size={15} />
-              Add
-            </button>
-          </form>
-          {state.domains.map((domain) => (
-            <article key={domain.id} className="editableCard">
-              <form onSubmit={(event) => submitStructureForm(event, post, "domain", "update", domain.id)}>
-                <input name="name" defaultValue={domain.name} aria-label={`Name ${domain.name}`} />
-                <input name="weight" type="number" min="1" max="10" defaultValue={domain.weight} aria-label={`Weight ${domain.name}`} />
-                <button type="submit" aria-label={`Save ${domain.name}`}>
-                  <Save size={15} />
-                </button>
-              </form>
-              <span>Weight {domain.weight}</span>
-            </article>
-          ))}
-        </div>
-      )}
-      {view === "Projects" && (
-        <div className="panelGrid">
-          <form className="structureForm" aria-label="Create project" onSubmit={(event) => submitStructureForm(event, post, "project", "create")}>
-            <h2>New project</h2>
-            <input name="name" placeholder="Project name" aria-label="Project name" />
-            <select name="domainId" aria-label="Project domain" defaultValue={state.domains[0]?.id}>
-              {state.domains.map((domain) => (
-                <option value={domain.id} key={domain.id}>
-                  {domain.name}
-                </option>
-              ))}
-            </select>
-            <select name="kind" aria-label="Project kind" defaultValue="project">
-              {projectKinds.map((kind) => (
-                <option value={kind} key={kind}>
-                  {kind}
-                </option>
-              ))}
-            </select>
-            <select name="planningMode" aria-label="Planning mode" defaultValue="open_backlog">
-              {planningModes.map((mode) => (
-                <option value={mode} key={mode}>
-                  {mode}
-                </option>
-              ))}
-            </select>
-            <input name="defaultBlockMinutes" type="number" min="5" max="480" defaultValue="60" aria-label="Default block minutes" />
-            <button type="submit">
-              <Plus size={15} />
-              Add
-            </button>
-          </form>
-          {projectSummaries.map(({ project, activeTasks, nextTasks }) => (
-            <article key={project.id} className="projectCard">
-              <form className="stackedEditForm" onSubmit={(event) => submitStructureForm(event, post, "project", "update", project.id)}>
-                <input name="name" defaultValue={project.name} aria-label={`Name ${project.name}`} />
-                <select name="domainId" defaultValue={project.domainId} aria-label={`Domain ${project.name}`}>
-                  {state.domains.map((domain) => (
-                    <option value={domain.id} key={domain.id}>
-                      {domain.name}
-                    </option>
-                  ))}
-                </select>
-                <select name="kind" defaultValue={project.kind} aria-label={`Kind ${project.name}`}>
-                  {projectKinds.map((kind) => (
-                    <option value={kind} key={kind}>
-                      {kind}
-                    </option>
-                  ))}
-                </select>
-                <select name="planningMode" defaultValue={project.planningMode} aria-label={`Planning mode ${project.name}`}>
-                  {planningModes.map((mode) => (
-                    <option value={mode} key={mode}>
-                      {mode}
-                    </option>
-                  ))}
-                </select>
-                <select name="status" defaultValue={project.status} aria-label={`Status ${project.name}`}>
-                  {projectStatuses.map((status) => (
-                    <option value={status} key={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-                <input name="defaultBlockMinutes" type="number" min="5" max="480" defaultValue={project.defaultBlockMinutes} aria-label={`Minutes ${project.name}`} />
-                <textarea name="contextNote" defaultValue={project.contextNote} aria-label={`Context ${project.name}`} />
-                <div className="formActions">
-                  <button type="submit" aria-label={`Save ${project.name}`}>
-                    <Save size={15} />
-                    Save
-                  </button>
-                  <button type="button" onClick={() => post("/api/structure", { entity: "project", action: "archive", id: project.id })}>
-                    <Archive size={15} />
-                    Pause
-                  </button>
-                </div>
-              </form>
-              <span>
-                {project.kind} - {project.planningMode} - {activeTasks.length} active - {project.defaultBlockMinutes}m
-              </span>
-              <div className="projectTaskList">
-                {nextTasks.length === 0 && <small>No active child tasks.</small>}
-                {nextTasks.map((task) => (
-                  <small key={task.id}>
-                    {task.title} · {task.effortMinutes}m · {dateIntentLabel(task)}
-                  </small>
-                ))}
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
+      {view === "Folders" && <FoldersPanel state={state} post={post} />}
       {view === "Tasks" && (
         <div className="taskSections">
           <details className="backlogBoardWrap" open>
@@ -1208,21 +1100,7 @@ function SecondaryPanel({
           <form className="structureForm wideStructureForm" aria-label="Create task" onSubmit={(event) => submitStructureForm(event, post, "task", "create")}>
             <h2>New task</h2>
             <input name="title" placeholder="Task title" aria-label="Task title" />
-            <select name="domainId" aria-label="Task domain" defaultValue={state.domains[0]?.id}>
-              {state.domains.map((domain) => (
-                <option value={domain.id} key={domain.id}>
-                  {domain.name}
-                </option>
-              ))}
-            </select>
-            <select name="projectId" aria-label="Task project" defaultValue="">
-              <option value="">No project</option>
-              {state.projects.filter((project) => project.status === "active").map((project) => (
-                <option value={project.id} key={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+            <FolderPicker state={state} ariaLabel="Task folder" defaultValue="" includeNone />
             <input name="effortMinutes" type="number" min="1" max="720" defaultValue="30" aria-label="Task minutes" />
             <input name="dueDate" type="date" aria-label="Task due date" />
             <button type="submit">
@@ -1271,21 +1149,7 @@ function SecondaryPanel({
                       <summary>Edit</summary>
                       <form onSubmit={(event) => submitStructureForm(event, post, "task", "update", task.id)}>
                         <input name="title" defaultValue={task.title} aria-label={`Title ${task.title}`} />
-                        <select name="domainId" defaultValue={task.domainId} aria-label={`Domain ${task.title}`}>
-                          {state.domains.map((domain) => (
-                            <option value={domain.id} key={domain.id}>
-                              {domain.name}
-                            </option>
-                          ))}
-                        </select>
-                        <select name="projectId" defaultValue={task.projectId ?? ""} aria-label={`Project ${task.title}`}>
-                          <option value="">No project</option>
-                          {state.projects.filter((project) => project.status === "active").map((project) => (
-                            <option value={project.id} key={project.id}>
-                              {project.name}
-                            </option>
-                          ))}
-                        </select>
+                        <FolderPicker state={state} ariaLabel={`Folder ${task.title}`} defaultValue={task.folderId ?? ""} includeNone />
                         <select name="status" defaultValue={task.status} aria-label={`Status ${task.title}`}>
                           {taskStatuses.map((status) => (
                             <option value={status} key={status}>
@@ -1490,6 +1354,184 @@ function SecondaryPanel({
   );
 }
 
+// --- Folders (T088) ---------------------------------------------------------------------------
+// Folders are the canonical nested structure. These helpers/components render them as a tree and
+// drive task placement via a single folder picker.
+
+function activeFolders(state: AppState): Folder[] {
+  return (state.folders ?? []).filter((folder) => folder.status !== "archived");
+}
+
+// Full "Parent / Child / Grandchild" path for a folder, walking parentFolderId. Guards cycles.
+function folderPath(state: AppState, folderId: string): string {
+  const folders = state.folders ?? [];
+  const names: string[] = [];
+  const seen = new Set<string>();
+  let current = folders.find((folder) => folder.id === folderId);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    names.unshift(current.name);
+    current = current.parentFolderId ? folders.find((folder) => folder.id === current!.parentFolderId) : undefined;
+  }
+  return names.join(" / ");
+}
+
+// True if `nodeId` is within the subtree rooted at `ancestorId` (UI cycle guard for parent select).
+function isFolderDescendantOfClient(state: AppState, nodeId: string, ancestorId: string): boolean {
+  const folders = state.folders ?? [];
+  let current = folders.find((folder) => folder.id === nodeId);
+  const seen = new Set<string>();
+  while (current?.parentFolderId && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.parentFolderId === ancestorId) return true;
+    current = folders.find((folder) => folder.id === current!.parentFolderId);
+  }
+  return false;
+}
+
+// A <select name="folderId"> listing every active folder by full path. Used by both the task
+// editor and the new-task form (folderId is canonical for grouping).
+function FolderPicker({
+  state,
+  ariaLabel,
+  defaultValue,
+  includeNone
+}: {
+  state: AppState;
+  ariaLabel: string;
+  defaultValue: string;
+  includeNone?: boolean;
+}) {
+  const folders = activeFolders(state).slice().sort((a, b) => folderPath(state, a.id).localeCompare(folderPath(state, b.id)));
+  return (
+    <select name="folderId" aria-label={ariaLabel} defaultValue={defaultValue}>
+      {includeNone && <option value="">No folder</option>}
+      {folders.map((folder) => (
+        <option value={folder.id} key={folder.id}>
+          {folderPath(state, folder.id)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function FoldersPanel({ state, post }: { state: AppState; post: PostFn }) {
+  const folders = activeFolders(state);
+  const childrenOf = (parentId: string | undefined) =>
+    folders.filter((folder) => (folder.parentFolderId ?? undefined) === parentId).sort((a, b) => a.name.localeCompare(b.name));
+  const taskCount = (folderId: string) =>
+    state.tasks.filter((task) => task.folderId === folderId && task.status !== "archived").length;
+
+  function renderFolder(folder: Folder, depth: number) {
+    const parentOptions = folders.filter(
+      (candidate) => candidate.id !== folder.id && !isFolderDescendantOfClient(state, candidate.id, folder.id)
+    );
+    return (
+      <div className="folderTreeNode" key={folder.id}>
+        <article className="folderRow" style={{ marginLeft: depth * 18 }}>
+          <details className="inlineEditor">
+            <summary>
+              <span className="folderName">{folder.name}</span>
+              <span className="folderMeta">
+                {taskCount(folder.id)} task{taskCount(folder.id) === 1 ? "" : "s"}
+                {folder.canBlock ? ` · blocks ${folder.defaultBlockMinutes ?? 30}m` : ""}
+              </span>
+            </summary>
+            <form onSubmit={(event) => submitStructureForm(event, post, "folder", "update", folder.id)}>
+              <input name="name" defaultValue={folder.name} aria-label={`Folder name ${folder.name}`} />
+              <label className="fieldLabel">
+                Parent folder
+                <select name="parentFolderId" defaultValue={folder.parentFolderId ?? ""} aria-label={`Parent folder ${folder.name}`}>
+                  <option value="">(top level)</option>
+                  {parentOptions.map((candidate) => (
+                    <option value={candidate.id} key={candidate.id}>
+                      {folderPath(state, candidate.id)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="compactFields">
+                <label className="fieldLabel">
+                  Weight
+                  <input name="weight" type="number" min="1" max="10" defaultValue={folder.weight ?? 5} aria-label={`Weight ${folder.name}`} />
+                </label>
+                <label className="fieldLabel">
+                  Block (min)
+                  <input
+                    name="defaultBlockMinutes"
+                    type="number"
+                    min="5"
+                    max="480"
+                    defaultValue={folder.defaultBlockMinutes ?? 30}
+                    aria-label={`Default block minutes ${folder.name}`}
+                  />
+                </label>
+              </div>
+              <label className="fieldLabel folderCheckbox">
+                <input type="checkbox" name="canBlock" defaultChecked={folder.canBlock ?? false} aria-label={`Can block ${folder.name}`} />
+                Can block (schedule as a focus block)
+              </label>
+              <div className="formActions">
+                <button type="submit" aria-label={`Save ${folder.name}`}>
+                  <Save size={15} />
+                  Save
+                </button>
+                <button type="button" onClick={() => post("/api/structure", { entity: "folder", action: "archive", id: folder.id })}>
+                  <Archive size={15} />
+                  Archive
+                </button>
+              </div>
+            </form>
+          </details>
+        </article>
+        {childrenOf(folder.id).map((child) => renderFolder(child, depth + 1))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="foldersPanel">
+      <form className="structureForm" aria-label="Create folder" onSubmit={(event) => submitStructureForm(event, post, "folder", "create")}>
+        <h2>New folder</h2>
+        <input name="name" placeholder="Folder name" aria-label="Folder name" />
+        <select name="parentFolderId" aria-label="New folder parent" defaultValue="">
+          <option value="">(top level)</option>
+          {folders
+            .slice()
+            .sort((a, b) => folderPath(state, a.id).localeCompare(folderPath(state, b.id)))
+            .map((folder) => (
+              <option value={folder.id} key={folder.id}>
+                {folderPath(state, folder.id)}
+              </option>
+            ))}
+        </select>
+        <div className="compactFields">
+          <label className="fieldLabel">
+            Weight
+            <input name="weight" type="number" min="1" max="10" defaultValue="5" aria-label="New folder weight" />
+          </label>
+          <label className="fieldLabel">
+            Block (min)
+            <input name="defaultBlockMinutes" type="number" min="5" max="480" defaultValue="30" aria-label="New folder block minutes" />
+          </label>
+        </div>
+        <label className="fieldLabel folderCheckbox">
+          <input type="checkbox" name="canBlock" aria-label="New folder can block" />
+          Can block (schedule as a focus block)
+        </label>
+        <button type="submit">
+          <Plus size={15} />
+          Add
+        </button>
+      </form>
+      <div className="folderTree" aria-label="Folder tree">
+        {folders.length === 0 && <p className="emptyPanel">No folders yet.</p>}
+        {childrenOf(undefined).map((folder) => renderFolder(folder, 0))}
+      </div>
+    </div>
+  );
+}
+
 function PlanItemMeta({ item }: { item: PlanItem }) {
   return (
     <div className="metaRow">
@@ -1545,17 +1587,6 @@ function buildTaskGroups(state: AppState, plan: DayPlan): { title: string; descr
     { title: "Background / phased", description: "Work that can overlap, run passively, or return in phases.", tasks: sortTasks(background) },
     { title: "Loose backlog", description: "Active tasks without a strong date intent yet.", tasks: sortTasks(loose) }
   ];
-}
-
-function buildProjectSummaries(state: AppState) {
-  return state.projects.map((project) => {
-    const activeTasks = state.tasks.filter((task) => task.projectId === project.id && !["completed", "archived"].includes(task.status));
-    return {
-      project,
-      activeTasks,
-      nextTasks: sortTasks(activeTasks).slice(0, 3)
-    };
-  });
 }
 
 function buildBacklogSummary(state: AppState, plan: DayPlan) {
