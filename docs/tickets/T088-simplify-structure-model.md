@@ -42,16 +42,18 @@ Domains/Projects admin panels.
 
 ## Decisions (confirmed)
 
-1. **Single-level folders** — flat categories (folders hold tasks, no sub-folders). Replaces
-   domains + projects with one `folder` concept.
-2. **Routine = a task flag** — remove the RoutineTemplate entity; a task carries a `recurring`
-   flag + recurrence. Migrate existing routines to flagged tasks.
-3. **Keep folder blocks** — a folder can still render as a grouped block of its tasks on the day
-   (the project-block feature is recast onto folders).
+1. **Nested folders (multi-level)** — a real folder tree: a folder has an optional `parentFolderId`
+   and can contain both sub-folders and tasks, to arbitrary depth (with cycle prevention). Replaces
+   domains + projects with one recursive `folder` concept. This makes migration clean: each domain
+   becomes a top-level folder and each project becomes a child folder under its domain.
+2. **Routine = a task flag** — remove the RoutineTemplate entity; recurrence lives on the task's
+   `repeatPolicy` (done in T088-part). Migrate existing routines to recurring tasks.
+3. **Keep folder blocks** — a folder can render as a grouped block of its tasks on the day (the
+   project-block feature is recast onto folders).
 
-Implication: a "folder" merges today's domain + project roles into one flat level that can
-optionally behave as a day block; recurrence lives on tasks; the Domains/Projects/Routines admin
-panels collapse into one Folders panel + task flags.
+Implication: "folder" is a recursive tree merging today's domain + project roles; recurrence lives
+on tasks; the Domains/Projects/Routines admin panels collapse into one Folders tree panel + task
+flags.
 
 ## Acceptance Criteria
 
@@ -64,11 +66,13 @@ panels collapse into one Folders panel + task flags.
 
 ### Target end-state model
 
-- `Folder { id, name, weight, canBlock?: boolean, defaultBlockMinutes?, contextNote? }` — replaces
-  both `Domain` and `Project` (single flat level). The block-relevant Project attributes
-  (defaultBlockMinutes, the "appears as a block" idea) move onto Folder; `kind`/`planningMode`/
-  `priorityWeight`/`status` are dropped (or `status` kept as active/archived only).
-- `Task.folderId` (replaces `domainId`); **remove `projectId`**. `parentTaskId` stays (subtasks).
+- `Folder { id, name, parentFolderId?: string, weight?, canBlock?: boolean, defaultBlockMinutes?, contextNote? }`
+  — a recursive tree replacing both `Domain` and `Project`. `parentFolderId` null = top level;
+  arbitrary depth with cycle prevention (reuse the `isDescendantOf` pattern from T076). Block-
+  relevant Project attributes (defaultBlockMinutes, `canBlock`) move onto Folder; `kind`/
+  `planningMode`/`priorityWeight` dropped; `status` kept as active/archived only.
+- `Task.folderId` (replaces `domainId`); **remove `projectId`**. A task lives in exactly one folder
+  at any level. `parentTaskId` stays (task subtasks — orthogonal to the folder tree).
 - `FolderBlockSelection { date, folderId, selectedTaskIds, updatedAt }` — renamed
   ProjectBlockSelection (keep folder blocks).
 - **Remove `RoutineTemplate`**; recurrence already lives on tasks (`repeatPolicy`, done in T088-part).
@@ -79,33 +83,40 @@ panels collapse into one Folders panel + task flags.
 ### Decisions to confirm before coding
 
 1. **Internal rename vs UI-relabel.** Cleanest is to rename `domain`→`folder` everywhere (kills
-   confusing tech debt) — but that's the bulk of the mechanical churn (~150 `domain*` refs). Lower
-   effort: keep internal `domainId` naming, only remove `project` and relabel "Domain"→"Folder" in
-   the UI. RECOMMEND the full internal rename for a genuinely simple model.
-2. **Folder-as-block trigger.** How does a folder become a day block? Options: a `canBlock` flag on
-   the folder, or "any folder with N+ scheduled tasks renders as a block". RECOMMEND a `canBlock`
-   flag (explicit, predictable).
-3. **AI action shape.** Drop `create_project`/`create_routine`. Grouping (T062) becomes
-   `create_folder` + create_task with `folderName`; recurring capture sets `repeatPolicy` on a
-   create_task instead of `create_routine`. Confirm the action enum change.
-4. **Postgres now or later.** The normalized Postgres projection (pg-state-repository.mjs ~83 refs +
+   confusing tech debt) — but it's the bulk of the mechanical churn (~150 `domain*` refs). Lower
+   effort: keep internal `domainId` naming, only remove `project` and relabel in the UI. RECOMMEND
+   the full internal rename for a genuinely simple model.
+2. **Folder block scope (NEW with nesting).** When a folder renders as a day block, does it include
+   only its DIRECT-child tasks, or all tasks in its subtree (descendant folders too)? RECOMMEND
+   direct-child tasks (predictable, avoids a giant block); the tree view shows the full hierarchy
+   separately. Pairs with an explicit `canBlock` flag on the folder.
+3. **Folder rollups recursive.** Folder task counts / effort in the tree aggregate the whole subtree
+   (like `childStats` for tasks). Scheduling stays task-level (folders only group, they aren't
+   scheduled), so no double-counting.
+4. **AI action shape.** Drop `create_project`/`create_routine`. Grouping (T062) becomes
+   `create_folder` (with optional `parentFolderName` so the model can nest) + create_task with
+   `folderName`; recurring capture sets `repeatPolicy` on a create_task. Confirm the enum change.
+5. **Postgres now or later.** The normalized Postgres projection (pg-state-repository.mjs ~83 refs +
    migrations 001/002/004/008) maps projects/routines/domains to tables. Default dev is in-memory,
-   so RECOMMEND: do the in-memory/file path now; stage the Postgres schema migration as a
-   follow-up (T077-adjacent) unless the durable path is in active use.
+   so RECOMMEND: do the in-memory/file path now; stage the Postgres schema migration (self-
+   referencing folders table) as a follow-up unless the durable path is in active use.
 
 ### File-by-file change map
 
-- **src/lib/types.ts** — add `Folder`; remove `Project`, `RoutineTemplate`, `ContainerKind`,
-  `PlanningMode` (if unused elsewhere); rename `ProjectBlockSelection`→`FolderBlockSelection`;
-  Task `domainId`→`folderId`, drop `projectId`; AppState `domains`+`projects`→`folders`,
-  `projectBlockSelections`→`folderBlockSelections`, drop `routines`; AiAction enum drop
-  create_project/create_routine (+ add create_folder); drop `RepeatPolicy`? (no, keep).
+- **src/lib/types.ts** — add `Folder` (with `parentFolderId?`); remove `Project`,
+  `RoutineTemplate`, `ContainerKind`, `PlanningMode` (if unused); rename
+  `ProjectBlockSelection`→`FolderBlockSelection`; Task `domainId`→`folderId`, drop `projectId`;
+  AppState `domains`+`projects`→`folders`, `projectBlockSelections`→`folderBlockSelections`, drop
+  `routines`; AiAction enum drop create_project/create_routine, add create_folder; action schema
+  `projectName`→`folderName` + add `parentFolderName` (so the AI can nest).
 - **src/lib/seed.ts** (~25 refs) — seed `folders` + tasks with `folderId`; convert seed routines to
   recurring tasks; drop project seeds.
 - **src/lib/scenarios.ts** (~61 refs) — realistic-character state rebuilt on folders + recurring
   tasks (no projects/routines).
-- **src/lib/repository.ts** — `normalizeState`: migrate any old-shape state (domains+projects→
-  folders; routines→tasks; task.domainId/projectId→folderId); seed a default folder if empty.
+- **src/lib/repository.ts** — `normalizeState` migration: each domain → a top-level folder; each
+  project → a child folder with `parentFolderId` = its domain's folder; task.projectId → that
+  project's folder, else task.domainId → that domain's folder; routines → recurring tasks under
+  their domain's folder; seed a default folder if empty. (Clean, lossless thanks to nesting.)
 - **src/lib/planner.ts** — `isRoutineDue`/routine-instance loop (line 126) removed (recurring tasks
   already handled by `isRepeatPolicyDue`); project blocks (148-207) rekeyed to folders
   (`tasksByFolder`, `shouldAppearInFolderBlock` via folder.canBlock); `projectBlockSelectionOverride`/
@@ -117,16 +128,19 @@ panels collapse into one Folders panel + task flags.
   flag); `findProjectId`/`findProjectName`/`findDomainId`→folder equivalents; `linkPendingProject`→
   `linkPendingFolder`; capture-revision `projectName`/`domainName`→`folderName`.
 - **src/lib/state.ts** — `StructureMutation`: collapse domain/project/routine entities to one
-  `folder` entity (+ keep task); `applyStructureMutation` folder create/update/archive; task
-  create/update folderId (drop projectId inheritance); project-block-selection→folder-block;
-  remove routine CRUD; `validProjectId`/`findProject`→folder; `schedulingForMode`/grouping helpers
-  unaffected.
-- **src/app/page.tsx** — `secondaryViews`: `["Folders","Tasks","Planning preferences","AI activity"]`
-  (drop Domains/Projects/Routines, add Folders); one Folders admin panel (name/weight/canBlock/
-  block-minutes); task create/edit: single `folderId` selector (drop project selector); remove the
-  Routines panel (recurrence is the per-task Repeats control, already added); project drawer →
-  folder-block drawer; `projectKinds`/`planningModes` consts removed; `buildProjectSummaries`/
-  `projectName` helpers → folder.
+  `folder` entity (create/update/archive) with `parentFolderId` + a `resolveFolderParent` cycle
+  guard (mirror `resolveParentForChild` from T076); `applyStructureMutation` folder ops; task
+  create/update sets `folderId` (drop projectId inheritance); project-block-selection→folder-block;
+  remove routine CRUD; `validProjectId`/`findProject`→folder; grouping helpers (`linkPendingProject`
+  → folder, by name/path). Add a recursive `folderRollup`/`tasksInSubtree` helper.
+- **src/app/page.tsx** — `secondaryViews`: drop Domains/Projects/Routines, add **Folders** (a
+  collapsible TREE, not a flat list); folder create/edit with a parent-folder selector (+ cycle
+  guard) and canBlock/block-minutes; task create/edit: a **path-style folder selector** ("Work /
+  Client X") replacing the domain+project selectors; remove the Routines panel (recurrence is the
+  per-task Repeats control, already added); project drawer → folder-block drawer;
+  `projectKinds`/`planningModes` removed; `buildProjectSummaries`/`projectName` → folder + a tree
+  builder + recursive rollup display. (Nesting adds the most NEW UI here: tree render, path picker,
+  breadcrumbs.)
 - **db/migrations + scripts/pg-state-repository.mjs** — (if doing Postgres now) new migration:
   folders table, task.folder_id, drop/retire projects/routines/project_block_selections tables;
   update the projection read/write (~83 refs).
