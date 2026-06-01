@@ -169,3 +169,21 @@ flags.
   tsc+unit-tests green after each numbered step, and BROWSER-VERIFY the new Folders UX (nav, task
   editor, folder block on the day) before merge — the unit tests can't see the visual reshape.
 - Keep `normalizeState` migrating old in-memory/file state so existing data isn't lost.
+
+---
+
+## Status: COMPLETE (all stages shipped on `t088-folders`)
+
+Executed via expand-contract so each commit was green (tsc + vitest):
+
+- **Stage 1** — routines are a per-task `repeatPolicy` flag; `RoutineTemplate`/`AppState.routines` removed; planner/UI/evals retargeted to recurring tasks.
+- **Stage 2a** — additive `Folder`/`FolderBlockSelection` types, derived from domains+projects.
+- **Stage 2b core** — inverted derivation: `folders`/`folderId`/`folderBlockSelections` canonical; domains/projects derived for back-compat. Added the `folder` structure mutation (cycle-guarded).
+- **Stage 2b-UI** — Domains+Projects admin panels replaced by a single nested **Folders tree**; task editor uses one path-style **folder picker**.
+- **Stage 2c-A** — focus blocks anchor on `canBlock` folders with **full-subtree** gathering (`blockFolderId` = nearest ancestor-or-self canBlock folder); `project_block`→`folder_block`; block selection/completion/drawer on `folderId` + `folderBlockSelections`.
+- **Stage 2c-B** — AI contract speaks folders: `create_folder` + `folderName`/`parentFolderName`, `create_project`/`create_routine` dropped (recurring habits = `create_task` + `recurrenceDays`); prompt, model context, fixtures, resolution, and capture-revision all migrated.
+- **Stage 2c-C** — legacy model **removed**: `Domain`/`Project`/`Area`/`Container`/`ProjectBlockSelection` types, `AppState.domains`/`projects`/`projectBlockSelections`, `task.domainId`/`projectId` deleted. `folders`+`folderBlockSelections` now required. `normalizeState` is a one-way forward migration that folds old saved states into folders then deletes the legacy fields.
+
+Postgres projection: **deferred** (in-memory/file repositories only), per decision.
+
+**Verification:** tsc clean; 62 vitest pass / 1 skipped (Postgres test, `DATABASE_URL` unset); SSR `/`, `/api/state`, `/api/debug` → 200 in fixture mode; fixture AI evals 18/18 (agent run). The visual Folders UX (tree, picker, folder-block drawer, drag) still warrants a **browser pass by the user** — unit tests can't see the reshape, and this clone's browser isn't drivable from here.
