@@ -791,7 +791,12 @@ export function answerCaptureQuestion(sessionId: string, questionId: string, ans
   return getState();
 }
 
-export async function addCaptureSessionMessage(sessionId: string, message: string, interpreter?: AiRevisionInterpreter): Promise<AppState> {
+export async function addCaptureSessionMessage(
+  sessionId: string,
+  message: string,
+  interpreter?: AiRevisionInterpreter,
+  actionInterpreter?: AiInterpreter
+): Promise<AppState> {
   const state = currentState();
   const session = state.captureSessions.find((candidate) => candidate.id === sessionId);
   const trimmed = message.trim();
@@ -839,8 +844,8 @@ export async function addCaptureSessionMessage(sessionId: string, message: strin
   }
 
   const target = findSessionTaskTarget(state, session);
-  if (!target) {
-    addAssistantSessionMessage(state, session, "I kept that note with the capture, but there is no task draft to update yet.");
+  if (!target || looksLikeBroadStateFollowUp(trimmed)) {
+    await applyFullContextFollowUp(state, session, trimmed, actionInterpreter);
     session.updatedAt = timestampForState(state);
     return getState();
   }
@@ -900,6 +905,72 @@ export async function addCaptureSessionMessage(sessionId: string, message: strin
   );
   session.updatedAt = timestampForState(state);
   return getState();
+}
+
+async function applyFullContextFollowUp(
+  state: AppState,
+  session: CaptureSession,
+  message: string,
+  interpreter?: AiInterpreter
+): Promise<void> {
+  const entry = await interpretInboxInput(message, state, interpreter);
+  entry.captureSessionId = session.id;
+  for (const action of entry.actions) {
+    action.captureSessionId = session.id;
+    action.sourceMessageId = entry.id;
+    if (action.type === "ask_clarification") {
+      pushUnique(session.draftActionIds, action.id);
+      const question = buildClarificationQuestion(state, action);
+      action.pendingQuestionId = question.id;
+      session.questions.push(question);
+      session.unresolvedFields.push(question.kind);
+      session.messages.push({
+        id: nextId("message"),
+        role: "assistant",
+        content: question.question,
+        createdAt: timestampForState(state)
+      });
+    }
+    session.actionIds.push(action.id);
+  }
+
+  for (const action of [...entry.actions].sort((left, right) => applyRank(left) - applyRank(right))) {
+    applyAutoAction(state, action, message);
+    recordAppliedEntity(session, action);
+    if (action.appliedEntityId && action.type !== "ask_clarification") {
+      recordRevisionEvent(state, session, {
+        source: "follow_up",
+        actionId: action.id,
+        taskId: action.type === "create_folder" ? undefined : action.appliedEntityId,
+        model: action.model,
+        confidence: action.validationErrors?.length ? 0.4 : 0.8,
+        summary: entry.summary,
+        changes: [action.label],
+        after: action.type === "create_folder" ? undefined : taskSnapshotById(state, action.appliedEntityId)
+      });
+    }
+  }
+
+  state.inbox.unshift(entry);
+  session.status = session.questions.some((question) => question.status === "pending")
+    ? "waiting_for_user"
+    : entry.actions.every((action) => action.status === "applied")
+      ? "applied"
+      : "open";
+  addAssistantSessionMessage(
+    state,
+    session,
+    entry.actions.length ? `Updated the planner: ${entry.summary}` : `I checked the planner and did not make changes: ${entry.summary}`
+  );
+}
+
+function looksLikeBroadStateFollowUp(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    /\b(folder|folders|project|projects|category|categories|personal stuff|regular tasks|not in a folder|shouldn'?t be in a folder|separate personal project|seperate personal project)\b/.test(
+      lower
+    ) || /\b(these|those|all of|the .* stuff|schematisis stuff|to do app)\b/.test(lower)
+  );
 }
 
 export function dismissCaptureSession(sessionId: string): AppState {
@@ -1093,7 +1164,30 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
       action.skippedReason = "Could not find the task to update.";
       return;
     }
-    const payload = action.payload as { priority?: number; importance?: number; urgency?: number; dateIntent?: string; scheduledDate?: string; dueDate?: string };
+    const payload = action.payload as {
+      priority?: number;
+      importance?: number;
+      urgency?: number;
+      dateIntent?: string;
+      scheduledDate?: string;
+      dueDate?: string;
+      folderName?: string;
+      clearFolder?: boolean;
+    };
+    if (payload.clearFolder) {
+      task.folderId = undefined;
+      task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "atomic";
+    } else if (payload.folderName) {
+      const folder = findFolderMention(state, payload.folderName);
+      if (folder) {
+        task.folderId = folder.id;
+        task.type = folder.parentFolderId ? "project_task" : task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "atomic";
+      } else {
+        action.status = "failed";
+        action.skippedReason = "Could not find the folder to move the task.";
+        return;
+      }
+    }
     if (typeof payload.priority === "number") task.priority = clampTaskScore(payload.priority);
     if (typeof payload.importance === "number") task.importance = clampTaskScore(payload.importance);
     if (typeof payload.urgency === "number") task.urgency = clampTaskScore(payload.urgency);

@@ -153,8 +153,9 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "For a request to collect reusable ideas or suggestions — a list the user would draw from repeatedly rather than complete once — use ask_clarification with completionBehavior keep_as_suggestion and completionMode suggestion_used, asking whether to keep it as a reusable suggestion list. Such a list is never 'done', so do not frame it as clarificationKind definition_of_done; use completion_behavior. " +
     "For time-boxed work (wording like 'work on X for N hours/minutes'), return create_task with completionBehavior repeatable, completionMode timebox, the stated effort in minutes, and the matching existing folder if one exists. " +
     "When the user lists several tasks that belong to one piece of work, return a create_folder for that work (or reuse an existing folder by its exact name/path) and a create_task for each item with folderName set to that folder — not several unrelated flat tasks. Do NOT group unrelated errands (e.g. milk, bins, call dentist); leave those as separate simple tasks. " +
+    "When a message contains multiple distinct work areas, make separate folders for the separate areas (for example job work vs a personal project) and place only the tasks that belong there. Do not put job/work tasks into a personal project folder merely because they appeared in the same message. " +
     "A create_folder may set parentFolderName to nest under an existing folder; null means a top-level folder. " +
-    "folderName must be null unless it refers to an existing folder OR a folder being created earlier in the SAME batch (same-batch grouping, resolved at apply time). " +
+    "folderName must be null unless it refers to an existing folder OR a folder being created earlier in the SAME batch (same-batch grouping, resolved at apply time). For update_task, folderName null means leave placement unchanged; folderName \"\" means clear the task's folder so it appears as a normal unfiled/top-level task. " +
     "For explicit clock times, set scheduledDate and scheduledTime in 24-hour HH:mm format. If there is no exact clock time, scheduledTime must be null. Never output ':null' or string null values. " +
     "Interpret colloquial clock times into 24-hour HH:mm (for example an evening 'half past eleven' is 23:30) unless the user clearly means another time. " +
     "Do not invent exact dates for broad windows like 'sometime next week' or 'at some point this week'; set scheduledDate and dueDate to null and keep the date intent as a week-level window unless the user names a specific day or deadline. " +
@@ -952,7 +953,9 @@ function buildAction(
   // Capture the model's intended folder name/path from the RAW action (normalization nulls
   // folderName when the folder does not exist yet — which is exactly the same-batch grouping
   // case). Resolved to a folderId at apply time, after any create_folder in the batch runs.
-  const pendingFolderName = normalizedType === "create_task" ? cleanNullableString(rawAction.folderName) ?? undefined : undefined;
+  const pendingFolderName =
+    normalizedType === "create_task" || normalizedType === "update_task" ? cleanNullableString(rawAction.folderName) ?? undefined : undefined;
+  const shouldClearFolder = normalizedType === "update_task" && rawAction.folderName === "";
 
   return {
     id: nextId("action"),
@@ -970,7 +973,7 @@ function buildAction(
             name: action.title,
             parentFolderId: findFolderId(state, action.parentFolderName),
             canBlock: true,
-            defaultBlockMinutes: action.effortMinutes,
+            defaultBlockMinutes: action.effortMinutes <= 5 ? 60 : action.effortMinutes,
             contextNote: "",
             weight: action.priority
           }
@@ -997,9 +1000,15 @@ function buildAction(
                   ? {
                       taskId: action.targetTaskId,
                       title: targetTask?.title ?? action.title,
-                      priority: action.priority,
-                      importance: action.importance,
-                      urgency: action.urgency,
+                      folderName: cleanNullableString(rawAction.folderName) ?? undefined,
+                      clearFolder: shouldClearFolder,
+                      ...(shouldApplyScorePatch(sourceText, action)
+                        ? {
+                            priority: action.priority,
+                            importance: action.importance,
+                            urgency: action.urgency
+                          }
+                        : {}),
                       dateIntent: action.dateIntent ?? "unchanged",
                       scheduledDate: normalizeDate(action.scheduledDate ?? undefined, state.currentDate),
                       dueDate: normalizeDate(action.dueDate ?? undefined, state.currentDate)
@@ -1020,6 +1029,14 @@ function buildAction(
                       draftAction: taskPayload(state, { ...action, type: "create_task" }, inboxItemId, folderId, sourceText)
                     }
   };
+}
+
+function shouldApplyScorePatch(sourceText: string, action: ParsedAiAction): boolean {
+  return (
+    /\b(priority|prioritise|prioritize|important|importance|urgent|urgency|demote|promote|low[- ]value|high[- ]impact|not pressing|pressure)\b/i.test(
+      sourceText
+    ) || Boolean(action.dateIntent && action.dateIntent !== "unchanged")
+  );
 }
 
 // Materiality/rationale are derived from the model's own clarificationKind and effort

@@ -136,6 +136,82 @@ describe("state integration", () => {
     expect(updated?.urgency).toBe(1);
   });
 
+  it("applies broad capture follow-ups as full state edits so tasks can move or become unfiled", async () => {
+    const base = {
+      targetTaskId: null,
+      folderName: null as string | null,
+      parentFolderName: null as string | null,
+      dueDate: null,
+      scheduledDate: "2026-06-01",
+      scheduledTime: null,
+      effortMinutes: 30,
+      energy: "medium" as const,
+      strictness: "normal" as const,
+      priority: 3,
+      importance: 3,
+      urgency: 3,
+      recurrenceDays: null,
+      completionBehavior: null,
+      completionMode: null,
+      definitionOfDone: null,
+      tags: null,
+      question: null,
+      clarificationKind: null,
+      clarificationOptions: null,
+      schedulingMode: null,
+      dateIntent: "today" as const
+    };
+    const first = await submitInbox("today I need to export schematisis and tidy my room", async () => ({
+      model: "mixed-fixture",
+      summary: "Created mixed tasks.",
+      actions: [
+        { ...base, type: "create_task" as const, label: "Add Schematisis export", title: "Schematisis export", folderName: "Personal" },
+        { ...base, type: "create_task" as const, label: "Add Tidy room", title: "Tidy room dogfood", folderName: "Personal" }
+      ]
+    }));
+    const session = first.captureSessions[0];
+    const workTask = first.tasks.find((task) => task.title === "Schematisis export")!;
+    const personalTask = first.tasks.find((task) => task.title === "Tidy room dogfood")!;
+
+    const after = await addCaptureSessionMessage(
+      session.id,
+      "no im telling you schematisis should be a work folder and personal stuff shouldnt be in a folder",
+      undefined,
+      async () => ({
+        model: "broad-follow-up-fixture",
+        summary: "Separated work from unfiled personal tasks.",
+        actions: [
+          { ...base, type: "create_folder" as const, label: "Create Work", title: "Work", folderName: null, scheduledDate: null },
+          {
+            ...base,
+            type: "update_task" as const,
+            label: "Move Schematisis export to Work",
+            title: workTask.title,
+            targetTaskId: workTask.id,
+            folderName: "Work",
+            dateIntent: "unchanged" as const
+          },
+          {
+            ...base,
+            type: "update_task" as const,
+            label: "Make Tidy room unfiled",
+            title: personalTask.title,
+            targetTaskId: personalTask.id,
+            folderName: "",
+            dateIntent: "unchanged" as const
+          }
+        ]
+      })
+    );
+
+    const workFolder = after.folders.find((folder) => folder.name === "Work");
+    expect(workFolder).toBeDefined();
+    expect(after.tasks.find((task) => task.id === workTask.id)?.folderId).toBe(workFolder!.id);
+    expect(after.tasks.find((task) => task.id === workTask.id)?.priority).toBe(workTask.priority);
+    expect(after.tasks.find((task) => task.id === personalTask.id)?.folderId).toBeUndefined();
+    expect(after.captureSessions[0].messages.some((message) => /Updated the planner/i.test(message.content))).toBe(true);
+  });
+
   it("manually promotes and demotes a task via dateIntentKind (T072)", async () => {
     applyStructureMutation({ entity: "task", action: "create", patch: { title: "Groom me", scheduledDate: "2026-06-01" } });
     const id = getState().tasks.find((task) => task.title === "Groom me")!.id;
