@@ -199,6 +199,7 @@ export interface PlanItem {
   status: PlanItemStatus;
   startTime: string;
   endTime: string;
+  fixedStartTime?: string;
   folderId?: string;
   taskId?: string;
   routineId?: string;
@@ -213,6 +214,7 @@ export interface PlanItem {
   phaseKind?: TaskPhaseKind;
   phaseIndex?: number;
   parentTaskId?: string;
+  hardAnchor?: boolean;
   reason: string;
 }
 

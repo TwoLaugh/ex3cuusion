@@ -98,6 +98,12 @@ export default function Home() {
     }
   }
 
+  async function updateCapacity(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await post("/api/settings", { availableMinutes: Number(form.get("availableMinutes")) });
+  }
+
   // Keep the recent-AI-changes list in sync after any state change.
   useEffect(() => {
     if (!payload) return;
@@ -349,7 +355,7 @@ export default function Home() {
         </div>
         <div className="loadBadge" data-testid="load-level">
           <Clock3 size={16} />
-          {plan.loadLevel} - {state.currentTime} - {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
+          {plan.loadLevel} - {state.currentTime} - committed {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
         </div>
         <button className="reviewButton" onClick={() => setReviewOpen(true)} aria-label="Review day">
           <ClipboardCheck size={16} />
@@ -366,6 +372,7 @@ export default function Home() {
           onClose={() => setActiveView(null)}
           runOrganizer={runOrganizer}
           organizerRunning={sending}
+          updateCapacity={updateCapacity}
         />
       )}
 
@@ -1040,7 +1047,8 @@ function SecondaryPanel({
   post,
   onClose,
   runOrganizer,
-  organizerRunning
+  organizerRunning,
+  updateCapacity
 }: {
   view: SecondaryView;
   state: AppState;
@@ -1049,6 +1057,7 @@ function SecondaryPanel({
   onClose: () => void;
   runOrganizer: () => Promise<void>;
   organizerRunning: boolean;
+  updateCapacity: (event: FormEvent<HTMLFormElement>) => Promise<void>;
 }) {
   const taskGroups = buildTaskGroups(state, plan);
   const backlogSummary = buildBacklogSummary(state, plan);
@@ -1273,8 +1282,17 @@ function SecondaryPanel({
             <h2>Capacity</h2>
             <p>{plan.summary}</p>
             <span>
-              {plan.loadLevel} - {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
+              {plan.loadLevel} - committed {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
             </span>
+            <form className="inlineForm" onSubmit={updateCapacity}>
+              <label>
+                Focus capacity
+                <input name="availableMinutes" type="number" min="90" max="960" step="15" defaultValue={state.availableMinutes} aria-label="Focus capacity minutes" />
+              </label>
+              <button aria-label="Save focus capacity">
+                <Save size={14} />
+              </button>
+            </form>
           </article>
           <article>
             <h2>Time Model</h2>

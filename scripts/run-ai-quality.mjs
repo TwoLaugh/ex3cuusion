@@ -31,7 +31,7 @@ if (!process.env.OPENAI_API_KEY) {
   console.error("OPENAI_API_KEY is required for the quality harness (it runs the live model + judge).");
   process.exit(1);
 }
-const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+const model = process.env.OPENAI_MODEL ?? "gpt-5.5";
 const judgeModel = process.env.JUDGE_MODEL ?? model;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 2 });
 

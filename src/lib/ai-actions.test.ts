@@ -61,6 +61,53 @@ describe("interpretInboxInput", () => {
     });
   });
 
+  it("normalizes now actually timing onto an existing scheduled task", async () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "13:55";
+    const target = state.tasks[0];
+
+    const entry = await interpretInboxInput("actually do that now", state, async () => ({
+      model: "now-fixture",
+      summary: "Moved task to now.",
+      actions: [
+        {
+          type: "schedule_task",
+          label: "Move task to now",
+          title: target.title,
+          targetTaskId: target.id,
+          folderName: null,
+          parentFolderName: null,
+          dueDate: null,
+          scheduledDate: null,
+          scheduledTime: null,
+          effortMinutes: target.effortMinutes,
+          energy: target.energy,
+          strictness: target.strictness,
+          priority: target.priority,
+          importance: target.importance,
+          urgency: target.urgency,
+          recurrenceDays: null,
+          completionBehavior: null,
+          completionMode: null,
+          definitionOfDone: null,
+          tags: null,
+          question: null,
+          clarificationKind: null,
+          clarificationOptions: null,
+          schedulingMode: null,
+          dateIntent: null
+        }
+      ]
+    }));
+
+    expect(entry.actions[0].payload).toMatchObject({
+      taskId: target.id,
+      scheduledDate: "2026-06-01",
+      scheduledTime: "13:55"
+    });
+  });
+
   it("passes the model's clarification decision through without phrase-based override", async () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";

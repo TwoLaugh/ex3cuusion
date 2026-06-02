@@ -20,7 +20,7 @@ if (live && !process.env.OPENAI_API_KEY) {
 
 const serverEnv = {
     ...process.env,
-    OPENAI_MODEL: process.env.OPENAI_MODEL ?? "gpt-5.4-mini"
+    OPENAI_MODEL: process.env.OPENAI_MODEL ?? "gpt-5.5"
   };
 if (!live) serverEnv.EX3CUUSION_AI_MODE = "fixture";
 if (live) delete serverEnv.EX3CUUSION_AI_MODE;
@@ -51,7 +51,7 @@ try {
   }
   printReport(results);
   if (jsonReport) {
-    console.log(JSON.stringify({ live, model: process.env.OPENAI_MODEL ?? "gpt-5.4-mini", results }, null, 2));
+    console.log(JSON.stringify({ live, model: process.env.OPENAI_MODEL ?? "gpt-5.5", results }, null, 2));
   }
   const failures = results.flatMap((result) => result.failures);
   process.exitCode = failures.length ? 1 : 0;

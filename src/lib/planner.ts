@@ -100,7 +100,7 @@ function calculateCapacity(state: AppState): number {
 }
 
 function loadLevel(total: number, available: number): LoadLevel {
-  if (total > available) return "overloaded";
+  if (total > available * 1.15) return "overloaded";
   if (total > available * 0.85) return "heavy";
   if (total < available * 0.45) return "light";
   return "normal";
@@ -252,6 +252,7 @@ export function buildDayPlan(state: AppState): DayPlan {
   });
   const estimatedTotalMinutes = resolvedItems
     .filter((item) => item.status === "planned")
+    .filter(countsTowardCommittedLoad)
     .reduce((sum, item) => sum + (item.blockingMinutes ?? item.estimatedMinutes), 0);
 
   return {
@@ -260,11 +261,17 @@ export function buildDayPlan(state: AppState): DayPlan {
     estimatedTotalMinutes,
     availableMinutes,
     summary:
-      estimatedTotalMinutes > availableMinutes
+      loadLevel(estimatedTotalMinutes, availableMinutes) === "overloaded"
         ? "Today is overloaded. Cut soft invitations first."
         : "A focused day built from routines, project momentum, and time-sensitive tasks.",
     items: resolvedItems
   };
+}
+
+function countsTowardCommittedLoad(item: PlanItem): boolean {
+  if (item.type === "soft_invitation" || item.section === "soft_invitations") return false;
+  if (item.hardAnchor && /sleep|bed/i.test(item.title)) return false;
+  return true;
 }
 
 function completedTaskIdsByPlan(state: AppState, date: string): Map<string, string[]> {

@@ -743,6 +743,34 @@ h1 {
   text-transform: capitalize;
 }
 
+.inlineForm {
+  align-items: flex-end;
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.inlineForm label {
+  color: var(--muted);
+  display: grid;
+  flex: 1;
+  font-size: 0.76rem;
+  gap: 5px;
+}
+
+.inlineForm input {
+  min-height: 34px;
+}
+
+.inlineForm button {
+  align-items: center;
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  width: 38px;
+}
+
 .reviewButton {
   align-items: center;
   background: rgba(139, 184, 255, 0.1);

@@ -147,7 +147,7 @@ describe("buildDayPlan", () => {
     const plan = buildDayPlan(state);
 
     expect(plan.availableMinutes).toBe(150);
-    expect(plan.loadLevel).toBe("overloaded");
+    expect(plan.loadLevel).toBe("heavy");
   });
 
   it("pins fixed anchors like sleep and moves conflicting flexible work out of the timed plan", () => {
@@ -198,6 +198,71 @@ describe("buildDayPlan", () => {
     expect(sleep?.startTime).toBe("23:30");
     expect(chores?.status).toBe("unscheduled");
     expect(chores?.reason).toContain("Does not fit before Sleep at 23:30");
+  });
+
+  it("does not count sleep anchors or soft invitations against committed daily load", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "13:30";
+    state.availableMinutes = 300;
+    state.tasks = [
+      {
+        id: "task_work",
+        title: "Focused work",
+        type: "atomic",
+        status: "active",
+        repeatPolicy: { type: "none" },
+        completionBehavior: "exhaust_once",
+        plannerFields: { intentType: "progress", pressureLevel: "scheduled" },
+        priority: 5,
+        importance: 5,
+        urgency: 5,
+        scheduledDate: "2026-06-01",
+        effortMinutes: 120,
+        energy: "medium",
+        strictness: "normal"
+      },
+      {
+        id: "task_optional",
+        title: "Watch anime",
+        type: "soft_invitation",
+        status: "active",
+        repeatPolicy: { type: "none" },
+        completionBehavior: "keep_as_suggestion",
+        plannerFields: { intentType: "obligation", pressureLevel: "soft" },
+        priority: 1,
+        importance: 1,
+        urgency: 1,
+        scheduledDate: "2026-06-01",
+        effortMinutes: 45,
+        energy: "low",
+        strictness: "flexible"
+      },
+      {
+        id: "task_sleep",
+        title: "Sleep",
+        type: "atomic",
+        status: "active",
+        repeatPolicy: { type: "none" },
+        completionBehavior: "exhaust_once",
+        plannerFields: { intentType: "recovery", pressureLevel: "fixed" },
+        priority: 5,
+        importance: 5,
+        urgency: 5,
+        scheduledDate: "2026-06-01",
+        scheduledTime: "23:45",
+        effortMinutes: 480,
+        energy: "low",
+        strictness: "strict"
+      }
+    ];
+
+    const plan = buildDayPlan(state);
+
+    expect(plan.items.some((item) => item.title === "Sleep")).toBe(true);
+    expect(plan.items.some((item) => item.title === "Watch anime")).toBe(true);
+    expect(plan.estimatedTotalMinutes).toBe(120);
+    expect(plan.loadLevel).toBe("light");
   });
 
   it("treats relationship suggestion containers as soft invitations, not project blocks", () => {

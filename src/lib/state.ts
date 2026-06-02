@@ -749,6 +749,11 @@ export function setAutoOrganizeEnabled(enabled: boolean): AppState {
   return getState();
 }
 
+export function setAvailableMinutes(minutes: number): AppState {
+  currentState().availableMinutes = clampNumber(minutes, 90, 960, 300);
+  return getState();
+}
+
 export function answerCaptureQuestion(sessionId: string, questionId: string, answer: string): AppState {
   const state = currentState();
   const session = state.captureSessions.find((candidate) => candidate.id === sessionId);

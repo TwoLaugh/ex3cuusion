@@ -7,7 +7,20 @@ import { buildDayPlan } from "./planner";
 import { buildWeekPlan } from "./week-plan";
 import type { AiAction, AiDebugTrace, AppState, CaptureSession, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
 
+const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+const DEFAULT_REASONING_EFFORT = "medium";
+const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+
+const aiDecisionSchema = z.object({
+  relevantScope: z.enum(["task", "day", "week", "backlog", "folder", "mixed", "none"]),
+  userIntent: z.string(),
+  currentStateReading: z.string(),
+  intendedChange: z.string(),
+  noOpReason: z.string().nullable()
+});
+
 const aiActionSchema = z.object({
+  decision: aiDecisionSchema.nullable(),
   summary: z.string(),
   actions: z.array(
     z.object({
@@ -42,7 +55,8 @@ const aiActionSchema = z.object({
   )
 });
 
-type ParsedAiResponse = z.infer<typeof aiActionSchema>;
+type ParsedAiSchemaResponse = z.infer<typeof aiActionSchema>;
+type ParsedAiResponse = Omit<ParsedAiSchemaResponse, "decision"> & { decision?: ParsedAiSchemaResponse["decision"] };
 type ParsedAiAction = ParsedAiResponse["actions"][number];
 export type AiInterpreter = (input: string, state: AppState) => Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }>;
 
@@ -122,7 +136,7 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
     throw new Error("OPENAI_API_KEY is not configured");
   }
 
-  const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+  const model = openAiModel();
   const openai = new OpenAI({
     apiKey,
     timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
@@ -136,15 +150,20 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
 }
 
 async function defaultActionInterpreter(input: string, state: AppState, openai: OpenAI, model: string): Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }> {
+  const contextInstruction =
+    "The context includes plannerEditView, a compact readable view of the current day, week, folders, and tasks. Prefer plannerEditView for reasoning, then use fullState when exact fields are needed. " +
+    "Before choosing actions, fill decision with the relevant scope, what the user intends, what the current planner state means, and what should change. If intendedChange is not nothing, actions must not be empty. If actions is empty, noOpReason must explain why the planner state is already correct; otherwise noOpReason must be real JSON null, not a string. ";
   const instructions =
     "You are the state-editing brain for a personal execution planner. " +
     "You receive the user's full current app state, current day plan, and week plan as JSON. Use that context directly; do not guess blindly from the latest message. " +
+    contextInstruction +
     "Work at the right altitude. A request may be about a single task or today, about the whole week, or about the backlog of undated/someday work. Read the week plan and backlog too — not only today — and choose the matching actions: day-level edits for a single task, week-level distribution (schedule_task across multiple days) for week requests, and backlog grooming (update_task) for priority/someday/promotion changes. Decompose a mixed request into the right action at each altitude rather than defaulting to a single task today. " +
     "Decide what should change in the existing state. Prefer editing, archiving, rescheduling, or asking a useful clarification over creating duplicates. " +
     "The durable unit is a task; chat exists only to clarify ambiguity before creating good task state. " +
     "Think through the task silently first. Ask a follow-up only when the answer materially changes storage, recurrence, scheduling, completion behavior, project placement, splitting, or definition of done. " +
     "When the user asks to remove, delete, cancel, dedupe, keep only one, or get rid of an old/original task, use archive_task with the exact targetTaskId from context. " +
     "When the user asks to move or change timing for an existing task, use schedule_task with the exact targetTaskId from context. " +
+    "When the user says an existing task should happen now, right now, start now, or 'now actually', use schedule_task with that exact targetTaskId, scheduledDate as the current date, and scheduledTime as the current time. Do not treat already scheduled for today as sufficient. " +
     "If two tasks overlap nonsensically or a request would create a bad day, either return several edits that fix the day or ask one worthwhile clarification. " +
     "Do not ask low-value questions for obvious simple tasks; infer reasonable defaults and create the task. " +
     "For an explicit, ordinary, well-understood task, return create_task with sensible defaults and do not ask a question. " +
@@ -174,6 +193,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
   const modelInput =
     `User input: ${input}\n\n` +
     `Current planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
+  const reasoning = openAiReasoning(model);
   const response = await openai.responses.parse({
     model,
     instructions,
@@ -185,7 +205,8 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     ],
     text: {
       format: zodTextFormat(aiActionSchema, "execution_actions")
-    }
+    },
+    ...(reasoning ? { reasoning } : {})
   });
 
   if (!response.output_parsed) {
@@ -216,18 +237,20 @@ export async function defaultOrganizerInterpreter(input: string, state: AppState
     return fixtureOrganizerInterpreter(input, state);
   }
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
-  const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+  const model = openAiModel();
   const openai = new OpenAI({
     apiKey,
     timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
     maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 1)
   });
   const modelInput = `Conservative maintenance pass. Full planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
+  const reasoning = openAiReasoning(model);
   const response = await openai.responses.parse({
     model,
     instructions: ORGANIZER_INSTRUCTIONS,
     input: [{ role: "user", content: modelInput }],
-    text: { format: zodTextFormat(aiActionSchema, "organizer_actions") }
+    text: { format: zodTextFormat(aiActionSchema, "organizer_actions") },
+    ...(reasoning ? { reasoning } : {})
   });
   if (!response.output_parsed) {
     throw new Error("OpenAI response did not match the expected organizer schema");
@@ -292,6 +315,17 @@ function aiDebugEnabled(): boolean {
   return process.env.EX3CUUSION_AI_DEBUG === "1" || (process.env.NODE_ENV !== "production" && process.env.EX3CUUSION_AI_DEBUG !== "0");
 }
 
+function openAiModel(): string {
+  return process.env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL;
+}
+
+function openAiReasoning(model: string): { effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"; summary?: "concise" } | undefined {
+  if (!/^gpt-5/i.test(model)) return undefined;
+  const effort = process.env.OPENAI_REASONING_EFFORT?.trim() || DEFAULT_REASONING_EFFORT;
+  if (!reasoningEfforts.has(effort)) return { effort: DEFAULT_REASONING_EFFORT };
+  return { effort: effort as "none" | "minimal" | "low" | "medium" | "high" | "xhigh", ...(aiDebugEnabled() ? { summary: "concise" as const } : {}) };
+}
+
 function responseText(response: unknown): string {
   const outputText = (response as { output_text?: unknown }).output_text;
   if (typeof outputText === "string" && outputText.trim()) return outputText;
@@ -321,19 +355,24 @@ function folderContext(state: AppState) {
 }
 
 function buildInboxModelContext(state: AppState) {
+  const currentDayPlan = buildDayPlan(state);
+  const weekPlan = buildWeekPlan(state);
   return {
-    currentDate: state.currentDate,
-    currentTime: state.currentTime,
-    availableMinutes: state.availableMinutes,
-    folders: folderContext(state),
-    tasks: state.tasks,
-    deferrals: state.deferrals,
-    completions: state.completions,
-    executionEvents: state.executionEvents,
-    folderBlockSelections: state.folderBlockSelections,
-    dailyReviews: state.dailyReviews,
-    currentDayPlan: buildDayPlan(state),
-    weekPlan: buildWeekPlan(state),
+    plannerEditView: buildPlannerEditView(state, currentDayPlan, weekPlan),
+    fullState: {
+      currentDate: state.currentDate,
+      currentTime: state.currentTime,
+      availableMinutes: state.availableMinutes,
+      folders: folderContext(state),
+      tasks: state.tasks,
+      deferrals: state.deferrals,
+      completions: state.completions,
+      executionEvents: state.executionEvents,
+      folderBlockSelections: state.folderBlockSelections,
+      dailyReviews: state.dailyReviews,
+      currentDayPlan,
+      weekPlan
+    },
     recentInbox: state.inbox.slice(0, 10).map((entry) => ({
       id: entry.id,
       createdAt: entry.createdAt,
@@ -368,6 +407,76 @@ function buildInboxModelContext(state: AppState) {
   };
 }
 
+function buildPlannerEditView(state: AppState, currentDayPlan: ReturnType<typeof buildDayPlan>, weekPlan: ReturnType<typeof buildWeekPlan>) {
+  const activeTasks = state.tasks.filter((task) => !["archived", "completed"].includes(task.status));
+  const folderNameById = new Map((state.folders ?? []).map((folder) => [folder.id, folderPath(state.folders, folder.id) ?? folder.name]));
+
+  return {
+    now: { date: state.currentDate, time: state.currentTime },
+    capacity: {
+      committedMinutes: currentDayPlan.estimatedTotalMinutes,
+      availableMinutes: currentDayPlan.availableMinutes,
+      loadLevel: currentDayPlan.loadLevel
+    },
+    folders: folderContext(state),
+    currentDay: {
+      date: currentDayPlan.date,
+      items: currentDayPlan.items.map((item) => ({
+        planItemId: item.id,
+        taskId: item.taskId ?? null,
+        folderId: item.folderId ?? null,
+        title: item.title,
+        section: item.section,
+        status: item.status,
+        startTime: item.startTime ?? null,
+        endTime: item.endTime ?? null,
+        fixedStartTime: item.fixedStartTime ?? null,
+        estimatedMinutes: item.estimatedMinutes,
+        hardAnchor: item.hardAnchor ?? false,
+        canOverlap: item.canOverlap ?? null,
+        selectedTaskIds: item.selectedTaskIds ?? []
+      }))
+    },
+    week: weekPlan.days.map((day) => ({
+      date: day.date,
+      loadLevel: day.plan.loadLevel,
+      committedMinutes: day.plan.estimatedTotalMinutes,
+      availableMinutes: day.plan.availableMinutes,
+      items: day.plan.items.map((item) => ({
+        title: item.title,
+        taskId: item.taskId ?? null,
+        folderId: item.folderId ?? null,
+        startTime: item.startTime ?? null,
+        endTime: item.endTime ?? null,
+        estimatedMinutes: item.estimatedMinutes,
+        section: item.section,
+        status: item.status
+      }))
+    })),
+    backlog: {
+      thisWeek: weekPlan.thisWeekBacklog,
+      nextWeek: weekPlan.nextWeekBacklog,
+      someday: weekPlan.someday
+    },
+    tasks: activeTasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      folder: task.folderId ? folderNameById.get(task.folderId) ?? task.folderId : null,
+      status: task.status,
+      scheduledDate: task.scheduledDate ?? null,
+      scheduledTime: task.scheduledTime ?? null,
+      dueDate: task.dueDate ?? null,
+      effortMinutes: task.effortMinutes ?? null,
+      priority: task.priority,
+      importance: task.importance,
+      urgency: task.urgency,
+      completionBehavior: task.completionBehavior,
+      completionMode: task.completionMode ?? null,
+      definitionOfDone: task.definitionOfDone ?? null
+    }))
+  };
+}
+
 async function defaultRevisionInterpreter({
   message,
   state,
@@ -388,12 +497,13 @@ async function defaultRevisionInterpreter({
     throw new Error("OPENAI_API_KEY is not configured");
   }
 
-  const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+  const model = openAiModel();
   const openai = new OpenAI({
     apiKey,
     timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
     maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 1)
   });
+  const reasoning = openAiReasoning(model);
   const response = await openai.responses.parse({
     model,
     instructions:
@@ -430,7 +540,8 @@ async function defaultRevisionInterpreter({
     ],
     text: {
       format: zodTextFormat(captureRevisionSchema, "capture_revision")
-    }
+    },
+    ...(reasoning ? { reasoning } : {})
   });
 
   if (!response.output_parsed) {
@@ -1077,8 +1188,17 @@ function normalizeParsedAction(action: ParsedAiAction, state: AppState, sourceTe
 
   applyRelativeDateHints(normalized, state, actionSource);
   clearInventedDateForBroadWeekWindow(normalized, actionSource);
+  applyNowHint(normalized, state, actionSource);
 
   return normalized;
+}
+
+function applyNowHint(action: ParsedAiAction, state: AppState, sourceText: string): void {
+  if (action.type !== "schedule_task" && action.type !== "create_task") return;
+  if (!/\b(now|right now|start now|now actually)\b/i.test(sourceText)) return;
+  action.scheduledDate = state.currentDate;
+  action.scheduledTime = state.currentTime;
+  action.dateIntent = "today";
 }
 
 function normalizeParsedActionShape(action: ParsedAiAction, state: AppState): ParsedAiAction {
