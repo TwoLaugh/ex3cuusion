@@ -1091,7 +1091,7 @@ function applyTaskDateIntent(state: AppState, task: Task, kind: string | undefin
 // Resolve a create_task's intended folder name/path to a real folderId at apply time — covers a
 // folder created earlier in the same batch (T088 grouping). Derives the task type from the folder.
 function linkPendingFolder(state: AppState, action: AiAction, payload: Omit<Task, "id">): void {
-  if (payload.folderId || !action.pendingFolderName) return;
+  if (!action.pendingFolderName) return;
   const folder = findFolderMention(state, action.pendingFolderName);
   if (!folder) return;
   payload.folderId = folder.id;
@@ -1119,12 +1119,7 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
   if (action.type === "create_task") {
     const payload = action.payload as Omit<Task, "id">;
     linkPendingFolder(state, action, payload);
-    const existing = state.tasks.find(
-      (task) =>
-        task.title.toLowerCase() === payload.title.toLowerCase() &&
-        (task.folderId ?? null) === (payload.folderId ?? null) &&
-        task.status !== "archived"
-    );
+    const existing = state.tasks.find((task) => isSameCreateTaskIdentity(task, payload));
     if (existing) {
       if (shouldUpdateExistingTaskFromCreate(sourceText) && applyTaskSchedulePatch(state, existing, action.payload)) {
         action.status = "applied";
@@ -1135,6 +1130,13 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
       action.status = "applied";
       action.appliedEntityId = existing.id;
       action.skippedReason = "Task already exists.";
+      return;
+    }
+    const existingScheduleTarget = state.tasks.find((task) => canApplyCreateScheduleToExisting(task, payload));
+    if (existingScheduleTarget && applyTaskSchedulePatch(state, existingScheduleTarget, action.payload)) {
+      action.status = "applied";
+      action.appliedEntityId = existingScheduleTarget.id;
+      action.skippedReason = "Updated existing task schedule instead of duplicating it.";
       return;
     }
     const task = {
@@ -1568,6 +1570,59 @@ function shouldUpdateExistingTaskFromCreate(sourceText: string | undefined): boo
   return Boolean(sourceText && /\b(actually|instead|move|reschedule|change|correct|make it|put it|should be|at)\b/i.test(sourceText));
 }
 
+function isSameCreateTaskIdentity(task: Task, payload: Omit<Task, "id">): boolean {
+  if (task.status === "archived") return false;
+  if (!hasSameTaskPlacement(task, payload)) return false;
+  if (repeatPolicyKey(task.repeatPolicy) !== repeatPolicyKey(payload.repeatPolicy)) return false;
+
+  if (!hasPayloadSchedule(payload)) return true;
+
+  // Same-title tasks on different dates are legitimate separate planner items (e.g. yoga tonight
+  // and yoga tomorrow). Deduping must respect the model's date split.
+  if ((task.scheduledDate ?? null) !== (payload.scheduledDate ?? null)) return false;
+  if ((task.scheduledTime ?? null) !== (payload.scheduledTime ?? null)) return false;
+  if ((task.dueDate ?? null) !== (payload.dueDate ?? null)) return false;
+
+  return true;
+}
+
+function canApplyCreateScheduleToExisting(task: Task, payload: Omit<Task, "id">): boolean {
+  if (task.status === "archived") return false;
+  if (!hasSameTaskPlacement(task, payload)) return false;
+  if (!hasPayloadSchedule(payload)) return false;
+
+  // Capturing "Clean garage this weekend" when "Clean garage" already exists should schedule the
+  // existing undated task. Capturing "Yoga" for today and again for tomorrow should create two
+  // dated instances, not rewrite the first.
+  if (!hasTaskSchedule(task)) return true;
+  if (payload.scheduledDate && task.scheduledDate && payload.scheduledDate !== task.scheduledDate) return false;
+  if (payload.scheduledTime && task.scheduledTime && payload.scheduledTime !== task.scheduledTime) return false;
+  return Boolean(
+    (payload.scheduledDate && task.scheduledDate === payload.scheduledDate && !task.scheduledTime && payload.scheduledTime) ||
+      (payload.scheduledTime && task.scheduledDate === payload.scheduledDate && !task.scheduledTime) ||
+      (payload.dueDate && !task.scheduledDate)
+  );
+}
+
+function hasSameTaskPlacement(task: Task, payload: Omit<Task, "id">): boolean {
+  return task.title.toLowerCase() === payload.title.toLowerCase() && (task.folderId ?? null) === (payload.folderId ?? null);
+}
+
+function hasTaskSchedule(task: Task): boolean {
+  return Boolean(task.scheduledDate || task.scheduledTime || task.dueDate);
+}
+
+function hasPayloadSchedule(payload: Omit<Task, "id">): boolean {
+  return Boolean(payload.scheduledDate || payload.scheduledTime || payload.dueDate);
+}
+
+function repeatPolicyKey(policy: Task["repeatPolicy"] | undefined): string {
+  if (!policy || policy.type === "none") return "none";
+  if (policy.type === "daily") return `daily:${policy.carryover ?? ""}`;
+  if (policy.type === "weekly") return `weekly:${[...(policy.days ?? [])].sort().join(",")}:${policy.carryover ?? ""}`;
+  return JSON.stringify(policy);
+}
+
 function findTaskForAction(state: AppState, action: AiAction): Task | undefined {
   const taskId = typeof action.payload.taskId === "string" ? action.payload.taskId : undefined;
   if (taskId) return state.tasks.find((task) => task.id === taskId && task.status !== "archived");
@@ -1711,18 +1766,21 @@ function applyRevisionTime(state: AppState, task: Task, revision: CaptureRevisio
   return `scheduled for ${revision.scheduledTime}`;
 }
 
-// Resolve a folderName (exact name, full "A / B" path, or case-insensitive includes) to a folder.
+// Resolve a folderName to an active folder by exact name or exact full path. No substring matching:
+// "Housework" and "Work" are different folders.
 function findFolderMention(state: AppState, name: string): Folder | undefined {
   const folders = (state.folders ?? []).filter((folder) => folder.status !== "archived");
   const lower = name.trim().toLowerCase();
   if (!lower) return undefined;
-  const leaf = lower.includes("/") ? lower.split("/").pop()!.trim() : lower;
-  return (
-    folders.find((folder) => folder.name.toLowerCase() === lower) ??
-    folders.find((folder) => (folderFullPath(state, folder.id) ?? "").toLowerCase() === lower) ??
-    folders.find((folder) => folder.name.toLowerCase() === leaf) ??
-    folders.find((folder) => folder.name.toLowerCase().includes(lower) || lower.includes(folder.name.toLowerCase()))
-  );
+  const pathMatch = folders.find((folder) => (folderFullPath(state, folder.id) ?? "").toLowerCase() === lower);
+  if (pathMatch) return pathMatch;
+
+  const exactNameMatches = folders.filter((folder) => folder.name.toLowerCase() === lower);
+  if (exactNameMatches.length === 1) return exactNameMatches[0];
+
+  // Preserve the pre-folder-unification behavior for duplicated area/project labels while avoiding
+  // fuzzy partial matches. For task placement, the child folder is the more specific target.
+  return exactNameMatches.find((folder) => folder.parentFolderId);
 }
 
 // Full "A / B / C" path for a folder, walking parentFolderId with cycle guard.

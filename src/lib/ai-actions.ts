@@ -1596,22 +1596,22 @@ function findFolderName(state: AppState, pattern: RegExp): string | null {
   return folderPath(state.folders, folder.id) ?? folder.name;
 }
 
-// Resolve a folderName to an active folder id by exact name, exact full-path, or
-// case-insensitive includes on either. Returns undefined when nothing matches (null = no folder).
+// Resolve a folderName to an active folder id by exact name or exact full path. Deliberately avoid
+// substring matching: "Housework" must never resolve to "Work" just because it contains that word.
 function findFolderId(state: AppState, name: string | null): string | undefined {
   if (!name) return undefined;
   const folders = (state.folders ?? []).filter((folder) => folder.status !== "archived");
   const lower = name.trim().toLowerCase();
   if (!lower) return undefined;
-  return (
-    folders.find((folder) => folder.name.toLowerCase() === lower) ??
-    folders.find((folder) => (folderPath(state.folders, folder.id) ?? "").toLowerCase() === lower) ??
-    folders.find((folder) => {
-      const path = (folderPath(state.folders, folder.id) ?? "").toLowerCase();
-      const folderName = folder.name.toLowerCase();
-      return folderName.includes(lower) || lower.includes(folderName) || path.includes(lower) || lower.includes(path);
-    })
-  )?.id;
+  const pathMatch = folders.find((folder) => (folderPath(state.folders, folder.id) ?? "").toLowerCase() === lower);
+  if (pathMatch) return pathMatch.id;
+
+  const exactNameMatches = folders.filter((folder) => folder.name.toLowerCase() === lower);
+  if (exactNameMatches.length === 1) return exactNameMatches[0].id;
+
+  // Back-compat for existing duplicated area/project names like "Diet App": when the model gives
+  // the bare exact name, prefer the child folder because tasks inside child folders are project work.
+  return exactNameMatches.find((folder) => folder.parentFolderId)?.id;
 }
 
 function normalizeDate(value: string | undefined, currentDate: string): string | undefined {

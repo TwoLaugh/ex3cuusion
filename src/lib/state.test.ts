@@ -91,6 +91,91 @@ describe("state integration", () => {
     expect(banner?.type).toBe("project_task");
   });
 
+  it("does not resolve a same-batch folder by substring when another folder name overlaps", async () => {
+    const base = {
+      targetTaskId: null,
+      folderName: null as string | null,
+      parentFolderName: null as string | null,
+      dueDate: null,
+      scheduledDate: "2026-06-01",
+      scheduledTime: null,
+      effortMinutes: 30,
+      energy: "medium" as const,
+      strictness: "normal" as const,
+      priority: 3,
+      importance: 3,
+      urgency: 3,
+      recurrenceDays: null,
+      completionBehavior: null,
+      completionMode: null,
+      definitionOfDone: null,
+      tags: null,
+      question: null,
+      clarificationKind: null,
+      clarificationOptions: null,
+      schedulingMode: null,
+      dateIntent: "today" as const
+    };
+    applyStructureMutation({ entity: "folder", action: "create", patch: { name: "Personal" } });
+    applyStructureMutation({ entity: "folder", action: "create", patch: { name: "Work" } });
+
+    const after = await submitInbox("tomorrow housework: weed and clear old clothes", async () => ({
+      model: "folder-overlap-fixture",
+      summary: "Grouped housework under Personal.",
+      actions: [
+        { ...base, type: "create_folder" as const, label: "Create Housework", title: "Housework", parentFolderName: "Personal", scheduledDate: null },
+        { ...base, type: "create_task" as const, label: "Add weeding", title: "Do some weeding", folderName: "Housework" }
+      ]
+    }));
+
+    const housework = after.folders.find((folder) => folder.name === "Housework");
+    const work = after.folders.find((folder) => folder.name === "Work");
+    const task = after.tasks.find((candidate) => candidate.title === "Do some weeding");
+    expect(housework).toBeDefined();
+    expect(task?.folderId).toBe(housework!.id);
+    expect(task?.folderId).not.toBe(work?.id);
+  });
+
+  it("keeps same-title tasks on different days as separate planner items", async () => {
+    const base = {
+      targetTaskId: null,
+      folderName: null as string | null,
+      parentFolderName: null as string | null,
+      dueDate: null,
+      scheduledDate: null as string | null,
+      scheduledTime: null,
+      effortMinutes: 30,
+      energy: "medium" as const,
+      strictness: "normal" as const,
+      priority: 3,
+      importance: 3,
+      urgency: 3,
+      recurrenceDays: null,
+      completionBehavior: null,
+      completionMode: null,
+      definitionOfDone: null,
+      tags: null,
+      question: null,
+      clarificationKind: null,
+      clarificationOptions: null,
+      schedulingMode: null,
+      dateIntent: null
+    };
+
+    const after = await submitInbox("do yoga tonight and tomorrow at 8 do yoga again", async () => ({
+      model: "date-split-fixture",
+      summary: "Created yoga for today and tomorrow.",
+      actions: [
+        { ...base, type: "create_task" as const, label: "Add yoga tonight", title: "Yoga", scheduledDate: "2026-06-01", dateIntent: "today" as const },
+        { ...base, type: "create_task" as const, label: "Add yoga tomorrow", title: "Yoga", scheduledDate: "2026-06-02", dateIntent: "tomorrow" as const }
+      ]
+    }));
+
+    const yoga = after.tasks.filter((task) => task.title === "Yoga");
+    expect(yoga).toHaveLength(2);
+    expect(yoga.map((task) => task.scheduledDate).sort()).toEqual(["2026-06-01", "2026-06-02"]);
+  });
+
   it("reprioritizes and demotes an existing task to someday (T064 update_task)", async () => {
     const seed = getState();
     const target = seed.tasks.find((task) => task.status !== "archived");
