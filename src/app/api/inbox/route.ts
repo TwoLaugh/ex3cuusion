@@ -24,13 +24,17 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const elapsedMs = Date.now() - started;
     const status = error instanceof z.ZodError ? 400 : 502;
-    const message = error instanceof Error ? error.message : "AI inbox request failed.";
+    const rawMessage = error instanceof Error ? error.message : "AI inbox request failed.";
+    const timedOut = /timed out|timeout/i.test(rawMessage);
+    const message = timedOut ? "AI request timed out before anything was saved. Please try again." : rawMessage;
     console.error("[ai-inbox] request failed", {
       status,
       elapsedMs,
       model: process.env.OPENAI_MODEL ?? "fixture",
-      error: message
+      timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
+      maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 0),
+      error: rawMessage
     });
-    return NextResponse.json({ error: message, elapsedMs }, { status });
+    return NextResponse.json({ error: message, elapsedMs, timedOut }, { status });
   }
 }
