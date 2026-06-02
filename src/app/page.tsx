@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
-import { Dispatch, DragEvent, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
 import type { AppState, DayPlan, Folder, PlanItem } from "@/lib/types";
 
@@ -10,6 +10,22 @@ type PostFn = (url: string, body?: Record<string, unknown>) => Promise<void>;
 type SecondaryView = "Folders" | "Tasks" | "Planning preferences" | "AI activity";
 const secondaryViews: SecondaryView[] = ["Folders", "Tasks", "Planning preferences", "AI activity"];
 const showAiDebugTrace = process.env.NODE_ENV !== "production";
+
+interface TimelineDragState {
+  itemId: string;
+  taskId: string;
+  pointerId: number;
+  startClientY: number;
+  grabOffsetY: number;
+  originTop: number;
+  originHeight: number;
+  originLeft: number;
+  originWidth: number;
+  previewTop: number;
+  previewTime: string;
+  originalTime: string;
+  moved: boolean;
+}
 
 export default function Home() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
@@ -35,26 +51,182 @@ export default function Home() {
   // True while the view should track real "today" (T068). Manual day navigation turns it off so
   // the live tick does not yank the user back; the "Today" control turns it back on.
   const followingTodayRef = useRef(true);
-  const dragItemRef = useRef<PlanItem | null>(null);
+  const calendarGridRef = useRef<HTMLDivElement | null>(null);
+  const timelineDragRef = useRef<TimelineDragState | null>(null);
+  const [timelineDrag, setTimelineDrag] = useState<TimelineDragState | null>(null);
 
-  // Drag a timeline block to a new time (T081): map the drop Y to a 15-min slot and reschedule via
-  // the same structure mutation the Move dialog uses.
-  function rescheduleByDrop(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const item = dragItemRef.current;
-    dragItemRef.current = null;
-    if (!item?.taskId || !plan || !timeline) return;
+  function timelineTimeFromClientY(clientY: number, grabOffsetY: number) {
+    if (!timeline || !calendarGridRef.current) return { top: 0, time: "08:30" };
+    const rect = calendarGridRef.current.getBoundingClientRect();
+    const rawTop = clientY - rect.top - grabOffsetY;
+    const rawMinutes = timeline.startMinutes + rawTop / pixelsPerMinute;
+    const snapped = Math.max(timeline.startMinutes, Math.min(timeline.endMinutes - 5, Math.round(rawMinutes / 15) * 15));
+    return {
+      top: (snapped - timeline.startMinutes) * pixelsPerMinute,
+      time: fromMinutes(snapped)
+    };
+  }
+
+  function beginTimelineDrag(
+    event: ReactPointerEvent<HTMLElement>,
+    item: PlanItem,
+    layout: { top: number; height: number; left: number; width: number }
+  ) {
+    if (!item.taskId || !timeline) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, a, input, select, textarea, label")) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const raw = timeline.startMinutes + (event.clientY - rect.top) / pixelsPerMinute;
-    const snapped = Math.max(0, Math.min(24 * 60 - 5, Math.round(raw / 15) * 15));
-    const hh = String(Math.floor(snapped / 60)).padStart(2, "0");
-    const mm = String(snapped % 60).padStart(2, "0");
+    const grabOffsetY = event.clientY - rect.top;
+    const preview = timelineTimeFromClientY(event.clientY, grabOffsetY);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {}
+    event.preventDefault();
+    const nextDrag = {
+      itemId: item.id,
+      taskId: item.taskId,
+      pointerId: event.pointerId,
+      startClientY: event.clientY,
+      grabOffsetY,
+      originTop: layout.top,
+      originHeight: layout.height,
+      originLeft: layout.left,
+      originWidth: layout.width,
+      previewTop: preview.top,
+      previewTime: isClockTime(item.startTime) ? item.startTime : preview.time,
+      originalTime: isClockTime(item.startTime) ? item.startTime : preview.time,
+      moved: false
+    };
+    timelineDragRef.current = nextDrag;
+    setTimelineDrag(nextDrag);
+  }
+
+  function updateTimelineDragAt(clientY: number, itemId: string) {
+    if (!timeline || !calendarGridRef.current) return;
+    setTimelineDrag((drag) => {
+      if (!drag || drag.itemId !== itemId) return drag;
+      const preview = timelineTimeFromClientY(clientY, drag.grabOffsetY);
+      const nextDrag = {
+        ...drag,
+        previewTop: preview.top,
+        previewTime: preview.time,
+        moved: drag.moved || Math.abs(clientY - drag.startClientY) > 4 || preview.time !== drag.originalTime
+      };
+      timelineDragRef.current = nextDrag;
+      return nextDrag;
+    });
+  }
+
+  function finishTimelineDrag(itemId: string) {
+    const drag = timelineDragRef.current;
+    if (!drag || drag.itemId !== itemId) return;
+    timelineDragRef.current = null;
+    setTimelineDrag(null);
+    if (!plan || !drag.moved || drag.previewTime === drag.originalTime) return;
     void post("/api/structure", {
       entity: "task",
       action: "update",
-      id: item.taskId,
-      patch: { scheduledDate: plan.date, scheduledTime: `${hh}:${mm}` }
+      id: drag.taskId,
+      patch: { scheduledDate: plan.date, scheduledTime: drag.previewTime }
     });
+  }
+
+  function cancelTimelineDrag(itemId: string) {
+    const drag = timelineDragRef.current;
+    if (!drag || drag.itemId !== itemId) return;
+    timelineDragRef.current = null;
+    setTimelineDrag(null);
+  }
+
+  function releaseTimelinePointer(target: EventTarget | null, pointerId: number) {
+    const pointerTarget = target as (Element & { releasePointerCapture?: (pointerId: number) => void }) | null;
+    try {
+      pointerTarget?.releasePointerCapture?.(pointerId);
+    } catch {}
+  }
+
+  useEffect(() => {
+    timelineDragRef.current = timelineDrag;
+  }, [timelineDrag]);
+
+  useEffect(() => {
+    if (!timelineDrag) return;
+
+    function handlePointerMove(event: PointerEvent) {
+      const drag = timelineDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      event.preventDefault();
+      updateTimelineDragAt(event.clientY, drag.itemId);
+    }
+
+    function handlePointerEnd(event: PointerEvent) {
+      const drag = timelineDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      releaseTimelinePointer(event.target, drag.pointerId);
+      finishTimelineDrag(drag.itemId);
+    }
+
+    function handlePointerCancel(event: PointerEvent) {
+      const drag = timelineDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      releaseTimelinePointer(event.target, drag.pointerId);
+      cancelTimelineDrag(drag.itemId);
+    }
+
+    function handleWindowBlur() {
+      const drag = timelineDragRef.current;
+      if (!drag) return;
+      cancelTimelineDrag(drag.itemId);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerEnd);
+    window.addEventListener("pointercancel", handlePointerCancel);
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, [timelineDrag]);
+
+  function timelineBlockStyle(layout: { item: PlanItem; top: number; height: number; left: number; width: number }): CSSProperties {
+    const style: CSSProperties = { top: layout.top, height: layout.height, left: `${layout.left}%`, width: `${layout.width}%` };
+    if (!timelineDrag) return style;
+    if (layout.item.id === timelineDrag.itemId) {
+      return {
+        ...style,
+        top: timelineDrag.previewTop,
+        left: `${timelineDrag.originLeft}%`,
+        width: `${timelineDrag.originWidth}%`,
+        zIndex: 20
+      };
+    }
+    const shift = timelineDragDisplacement(layout.top);
+    return shift ? { ...style, transform: `translateY(${shift}px)` } : style;
+  }
+
+  function timelineDragDisplacement(itemTop: number): number {
+    if (!timelineDrag) return 0;
+    const displacement = timelineDrag.originHeight + 10;
+    if (timelineDrag.previewTop > timelineDrag.originTop) {
+      return itemTop > timelineDrag.originTop && itemTop <= timelineDrag.previewTop ? -displacement : 0;
+    }
+    if (timelineDrag.previewTop < timelineDrag.originTop) {
+      return itemTop >= timelineDrag.previewTop && itemTop < timelineDrag.originTop ? displacement : 0;
+    }
+    return 0;
+  }
+
+  function dragPlaceholderStyle(): CSSProperties {
+    if (!timelineDrag) return {};
+    return {
+      top: timelineDrag.previewTop,
+      height: timelineDrag.originHeight,
+      left: `calc(${timelineDrag.originLeft}% + 16px)`,
+      width: `calc(${timelineDrag.originWidth}% - 16px)`
+    };
   }
 
   async function refresh() {
@@ -386,26 +558,30 @@ export default function Home() {
             ))}
           </div>
           <div
-            className="calendarGrid"
+            className={timelineDrag ? "calendarGrid draggingTimeline" : "calendarGrid"}
+            ref={calendarGridRef}
             style={{ height: timeline?.height }}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={rescheduleByDrop}
           >
             {timeline?.hours.map((hour) => <div className="hourLine" key={hour.time} style={{ top: hour.top }} />)}
+            {timelineDrag && (
+              <div className="dragPlaceholder" style={dragPlaceholderStyle()} aria-hidden="true">
+                <span>{timelineDrag.previewTime}</span>
+              </div>
+            )}
             {timeline?.items.map(({ item, top, height, left, width, laneCount }) => (
               <article
                 className={`timelineBlock ${item.status} ${item.estimatedMinutes < 30 ? "compactBlock" : ""} ${
                   item.estimatedMinutes <= 15 ? "microBlock" : ""
                 } ${laneCount > 1 ? "overlapBlock" : ""} ${
                   item.schedulingMode && item.schedulingMode !== "exclusive" ? `mode-${item.schedulingMode}` : ""
+                } ${timelineDrag?.itemId === item.id ? "draggingBlock" : ""} ${
+                  timelineDrag && timelineDrag.itemId !== item.id ? "dragAwareBlock" : ""
                 }`}
                 key={item.id}
                 data-testid={`plan-item-${item.title}`}
-                draggable={Boolean(item.taskId)}
-                onDragStart={() => {
-                  dragItemRef.current = item;
-                }}
-                style={{ top, height, left: `${left}%`, width: `${width}%` }}
+                aria-grabbed={timelineDrag?.itemId === item.id}
+                onPointerDown={(event) => beginTimelineDrag(event, item, { top, height, left, width })}
+                style={timelineBlockStyle({ item, top, height, left, width })}
               >
                 <div className="blockContent">
                   <div>
@@ -1765,6 +1941,7 @@ function buildTimeline(items: PlanItem[], currentTime?: string) {
     height,
     hours,
     startMinutes,
+    endMinutes,
     unscheduled,
     items: scheduledWithLanes.map(({ item, lane, laneCount }) => {
       const itemStart = absoluteStartMinutes(item, currentTime);

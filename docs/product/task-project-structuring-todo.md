@@ -354,6 +354,17 @@ Still open for V1:
 3. Add durable Postgres storage after the task/week model settles.
 4. Expand live-model evals around phased/background edge cases.
 
+## Current Dogfood Issues To Preserve
+
+- Time sync can leave backend `currentTime` stale, which makes the planner and AI reason from the wrong "now".
+- Day plans can become overloaded because the model hard-schedules too many low-confidence tasks onto concrete dates.
+- Morning sequence intent is not preserved well enough when tasks lack explicit times.
+- Top-level project folders and child project folders produce inconsistent task typing.
+- Folder default block minutes can be nonsensical when created by AI grouping.
+- Repeated one-off tasks such as yoga/anime need clearer semantics than duplicate dated tasks.
+- Sleep behaves as a large task instead of a special fixed anchor/routine.
+- Stale active tasks need stronger rollover, pruning, or clarification behavior.
+
 ## V2: Proactive AI Structure Hygiene
 
 V2 should likely include a daily or periodic AI-generated question flow that inspects the backlog, containers, stale tasks, repeatables, and suggestion pools.
