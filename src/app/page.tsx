@@ -21,10 +21,17 @@ interface TimelineDragState {
   originHeight: number;
   originLeft: number;
   originWidth: number;
+  durationMinutes: number;
   previewTop: number;
   previewTime: string;
   originalTime: string;
   moved: boolean;
+}
+
+interface PendingTimelineMove {
+  date: string;
+  startTime: string;
+  endTime: string;
 }
 
 export default function Home() {
@@ -54,6 +61,7 @@ export default function Home() {
   const calendarGridRef = useRef<HTMLDivElement | null>(null);
   const timelineDragRef = useRef<TimelineDragState | null>(null);
   const [timelineDrag, setTimelineDrag] = useState<TimelineDragState | null>(null);
+  const [pendingTimelineMoves, setPendingTimelineMoves] = useState<Record<string, PendingTimelineMove>>({});
 
   function timelineTimeFromClientY(clientY: number, grabOffsetY: number) {
     if (!timeline || !calendarGridRef.current) return { top: 0, time: "08:30" };
@@ -92,6 +100,7 @@ export default function Home() {
       originHeight: layout.height,
       originLeft: layout.left,
       originWidth: layout.width,
+      durationMinutes: Math.max(5, item.clockMinutes ?? item.estimatedMinutes),
       previewTop: preview.top,
       previewTime: isClockTime(item.startTime) ? item.startTime : preview.time,
       originalTime: isClockTime(item.startTime) ? item.startTime : preview.time,
@@ -121,14 +130,18 @@ export default function Home() {
     const drag = timelineDragRef.current;
     if (!drag || drag.itemId !== itemId) return;
     timelineDragRef.current = null;
+    if (!plan || !drag.moved || drag.previewTime === drag.originalTime) {
+      setTimelineDrag(null);
+      return;
+    }
+    const pendingMove = {
+      date: plan.date,
+      startTime: drag.previewTime,
+      endTime: addClockMinutes(drag.previewTime, drag.durationMinutes)
+    };
+    setPendingTimelineMoves((moves) => ({ ...moves, [drag.taskId]: pendingMove }));
     setTimelineDrag(null);
-    if (!plan || !drag.moved || drag.previewTime === drag.originalTime) return;
-    void post("/api/structure", {
-      entity: "task",
-      action: "update",
-      id: drag.taskId,
-      patch: { scheduledDate: plan.date, scheduledTime: drag.previewTime }
-    });
+    void commitTimelineMove(drag.taskId, pendingMove);
   }
 
   function cancelTimelineDrag(itemId: string) {
@@ -227,6 +240,30 @@ export default function Home() {
       left: `calc(${timelineDrag.originLeft}% + 16px)`,
       width: `calc(${timelineDrag.originWidth}% - 16px)`
     };
+  }
+
+  async function commitTimelineMove(taskId: string, move: PendingTimelineMove) {
+    try {
+      const response = await fetch("/api/structure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity: "task",
+          action: "update",
+          id: taskId,
+          patch: { scheduledDate: move.date, scheduledTime: move.startTime }
+        })
+      });
+      if (!response.ok) {
+        const message = await responseError(response);
+        throw new Error(message || `Request failed with ${response.status}`);
+      }
+      const nextPayload = (await response.json()) as ApiPayload;
+      setPayload(nextPayload);
+      setPendingTimelineMoves((moves) => removePendingTimelineMove(moves, taskId, move));
+    } catch {
+      setPendingTimelineMoves((moves) => removePendingTimelineMove(moves, taskId, move));
+    }
   }
 
   async function refresh() {
@@ -344,7 +381,11 @@ export default function Home() {
       )
       .sort((a, b) => b.priority + b.importance + b.urgency - (a.priority + a.importance + a.urgency));
   }, [state, selected]);
-  const timeline = useMemo(() => (plan ? buildTimeline(plan.items, state?.currentTime) : null), [plan, state?.currentTime]);
+  const timelineItems = useMemo(
+    () => (plan ? applyPendingTimelineMoves(plan.items, plan.date, pendingTimelineMoves) : []),
+    [pendingTimelineMoves, plan]
+  );
+  const timeline = useMemo(() => (plan ? buildTimeline(timelineItems, state?.currentTime) : null), [plan, state?.currentTime, timelineItems]);
 
   useEffect(() => {
     if (!selected || !plan) return;
@@ -2037,6 +2078,37 @@ function fromMinutes(minutes: number): string {
   const hours = Math.floor(wrapped / 60);
   const mins = wrapped % 60;
   return `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}`;
+}
+
+function addClockMinutes(time: string, minutes: number): string {
+  return fromMinutes(toMinutes(time) + minutes);
+}
+
+function applyPendingTimelineMoves(items: PlanItem[], planDate: string, moves: Record<string, PendingTimelineMove>): PlanItem[] {
+  if (Object.keys(moves).length === 0) return items;
+  return items.map((item) => {
+    if (!item.taskId) return item;
+    const move = moves[item.taskId];
+    if (!move || move.date !== planDate) return item;
+    return {
+      ...item,
+      startTime: move.startTime,
+      endTime: move.endTime,
+      fixedStartTime: move.startTime
+    };
+  });
+}
+
+function removePendingTimelineMove(
+  moves: Record<string, PendingTimelineMove>,
+  taskId: string,
+  move: PendingTimelineMove
+): Record<string, PendingTimelineMove> {
+  const current = moves[taskId];
+  if (!current || current.date !== move.date || current.startTime !== move.startTime) return moves;
+  const next = { ...moves };
+  delete next[taskId];
+  return next;
 }
 
 function formatDate(dateOnly: string): string {
