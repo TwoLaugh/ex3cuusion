@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     if (elapsedMs >= Number(process.env.AI_INBOX_SLOW_LOG_MS ?? 10_000)) {
       console.warn("[ai-inbox] slow request", {
         elapsedMs,
-        model: process.env.OPENAI_MODEL ?? "fixture",
+        model: process.env.OPENAI_INBOX_MODEL ?? process.env.OPENAI_MODEL ?? "fixture",
         inputLength: input.length
       });
     }
@@ -30,8 +30,8 @@ export async function POST(request: NextRequest) {
     console.error("[ai-inbox] request failed", {
       status,
       elapsedMs,
-      model: process.env.OPENAI_MODEL ?? "fixture",
-      timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000),
+      model: process.env.OPENAI_INBOX_MODEL ?? process.env.OPENAI_MODEL ?? "fixture",
+      timeoutMs: Number(process.env.OPENAI_INBOX_TIMEOUT_MS ?? process.env.OPENAI_TIMEOUT_MS ?? 180_000),
       maxRetries: Number(process.env.OPENAI_MAX_RETRIES ?? 0),
       error: rawMessage
     });

@@ -12,6 +12,7 @@ const DEFAULT_INBOX_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_REASONING_EFFORT = "medium";
 const DEFAULT_INBOX_REASONING_EFFORT = "medium";
 const DEFAULT_OPENAI_TIMEOUT_MS = 45_000;
+const DEFAULT_INBOX_OPENAI_TIMEOUT_MS = 180_000;
 const DEFAULT_OPENAI_MAX_RETRIES = 0;
 const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 type AiCallKind = "inbox" | "organizer" | "revision";
@@ -144,7 +145,7 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
   const model = openAiModel("inbox");
   const openai = new OpenAI({
     apiKey,
-    timeout: openAiTimeoutMs(),
+    timeout: openAiTimeoutMs("inbox"),
     maxRetries: openAiMaxRetries()
   });
 
@@ -199,7 +200,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     `User input: ${input}\n\n` +
     `Current planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
   const reasoning = openAiReasoning(model, "inbox");
-  logAiCallStart("ai-inbox", model, modelInput, reasoning);
+  logAiCallStart("ai-inbox", "inbox", model, modelInput, reasoning);
   const response = await openai.responses.parse({
     model,
     instructions,
@@ -246,12 +247,12 @@ export async function defaultOrganizerInterpreter(input: string, state: AppState
   const model = openAiModel("organizer");
   const openai = new OpenAI({
     apiKey,
-    timeout: openAiTimeoutMs(),
+    timeout: openAiTimeoutMs("organizer"),
     maxRetries: openAiMaxRetries()
   });
   const modelInput = `Conservative maintenance pass. Full planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
   const reasoning = openAiReasoning(model, "organizer");
-  logAiCallStart("ai-organizer", model, modelInput, reasoning);
+  logAiCallStart("ai-organizer", "organizer", model, modelInput, reasoning);
   const response = await openai.responses.parse({
     model,
     instructions: ORGANIZER_INSTRUCTIONS,
@@ -327,9 +328,11 @@ function openAiModel(kind: AiCallKind): string {
   return process.env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL;
 }
 
-function openAiTimeoutMs(): number {
-  const parsed = Number(process.env.OPENAI_TIMEOUT_MS);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_OPENAI_TIMEOUT_MS;
+function openAiTimeoutMs(kind: AiCallKind): number {
+  const raw = kind === "inbox" ? process.env.OPENAI_INBOX_TIMEOUT_MS ?? process.env.OPENAI_TIMEOUT_MS : process.env.OPENAI_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return kind === "inbox" ? DEFAULT_INBOX_OPENAI_TIMEOUT_MS : DEFAULT_OPENAI_TIMEOUT_MS;
 }
 
 function openAiMaxRetries(): number {
@@ -347,12 +350,12 @@ function openAiReasoning(model: string, kind: AiCallKind): { effort: "none" | "m
   return { effort: effort as "none" | "minimal" | "low" | "medium" | "high" | "xhigh", ...(aiDebugEnabled() ? { summary: "concise" as const } : {}) };
 }
 
-function logAiCallStart(label: string, model: string, input: string, reasoning: ReturnType<typeof openAiReasoning>): void {
+function logAiCallStart(label: string, kind: AiCallKind, model: string, input: string, reasoning: ReturnType<typeof openAiReasoning>): void {
   if (process.env.NODE_ENV === "test") return;
   console.info(`[${label}] request`, {
     model,
     inputChars: input.length,
-    timeoutMs: openAiTimeoutMs(),
+    timeoutMs: openAiTimeoutMs(kind),
     maxRetries: openAiMaxRetries(),
     reasoningEffort: reasoning?.effort ?? null
   });
@@ -571,11 +574,11 @@ async function defaultRevisionInterpreter({
   const model = openAiModel("revision");
   const openai = new OpenAI({
     apiKey,
-    timeout: openAiTimeoutMs(),
+    timeout: openAiTimeoutMs("revision"),
     maxRetries: openAiMaxRetries()
   });
   const reasoning = openAiReasoning(model, "revision");
-  logAiCallStart("ai-revision", model, `${message}\n${task.id}`, reasoning);
+  logAiCallStart("ai-revision", "revision", model, `${message}\n${task.id}`, reasoning);
   const response = await openai.responses.parse({
     model,
     instructions:
