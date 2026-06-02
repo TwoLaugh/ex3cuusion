@@ -10,3 +10,6 @@ playwright-report/
 .data/
 *.log
 tsconfig.tsbuildinfo
+
+# Claude Code harness artifacts
+.claude/

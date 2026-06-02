@@ -1,11 +1,9 @@
 export type Energy = "low" | "medium" | "high";
 export type Strictness = "flexible" | "normal" | "strict";
 export type TaskStatus = "active" | "scheduled" | "completed" | "deferred" | "blocked" | "waiting" | "archived";
-export type PlanItemType = "routine" | "atomic_task" | "project_block" | "soft_invitation";
+export type PlanItemType = "routine" | "atomic_task" | "folder_block" | "soft_invitation";
 export type PlanItemStatus = "planned" | "completed" | "deferred" | "unscheduled";
 export type LoadLevel = "light" | "normal" | "heavy" | "overloaded";
-export type ContainerKind = "project" | "area" | "person" | "list" | "idea_pool" | "maintenance";
-export type PlanningMode = "deadline_driven" | "maintenance" | "suggestion_pool" | "relationship" | "open_backlog";
 export type CompletionBehavior = "exhaust_once" | "repeatable" | "keep_as_suggestion" | "regenerate_after_completion";
 export type CompletionMode =
   | "simple_done"
@@ -56,27 +54,25 @@ export type ClarificationMode = "blocking" | "optional" | "batch" | "refinement"
 export type DailyReviewEnergy = "low" | "normal" | "high";
 export type DailyReviewPlanFit = "underfilled" | "realistic" | "overplanned";
 
-export interface Domain {
+// T088: a single recursive folder concept replacing the legacy Domain + Project model. Old saved
+// states are migrated into `folders` one-way in normalizeState (migrateLegacyToFolders).
+export interface Folder {
   id: string;
   name: string;
-  weight: number;
+  parentFolderId?: string;
+  weight?: number;
+  canBlock?: boolean;
+  defaultBlockMinutes?: number;
+  contextNote?: string;
+  status?: "active" | "archived";
 }
 
-export type Area = Domain;
-
-export interface Project {
-  id: string;
-  domainId: string;
-  name: string;
-  kind: ContainerKind;
-  planningMode: PlanningMode;
-  status: "active" | "paused" | "completed";
-  priorityWeight: number;
-  defaultBlockMinutes: number;
-  contextNote: string;
+export interface FolderBlockSelection {
+  date: string;
+  folderId: string;
+  selectedTaskIds: string[];
+  updatedAt: string;
 }
-
-export type Container = Project;
 
 export type RepeatPolicy =
   | { type: "none" }
@@ -158,8 +154,7 @@ export interface Task {
   title: string;
   description?: string;
   type: "atomic" | "project_task" | "routine_instance" | "soft_invitation";
-  domainId: string;
-  projectId?: string;
+  folderId?: string; // T088: canonical placement. Unset = unfiled/top-level.
   parentTaskId?: string;
   sourceInboxItemId?: string;
   status: TaskStatus;
@@ -195,17 +190,6 @@ export interface Task {
   source?: string;
 }
 
-export interface RoutineTemplate {
-  id: string;
-  title: string;
-  domainId: string;
-  recurrence: { type: "daily" } | { type: "weekly"; days: number[] };
-  defaultEffortMinutes: number;
-  energy: Energy;
-  strictness: Strictness;
-  preferredWindow?: "morning" | "afternoon" | "evening";
-  active: boolean;
-}
 
 export interface PlanItem {
   id: string;
@@ -215,8 +199,7 @@ export interface PlanItem {
   status: PlanItemStatus;
   startTime: string;
   endTime: string;
-  domainId?: string;
-  projectId?: string;
+  folderId?: string;
   taskId?: string;
   routineId?: string;
   selectedTaskIds?: string[];
@@ -258,13 +241,6 @@ export interface CompletionEvent {
   actualMinutes?: number;
 }
 
-export interface ProjectBlockSelection {
-  date: string;
-  projectId: string;
-  selectedTaskIds: string[];
-  updatedAt: string;
-}
-
 export interface DailyReview {
   id: string;
   date: string;
@@ -293,8 +269,7 @@ export interface WeekBacklogItem {
   dateIntent: DateIntent;
   dueDate?: string;
   scheduledDate?: string;
-  projectId?: string;
-  domainId: string;
+  folderId?: string;
   effortMinutes: number;
 }
 
@@ -328,18 +303,12 @@ export interface AiAction {
   id: string;
   type:
     | "create_task"
-    | "create_routine"
-    | "create_project"
+    | "create_folder"
     | "schedule_block"
-    | "add_project_note"
-    | "assign_task_to_project"
-    | "assign_task_to_domain"
     | "schedule_task"
     | "update_task"
     | "archive_task"
-    | "archive_project"
     | "move_deadline"
-    | "change_routine_recurrence"
     | "mark_task_done"
     | "replace_today_plan"
     | "bulk_update_tasks"
@@ -360,9 +329,9 @@ export interface AiAction {
   captureSessionId?: string;
   sourceMessageId?: string;
   pendingQuestionId?: string;
-  // Intended project/work-block name for a create_task whose project may be created in the same
-  // batch (T062 grouping). Resolved to a real projectId at apply time, after create_project runs.
-  pendingProjectName?: string;
+  // Intended folder name/path for a create_task whose folder may be created in the same
+  // batch (T088 grouping). Resolved to a real folderId at apply time, after create_folder runs.
+  pendingFolderName?: string;
 }
 
 export interface InboxEntry {
@@ -446,14 +415,12 @@ export interface AppState {
   currentDate: string;
   currentTime: string;
   availableMinutes: number;
-  domains: Domain[];
-  projects: Project[];
+  folders: Folder[]; // T088: canonical recursive structure store
+  folderBlockSelections: FolderBlockSelection[];
   tasks: Task[];
-  routines: RoutineTemplate[];
   deferrals: DeferralLog[];
   completions: CompletionEvent[];
   executionEvents: ExecutionEvent[];
-  projectBlockSelections: ProjectBlockSelection[];
   dailyReviews: DailyReview[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];

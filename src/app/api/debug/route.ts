@@ -9,10 +9,7 @@ export async function GET() {
     currentDate: state.currentDate,
     currentTime: state.currentTime,
     taskCount: state.tasks.length,
-    routineCount: state.routines.length,
-    domains: state.domains,
-    projects: state.projects,
-    routines: state.routines,
+    folders: state.folders,
     inbox: state.inbox.map((entry) => ({
       id: entry.id,
       input: entry.input,
@@ -35,10 +32,10 @@ export async function GET() {
       id: task.id,
       title: task.title,
       status: task.status,
-      domainId: task.domainId,
-      projectId: task.projectId,
+      folderId: task.folderId,
       completionBehavior: task.completionBehavior,
       completionMode: task.completionMode,
+      repeatPolicy: task.repeatPolicy,
       definitionOfDone: task.definitionOfDone,
       blocked: task.blocked,
       waiting: task.waiting,
@@ -68,7 +65,7 @@ export async function GET() {
       clockMinutes: item.clockMinutes,
       selectedTaskIds: item.selectedTaskIds
     })),
-    projectBlockSelections: state.projectBlockSelections,
+    folderBlockSelections: state.folderBlockSelections,
     dailyReviews: state.dailyReviews,
     executionEvents: state.executionEvents,
     week: buildWeekPlan(state)

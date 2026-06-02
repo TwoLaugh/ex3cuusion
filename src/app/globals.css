@@ -1697,3 +1697,58 @@ textarea {
   text-decoration: underline;
 }
 .inboxHistoryLink:hover { opacity: 0.9; }
+
+/* Folders tree (T088) */
+.foldersPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.folderTree {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.folderTreeNode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.folderRow {
+  border: 1px solid var(--border, rgba(120, 120, 140, 0.25));
+  border-left: 3px solid var(--accent-strong, #6c5ce7);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--surface, rgba(255, 255, 255, 0.03));
+}
+
+.folderRow .inlineEditor summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  list-style: none;
+}
+
+.folderRow .folderName {
+  font-weight: 700;
+}
+
+.folderRow .folderMeta {
+  font-size: 0.78rem;
+  opacity: 0.7;
+}
+
+.folderCheckbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.folderCheckbox input {
+  width: auto;
+  min-height: 0;
+}

@@ -60,14 +60,12 @@ describe("buildDayPlan", () => {
     const state = createSeedState();
     state.currentDate = "2026-06-01";
     state.currentTime = "08:30";
-    state.projects = [];
-    state.routines = [];
     state.tasks = [
       {
         ...state.tasks[0],
         id: "task_vague",
         title: "Fix product stuff",
-        projectId: undefined,
+        folderId: undefined,
         type: "atomic",
         priority: 10,
         importance: 10,
@@ -79,7 +77,7 @@ describe("buildDayPlan", () => {
         ...state.tasks[0],
         id: "task_specific",
         title: "Ship password reset regression test",
-        projectId: undefined,
+        folderId: undefined,
         type: "atomic",
         priority: 7,
         importance: 7,
@@ -116,9 +114,7 @@ describe("buildDayPlan", () => {
   it("calibrates future estimates from actual completion time", () => {
     const state = createSeedState();
     state.currentDate = "2026-06-02";
-    state.currentTime = "08:30";
-    state.projects = [];
-    state.routines = [];
+    state.currentTime = "08:30";
     state.tasks = [
       {
         ...state.tasks[2],
@@ -163,7 +159,7 @@ describe("buildDayPlan", () => {
         id: "task_chores",
         title: "Tidy the garage",
         type: "atomic",
-        domainId: "domain_house",
+        folderId: "domain_house",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -179,7 +175,7 @@ describe("buildDayPlan", () => {
         id: "task_sleep",
         title: "Sleep",
         type: "atomic",
-        domainId: "domain_health",
+        folderId: "domain_health",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -193,9 +189,7 @@ describe("buildDayPlan", () => {
         energy: "low",
         strictness: "strict"
       }
-    ];
-    state.projects = [];
-    state.routines = [];
+    ];
 
     const plan = buildDayPlan(state);
     const sleep = plan.items.find((item) => item.title === "Sleep");
@@ -224,12 +218,11 @@ describe("buildDayPlan", () => {
     const state = createSeedState();
     state.currentDate = "2026-06-02";
     state.currentTime = "08:30";
-    state.routines = [];
     state.tasks.push({
       id: "task_walk",
       title: "Walk",
       type: "atomic",
-      domainId: "domain_health",
+      folderId: "domain_health",
       status: "active",
       repeatPolicy: { type: "daily", carryover: "skip" },
       completionBehavior: "repeatable",
@@ -258,7 +251,7 @@ describe("buildDayPlan", () => {
         id: "task_laundry",
         title: "Do laundry",
         type: "atomic",
-        domainId: "domain_house",
+        folderId: "domain_house",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -283,9 +276,7 @@ describe("buildDayPlan", () => {
           ]
         }
       }
-    ];
-    state.projects = [];
-    state.routines = [];
+    ];
 
     const plan = buildDayPlan(state);
     const passive = plan.items.find((item) => item.title === "Laundry running");
@@ -309,7 +300,7 @@ describe("buildDayPlan", () => {
         id: "task_cook",
         title: "Cook dinner",
         type: "atomic",
-        domainId: "domain_house",
+        folderId: "domain_house",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -328,7 +319,7 @@ describe("buildDayPlan", () => {
         id: "task_ai_report",
         title: "Run AI report draft",
         type: "atomic",
-        domainId: "domain_work",
+        folderId: "domain_work",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -343,9 +334,7 @@ describe("buildDayPlan", () => {
         strictness: "flexible",
         scheduling: { mode: "background", attentionLoad: "passive", canOverlap: true, overlapKinds: ["ai_running", "passive_waiting"] }
       }
-    ];
-    state.projects = [];
-    state.routines = [];
+    ];
 
     const plan = buildDayPlan(state);
     const cook = plan.items.find((item) => item.title === "Cook dinner");

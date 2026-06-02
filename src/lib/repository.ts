@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createSeedState } from "./seed";
-import type { AppState } from "./types";
+import type { AppState, Folder, Task } from "./types";
 
 export interface AppStateRepository {
   read(): AppState;
@@ -123,32 +123,65 @@ function buildDefaultRepository(): AppStateRepository {
   return new InMemoryAppStateRepository();
 }
 
+// Legacy shape of a persisted state from before T088 2c-C removed Domain/Project. Used only by the
+// forward migration to read old fields off an incoming state without typing them on AppState.
+type LegacyDomain = { id: string; name: string; weight?: number };
+type LegacyProject = {
+  id: string;
+  name: string;
+  domainId?: string;
+  status?: "active" | "paused" | "completed";
+  defaultBlockMinutes?: number;
+  contextNote?: string;
+};
+type LegacyProjectBlockSelection = { date: string; projectId: string; selectedTaskIds: string[]; updatedAt: string };
+type LegacyTaskFields = { domainId?: string; projectId?: string };
+type LegacyAppState = AppState & {
+  domains?: LegacyDomain[];
+  projects?: LegacyProject[];
+  projectBlockSelections?: LegacyProjectBlockSelection[];
+  routines?: Array<Record<string, unknown>>;
+};
+
 function normalizeState(state: AppState): AppState {
-  state.domains ??= [];
-  if (state.domains.length === 0) {
-    state.domains.push({ id: "domain_personal", name: "Personal", weight: 5 });
-  }
-  const fallbackDomainId = state.domains[0].id;
-  const domainIds = new Set(state.domains.map((domain) => domain.id));
-  for (const project of state.projects ?? []) {
-    if (!domainIds.has(project.domainId)) project.domainId = fallbackDomainId;
-  }
-  const projectsById = new Map((state.projects ?? []).map((project) => [project.id, project]));
-  for (const task of state.tasks ?? []) {
-    const project = task.projectId ? projectsById.get(task.projectId) : undefined;
-    if (project) {
-      task.domainId = project.domainId;
-      if (task.type === "atomic") task.type = task.completionBehavior === "keep_as_suggestion" ? "soft_invitation" : "project_task";
-    } else if (!domainIds.has(task.domainId)) {
-      task.projectId = undefined;
-      task.domainId = fallbackDomainId;
+  // T088 2c-C: folders are the only structure. Old persisted states (with domains/projects/
+  // task.domainId/projectId/projectBlockSelections) are migrated FORWARD into folders one-way.
+  migrateLegacyToFolders(state);
+
+  // Migrate any legacy routine templates (T088) into recurring tasks, then drop the field.
+  const legacy = state as LegacyAppState;
+  const legacyRoutines = legacy.routines;
+  if (Array.isArray(legacyRoutines) && legacyRoutines.length) {
+    const folderIds = new Set(state.folders.map((folder) => folder.id));
+    for (const routine of legacyRoutines) {
+      const routineFolderId = folderIds.has(routine.domainId as string) ? (routine.domainId as string) : undefined;
+      const recurrence = (routine.recurrence as { type?: string; days?: number[] }) ?? { type: "daily" };
+      state.tasks.push({
+        id: `task_${String(routine.id ?? "routine")}`,
+        title: String(routine.title ?? "Routine"),
+        type: "atomic",
+        folderId: routineFolderId,
+        status: "active",
+        repeatPolicy:
+          recurrence.type === "weekly"
+            ? { type: "weekly", days: recurrence.days ?? [1], carryover: "skip" }
+            : { type: "daily", carryover: "skip" },
+        completionBehavior: "repeatable",
+        completionMode: "repeatable_checkoff",
+        plannerFields: { intentType: "obligation", pressureLevel: "soft" },
+        priority: 4,
+        importance: 4,
+        urgency: 3,
+        effortMinutes: Number(routine.defaultEffortMinutes ?? 20),
+        energy: (routine.energy as "low" | "medium" | "high") ?? "low",
+        strictness: (routine.strictness as "flexible" | "normal" | "strict") ?? "normal",
+        dateIntent: { kind: "recurring", confidence: 0.8 }
+      });
     }
   }
-  for (const routine of state.routines ?? []) {
-    if (!domainIds.has(routine.domainId)) routine.domainId = fallbackDomainId;
-  }
+  delete legacy.routines;
+
   state.executionEvents ??= [];
-  state.projectBlockSelections ??= [];
   state.dailyReviews ??= [];
   state.captureSessions ??= [];
   for (const session of state.captureSessions) {
@@ -162,4 +195,70 @@ function normalizeState(state: AppState): AppState {
     session.unresolvedFields ??= [];
   }
   return state;
+}
+
+// T088 2c-C: one-way forward migration. Builds the canonical folder tree from any legacy
+// domains/projects on an old saved state, repairs the tree, repoints task.folderId, and DELETES the
+// legacy fields so they never linger. Folders are the only structure after this runs.
+function migrateLegacyToFolders(state: AppState): void {
+  const legacy = state as LegacyAppState;
+
+  // 1. No folders yet but legacy domains exist -> build folders from domains+projects (ids preserved).
+  if ((state.folders?.length ?? 0) === 0 && (legacy.domains?.length ?? 0) > 0) {
+    const domains = legacy.domains ?? [];
+    const projects = legacy.projects ?? [];
+    const domainIds = new Set(domains.map((domain) => domain.id));
+    state.folders = [
+      ...domains.map<Folder>((domain) => ({ id: domain.id, name: domain.name, weight: domain.weight, status: "active" })),
+      ...projects.map<Folder>((project) => ({
+        id: project.id,
+        name: project.name,
+        parentFolderId: project.domainId && domainIds.has(project.domainId) ? project.domainId : undefined,
+        canBlock: true,
+        defaultBlockMinutes: project.defaultBlockMinutes,
+        contextNote: project.contextNote,
+        status: project.status === "completed" || project.status === "paused" ? "archived" : "active"
+      }))
+    ];
+    for (const task of state.tasks ?? []) {
+      const legacyTask = task as Task & LegacyTaskFields;
+      task.folderId = legacyTask.projectId ?? legacyTask.domainId;
+    }
+    state.folderBlockSelections = (legacy.projectBlockSelections ?? []).map((selection) => ({
+      date: selection.date,
+      folderId: selection.projectId,
+      selectedTaskIds: selection.selectedTaskIds,
+      updatedAt: selection.updatedAt
+    }));
+  }
+
+  // 3. Ensure folders is a non-empty array.
+  state.folders ??= [];
+  if (state.folders.length === 0) {
+    state.folders.push({ id: "folder_personal", name: "Personal", weight: 5, status: "active" });
+  }
+
+  // 4. Normalize folder tree: parentFolderId pointing at a missing folder -> undefined.
+  const folderIds = new Set(state.folders.map((folder) => folder.id));
+  for (const folder of state.folders) {
+    if (folder.parentFolderId && !folderIds.has(folder.parentFolderId)) folder.parentFolderId = undefined;
+  }
+
+  // 5. Every task: a folderId pointing at no existing folder is cleared (task becomes unfiled).
+  for (const task of state.tasks ?? []) {
+    if (task.folderId && !folderIds.has(task.folderId)) task.folderId = undefined;
+  }
+
+  // 6. folderBlockSelections defaulted; drop selections whose folder no longer exists.
+  state.folderBlockSelections ??= [];
+  state.folderBlockSelections = state.folderBlockSelections.filter((selection) => folderIds.has(selection.folderId));
+
+  // 7. Delete the legacy fields so they don't linger.
+  delete legacy.domains;
+  delete legacy.projects;
+  delete legacy.projectBlockSelections;
+  for (const task of state.tasks ?? []) {
+    delete (task as Task & LegacyTaskFields).domainId;
+    delete (task as Task & LegacyTaskFields).projectId;
+  }
 }

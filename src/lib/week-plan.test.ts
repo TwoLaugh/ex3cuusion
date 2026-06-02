@@ -31,7 +31,7 @@ describe("buildWeekPlan", () => {
       id: "task_dentist_next_week",
       title: "Book dentist",
       type: "atomic",
-      domainId: "domain_health",
+      folderId: "domain_health",
       status: "active",
       repeatPolicy: { type: "none" },
       completionBehavior: "exhaust_once",

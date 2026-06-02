@@ -5,34 +5,28 @@ export function createRealisticCharacterState(): AppState {
     currentDate: "2026-06-03",
     currentTime: "06:45",
     availableMinutes: 780,
-    domains: [
+    // T088: folders are the only structure. Top-level folders are areas; child folders
+    // (parentFolderId set) behave like the legacy projects (their tasks become project_task).
+    folders: [
       { id: "domain_health", name: "Health", weight: 10 },
       { id: "domain_work", name: "Work", weight: 10 },
       { id: "domain_zine", name: "Recipe Zine", weight: 7 },
       { id: "domain_home", name: "Home Admin", weight: 5 },
       { id: "domain_social", name: "Social", weight: 6 },
-      { id: "domain_recovery", name: "Recovery", weight: 8 }
-    ],
-    projects: [
+      { id: "domain_recovery", name: "Recovery", weight: 8 },
       {
         id: "project_dashboard_review",
-        domainId: "domain_work",
         name: "Clinician Dashboard UX Review",
-        kind: "project",
-        planningMode: "deadline_driven",
-        status: "active",
-        priorityWeight: 10,
+        parentFolderId: "domain_work",
+        canBlock: true,
         defaultBlockMinutes: 150,
         contextNote: "Final UX review package is due before tomorrow's stakeholder readout."
       },
       {
         id: "project_recipe_zine",
-        domainId: "domain_zine",
         name: "Illustrated Recipe Zine",
-        kind: "project",
-        planningMode: "open_backlog",
-        status: "active",
-        priorityWeight: 6,
+        parentFolderId: "domain_zine",
+        canBlock: true,
         defaultBlockMinutes: 75,
         contextNote: "Personal creative project; preserve a small amount of momentum without sacrificing sleep."
       }
@@ -51,8 +45,7 @@ export function createRealisticCharacterState(): AppState {
         id: "task_polish_screens",
         title: "Polish 6 dashboard screens",
         type: "project_task",
-        domainId: "domain_work",
-        projectId: "project_dashboard_review",
+        folderId: "project_dashboard_review",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -69,8 +62,7 @@ export function createRealisticCharacterState(): AppState {
         id: "task_review_analytics",
         title: "Review analytics notes",
         type: "project_task",
-        domainId: "domain_work",
-        projectId: "project_dashboard_review",
+        folderId: "project_dashboard_review",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -87,8 +79,7 @@ export function createRealisticCharacterState(): AppState {
         id: "task_rationale_bullets",
         title: "Write UX rationale bullets",
         type: "project_task",
-        domainId: "domain_work",
-        projectId: "project_dashboard_review",
+        folderId: "project_dashboard_review",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -105,7 +96,7 @@ export function createRealisticCharacterState(): AppState {
         id: "task_pm_preview",
         title: "Send preview to PM",
         type: "atomic",
-        domainId: "domain_work",
+        folderId: "domain_work",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -122,7 +113,7 @@ export function createRealisticCharacterState(): AppState {
         id: "task_process_feedback",
         title: "Process critique feedback",
         type: "atomic",
-        domainId: "domain_work",
+        folderId: "domain_work",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -139,8 +130,7 @@ export function createRealisticCharacterState(): AppState {
         id: "task_sketch_zine",
         title: "Sketch one recipe zine spread",
         type: "project_task",
-        domainId: "domain_zine",
-        projectId: "project_recipe_zine",
+        folderId: "project_recipe_zine",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -157,8 +147,7 @@ export function createRealisticCharacterState(): AppState {
         id: "task_zine_words",
         title: "Write 150 zine words",
         type: "project_task",
-        domainId: "domain_zine",
-        projectId: "project_recipe_zine",
+        folderId: "project_recipe_zine",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -175,53 +164,11 @@ export function createRealisticCharacterState(): AppState {
       normalTask("task_text_leo", "Confirm dinner with Leo", "domain_social", 5, 7, 8, 7, "low"),
       normalTask("task_support_coworker", "Send supportive note to Alex", "domain_social", 10, 5, 7, 4, "low"),
       normalTask("task_buy_toothpaste", "Buy toothpaste", "domain_home", 10, 4, 4, 4, "low"),
-      normalTask("task_kitchen_tidy", "Quick tidy kitchen", "domain_home", 15, 4, 5, 3, "low")
-    ],
-    routines: [
-      {
-        id: "routine_mobility",
-        title: "Run or mobility fallback",
-        domainId: "domain_health",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 25,
-        energy: "medium",
-        strictness: "normal",
-        preferredWindow: "morning",
-        active: true
-      },
-      {
-        id: "routine_breakfast",
-        title: "Shower and breakfast",
-        domainId: "domain_health",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 30,
-        energy: "low",
-        strictness: "normal",
-        preferredWindow: "morning",
-        active: true
-      },
-      {
-        id: "routine_lunch",
-        title: "Lunch away from desk",
-        domainId: "domain_recovery",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 30,
-        energy: "low",
-        strictness: "normal",
-        preferredWindow: "afternoon",
-        active: true
-      },
-      {
-        id: "routine_inbox",
-        title: "AI inbox triage",
-        domainId: "domain_work",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 15,
-        energy: "medium",
-        strictness: "normal",
-        preferredWindow: "morning",
-        active: true
-      }
+      normalTask("task_kitchen_tidy", "Quick tidy kitchen", "domain_home", 15, 4, 5, 3, "low"),
+      recurringTask("task_mobility", "Run or mobility fallback", "domain_health", 25, "medium", "morning"),
+      recurringTask("task_breakfast", "Shower and breakfast", "domain_health", 30, "low", "morning"),
+      recurringTask("task_lunch", "Lunch away from desk", "domain_recovery", 30, "low", "afternoon"),
+      recurringTask("task_inbox", "AI inbox triage", "domain_work", 15, "medium", "morning")
     ],
     deferrals: [
       {
@@ -241,7 +188,7 @@ export function createRealisticCharacterState(): AppState {
     ],
     completions: [],
     executionEvents: [],
-    projectBlockSelections: [],
+    folderBlockSelections: [],
     dailyReviews: [],
     inbox: [],
     captureSessions: []
@@ -251,7 +198,7 @@ export function createRealisticCharacterState(): AppState {
 function fixedTask(
   id: string,
   title: string,
-  domainId: string,
+  folderId: string,
   scheduledTime: string,
   effortMinutes: number,
   energy: "low" | "medium" | "high"
@@ -260,7 +207,7 @@ function fixedTask(
     id,
     title,
     type: "atomic" as const,
-    domainId,
+    folderId,
     status: "active" as const,
     repeatPolicy: { type: "none" as const },
     completionBehavior: "exhaust_once" as const,
@@ -279,7 +226,7 @@ function fixedTask(
 function normalTask(
   id: string,
   title: string,
-  domainId: string,
+  folderId: string,
   effortMinutes: number,
   priority: number,
   importance: number,
@@ -290,7 +237,7 @@ function normalTask(
     id,
     title,
     type: "atomic" as const,
-    domainId,
+    folderId,
     status: "active" as const,
     repeatPolicy: { type: "none" as const },
     completionBehavior: "exhaust_once" as const,
@@ -302,5 +249,33 @@ function normalTask(
     effortMinutes,
     energy,
     strictness: "normal" as const
+  };
+}
+
+function recurringTask(
+  id: string,
+  title: string,
+  folderId: string,
+  effortMinutes: number,
+  energy: "low" | "medium" | "high",
+  preferredWindow: "morning" | "afternoon" | "evening"
+) {
+  return {
+    id,
+    title,
+    type: "atomic" as const,
+    folderId,
+    status: "active" as const,
+    repeatPolicy: { type: "daily" as const, preferredWindow, carryover: "skip" as const },
+    completionBehavior: "repeatable" as const,
+    completionMode: "repeatable_checkoff" as const,
+    plannerFields: { intentType: "obligation" as const, pressureLevel: "soft" as const },
+    priority: 4,
+    importance: 4,
+    urgency: 3,
+    effortMinutes,
+    energy,
+    strictness: "normal" as const,
+    dateIntent: { kind: "recurring" as const, confidence: 0.9 }
   };
 }

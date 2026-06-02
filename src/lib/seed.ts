@@ -10,33 +10,27 @@ export function createSeedState(): AppState {
     currentDate: toDateOnly(now),
     currentTime: toTimeOnly(now),
     availableMinutes: 300,
-    domains: [
+    // T088: folders are the only structure store. Top-level folders are areas; child folders
+    // (parentFolderId set) behave like the legacy projects (their tasks become project_task).
+    folders: [
       { id: "domain_health", name: "Health Repair", weight: 10 },
       { id: "domain_work", name: "Job Work", weight: 9 },
       { id: "domain_product", name: "Diet App", weight: 8 },
       { id: "domain_house", name: "House Work", weight: 5 },
-      { id: "domain_social", name: "Social Maintenance", weight: 4 }
-    ],
-    projects: [
+      { id: "domain_social", name: "Social Maintenance", weight: 4 },
       {
         id: "project_diet_app",
-        domainId: "domain_product",
         name: "Diet App",
-        kind: "project",
-        planningMode: "deadline_driven",
-        status: "active",
-        priorityWeight: 9,
+        parentFolderId: "domain_product",
+        canBlock: true,
         defaultBlockMinutes: 120,
         contextNote: "Keep momentum on auth and optimizer work."
       },
       {
         id: "container_emma",
-        domainId: "domain_social",
         name: "Emma",
-        kind: "person",
-        planningMode: "relationship",
-        status: "active",
-        priorityWeight: 4,
+        parentFolderId: "domain_social",
+        canBlock: true,
         defaultBlockMinutes: 45,
         contextNote: "Relationship ideas and light-touch maintenance."
       }
@@ -46,8 +40,7 @@ export function createSeedState(): AppState {
         id: "task_auth_bug",
         title: "Finish auth bug",
         type: "project_task",
-        domainId: "domain_product",
-        projectId: "project_diet_app",
+        folderId: "project_diet_app",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -68,8 +61,7 @@ export function createSeedState(): AppState {
         id: "task_optimizer_tests",
         title: "Add optimizer tests",
         type: "project_task",
-        domainId: "domain_product",
-        projectId: "project_diet_app",
+        folderId: "project_diet_app",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -90,7 +82,7 @@ export function createSeedState(): AppState {
         id: "task_message_will",
         title: "Message Will",
         type: "atomic",
-        domainId: "domain_social",
+        folderId: "domain_social",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -111,7 +103,7 @@ export function createSeedState(): AppState {
         id: "task_clean_garage",
         title: "Clean garage",
         type: "atomic",
-        domainId: "domain_house",
+        folderId: "domain_house",
         status: "active",
         repeatPolicy: { type: "none" },
         completionBehavior: "exhaust_once",
@@ -131,8 +123,7 @@ export function createSeedState(): AppState {
         id: "task_read_together",
         title: "Read together",
         type: "soft_invitation",
-        domainId: "domain_social",
-        projectId: "container_emma",
+        folderId: "container_emma",
         status: "active",
         repeatPolicy: { type: "weekly", days: [0, 3, 6], carryover: "skip", cooldownDays: 3 },
         completionBehavior: "keep_as_suggestion",
@@ -147,25 +138,31 @@ export function createSeedState(): AppState {
         effortMinutes: 45,
         energy: "low",
         strictness: "flexible"
-      }
-    ],
-    routines: [
+      },
       {
-        id: "routine_back_rehab",
+        id: "task_back_rehab",
         title: "Back rehab",
-        domainId: "domain_health",
-        recurrence: { type: "daily" },
-        defaultEffortMinutes: 20,
+        type: "atomic",
+        folderId: "domain_health",
+        status: "active",
+        repeatPolicy: { type: "daily", preferredWindow: "morning", carryover: "skip" },
+        completionBehavior: "repeatable",
+        completionMode: "repeatable_checkoff",
+        plannerFields: { intentType: "health", pressureLevel: "soft" },
+        tags: ["health", "recurring"],
+        priority: 5,
+        importance: 5,
+        urgency: 4,
+        effortMinutes: 20,
         energy: "low",
         strictness: "strict",
-        preferredWindow: "morning",
-        active: true
+        dateIntent: { kind: "recurring", confidence: 0.9 }
       }
     ],
     deferrals: [],
     completions: [],
     executionEvents: [],
-    projectBlockSelections: [],
+    folderBlockSelections: [],
     dailyReviews: [],
     inbox: [],
     captureSessions: []

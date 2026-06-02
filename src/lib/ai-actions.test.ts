@@ -43,13 +43,16 @@ describe("interpretInboxInput", () => {
       title: "Work on Diet App",
       completionMode: "timebox",
       effortMinutes: 120,
-      projectId: "project_diet_app"
+      folderId: "project_diet_app"
     });
 
+    // Recurring habits are now create_task with a repeatPolicy (T088), not a separate create_routine.
     const recurring = await interpretInboxInput("message Will every Friday", state, fixtureInterpreter);
+    expect(recurring.actions[0].type).toBe("create_task");
     expect(recurring.actions[0].payload).toMatchObject({
       title: "Message Will",
-      recurrence: { type: "weekly", days: [5] }
+      repeatPolicy: { type: "weekly", days: [5] },
+      completionMode: "repeatable_checkoff"
     });
 
     const clarify = await interpretInboxInput("clean the house this weekend", state, fixtureInterpreter);
@@ -73,8 +76,8 @@ describe("interpretInboxInput", () => {
           type: "ask_clarification",
           label: "Clarify cut nails",
           title: "Cut nails",
-          domainName: "House Work",
-          projectName: null,
+          folderName: null,
+          parentFolderName: null,
           dueDate: null,
           scheduledDate: null,
           scheduledTime: null,
@@ -117,8 +120,8 @@ describe("interpretInboxInput", () => {
           type: "create_task",
           label: "Add clean the house",
           title: "Clean the house",
-          domainName: "House Work",
-          projectName: null,
+          folderName: null,
+          parentFolderName: null,
           dueDate: null,
           scheduledDate: null,
           scheduledTime: null,
@@ -149,10 +152,9 @@ describe("interpretInboxInput", () => {
     });
   });
 
-  it("falls back to an existing domain when the model names a missing domain", async () => {
+  it("leaves a create_task unfiled (no folder) when it has no resolvable folder (T088 2c-C)", async () => {
     const state = createSeedState();
-    state.domains = [{ id: "domain_personal", name: "Personal", weight: 5 }];
-    state.projects = [];
+    state.folders = [{ id: "folder_personal", name: "Personal", weight: 5 }];
     state.tasks = [];
     state.currentDate = "2026-06-01";
     state.currentTime = "08:30";
@@ -165,8 +167,8 @@ describe("interpretInboxInput", () => {
           type: "create_task",
           label: "Add local setup task",
           title: "Figure out local setup",
-          domainName: "Job Work",
-          projectName: null,
+          folderName: null,
+          parentFolderName: null,
           dueDate: null,
           scheduledDate: "2026-06-01",
           scheduledTime: null,
@@ -192,7 +194,7 @@ describe("interpretInboxInput", () => {
 
     expect(entry.actions[0].payload).toMatchObject({
       title: "Figure out local setup",
-      domainId: "domain_personal"
+      folderId: undefined
     });
   });
 
@@ -212,8 +214,8 @@ describe("interpretInboxInput", () => {
             type: "ask_clarification",
             label: "Clarify clean house",
             title: "Clean house",
-            domainName: "House Work",
-            projectName: null,
+            folderName: null,
+            parentFolderName: null,
             dueDate: null,
             scheduledDate: null,
             scheduledTime: null,
@@ -298,8 +300,8 @@ describe("interpretInboxInput", () => {
             type: "create_task",
             label: "text Alex today",
             title: "Text Alex",
-            domainName: "Social",
-            projectName: null,
+            folderName: null,
+            parentFolderName: null,
             dueDate: null,
             scheduledDate: "2026-06-02",
             scheduledTime: null,
@@ -324,8 +326,8 @@ describe("interpretInboxInput", () => {
             type: "create_task",
             label: "book dentist sometime next week",
             title: "Book dentist appointment",
-            domainName: "Health",
-            projectName: null,
+            folderName: null,
+            parentFolderName: null,
             dueDate: null,
             scheduledDate: "2026-06-09",
             scheduledTime: null,
