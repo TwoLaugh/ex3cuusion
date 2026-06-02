@@ -127,31 +127,20 @@ export function buildDayPlan(state: AppState): DayPlan {
   const activeTasks = state.tasks.filter(
     (task) => (isTaskPlannable(task, date) || completedOnDate(task, date)) && !hasActiveChildren(state, task.id)
   );
-  const blockTasks = activeTasks
-    .filter((task) => shouldAppearInProjectBlock(state, task))
-    .sort((a, b) => taskScore(state, b, date) - taskScore(state, a, date));
-
-  const tasksByFolder = new Map<string, Task[]>();
-  for (const task of blockTasks) {
-    const folderId = blockFolderId(state, task);
-    if (!folderId) continue;
-    const list = tasksByFolder.get(folderId) ?? [];
-    list.push(task);
-    tasksByFolder.set(folderId, list);
-  }
-
-  for (const [folderId, tasks] of tasksByFolder) {
+  const explicitlyBlockedTaskIds = new Set<string>();
+  for (const selection of state.folderBlockSelections?.filter((entry) => entry.date === date) ?? []) {
+    const folderId = selection.folderId;
     const folder = (state.folders ?? []).find((item) => item.id === folderId);
-    if (!folder || folder.status === "archived") continue;
+    if (!folder || folder.status === "archived" || folder.canBlock !== true) continue;
     const defaultBlockMinutes = folder.defaultBlockMinutes ?? 30;
-    const selected = tasks.slice(0, 3);
-    const override = folderBlockSelectionOverride(state, date, folder.id);
     const selectedTaskIds = mergeTaskIds(
-      override ?? selected.map((task) => task.id),
+      selection.selectedTaskIds,
       todayCompletedTaskIdsByPlan.get(`plan_${date}_${folder.id}`) ?? []
     ).filter((taskId) => isValidBlockTask(state, folder.id, taskId));
+    if (!selectedTaskIds.length) continue;
     const selectedTasks = state.tasks.filter((task) => selectedTaskIds.includes(task.id));
     const minutes = Math.min(defaultBlockMinutes, selectedTasks.reduce((sum, task) => sum + effectiveEffortMinutes(state, task), 0));
+    for (const taskId of selectedTaskIds) explicitlyBlockedTaskIds.add(taskId);
     items.push({
       id: `plan_${date}_${folder.id}`,
       type: "folder_block",
@@ -161,9 +150,7 @@ export function buildDayPlan(state: AppState): DayPlan {
       folderId: folder.id,
       selectedTaskIds,
       estimatedMinutes: minutes,
-      reason: override
-        ? `Using ${selectedTaskIds.length} manually selected next action${selectedTaskIds.length === 1 ? "" : "s"}.`
-        : `Selected ${selected.length} high-impact next action${selected.length === 1 ? "" : "s"}.`
+      reason: `Using ${selectedTaskIds.length} explicitly selected next action${selectedTaskIds.length === 1 ? "" : "s"}.`
     });
   }
 
@@ -189,19 +176,15 @@ export function buildDayPlan(state: AppState): DayPlan {
   }
 
   const atomicTasks = activeTasks
-    .filter((task) => !shouldAppearInProjectBlock(state, task))
+    .filter((task) => !explicitlyBlockedTaskIds.has(task.id))
     .sort((a, b) => taskScore(state, b, date) - taskScore(state, a, date));
 
   for (const task of mergeTasks(atomicTasks, settledAtomicTasksForToday(state, date))) {
     const isRepeatingTask = task.repeatPolicy.type !== "none" && task.completionBehavior !== "keep_as_suggestion";
-    const section = isRepeatingTask
-      ? "routines"
-      : task.completionBehavior === "keep_as_suggestion" || task.strictness === "flexible" || taskScore(state, task, date) < 25
-        ? "soft_invitations"
-        : "quick_tasks";
     const fixedStartTime = task.scheduledDate === date ? task.scheduledTime : undefined;
     const hardAnchor = fixedStartTime ? task.strictness === "strict" || /sleep|bed/i.test(task.title) : false;
     const calibratedEffortMinutes = effectiveEffortMinutes(state, task);
+    const section = sectionForTask(state, task, date, calibratedEffortMinutes);
     const baseCandidate: PlanCandidate = {
       id: `plan_${date}_${task.id}`,
       type: isRepeatingTask ? "routine" : section === "soft_invitations" ? "soft_invitation" : "atomic_task",
@@ -377,10 +360,6 @@ function isItemCompleted(
   return selectedTaskIds.every((taskId) => completedTaskIds.has(taskId));
 }
 
-function folderBlockSelectionOverride(state: AppState, date: string, folderId: string): string[] | undefined {
-  return state.folderBlockSelections?.find((selection) => selection.date === date && selection.folderId === folderId)?.selectedTaskIds;
-}
-
 function isValidBlockTask(state: AppState, folderId: string, taskId: string): boolean {
   const task = state.tasks.find((entry) => entry.id === taskId);
   if (!task || task.status === "archived" || blockFolderId(state, task) !== folderId) return false;
@@ -406,9 +385,18 @@ export function blockFolderId(state: AppState, task: Task): string | undefined {
   return undefined;
 }
 
-function shouldAppearInProjectBlock(state: AppState, task: Task): boolean {
-  if (task.completionBehavior === "keep_as_suggestion") return false;
-  return blockFolderId(state, task) !== undefined;
+function sectionForTask(state: AppState, task: Task, date: string, effortMinutes: number): PlanCandidate["section"] {
+  if (task.repeatPolicy.type !== "none" && task.completionBehavior !== "keep_as_suggestion") return "routines";
+  const score = taskScore(state, task, date);
+  if (
+    task.completionBehavior === "keep_as_suggestion" ||
+    score < 25 ||
+    (task.strictness === "flexible" && task.plannerFields.pressureLevel === "soft" && !task.scheduledDate)
+  ) {
+    return "soft_invitations";
+  }
+  if (task.type === "project_task" || effortMinutes >= 60) return "main_blocks";
+  return "quick_tasks";
 }
 
 function scheduleItems(items: PlanCandidate[], currentTime: string): PlanItem[] {

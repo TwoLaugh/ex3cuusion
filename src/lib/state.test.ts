@@ -32,6 +32,39 @@ describe("state integration", () => {
     setClock("2026-06-01", "08:30");
   });
 
+  async function createDietAppFolderBlock() {
+    const base = {
+      targetTaskId: null,
+      folderName: "Diet App",
+      parentFolderName: null,
+      dueDate: null,
+      scheduledDate: "2026-06-01",
+      scheduledTime: null,
+      effortMinutes: 120,
+      energy: "high" as const,
+      strictness: "normal" as const,
+      priority: 5,
+      importance: 5,
+      urgency: 5,
+      recurrenceDays: null,
+      completionBehavior: null,
+      completionMode: null,
+      definitionOfDone: null,
+      tags: null,
+      question: null,
+      clarificationKind: null,
+      clarificationOptions: null,
+      schedulingMode: null,
+      dateIntent: "today" as const
+    };
+    await submitInbox("block out Diet App work today", async () => ({
+      model: "explicit-folder-block-fixture",
+      summary: "Blocked Diet App work.",
+      actions: [{ ...base, type: "schedule_block" as const, label: "Block Diet App", title: "Diet App" }]
+    }));
+    return buildDayPlan(getState()).items.find((item) => item.title === "Diet App");
+  }
+
   it("applies inbox actions and updates the plan", async () => {
     const before = getState();
     const beforeCount = before.tasks.length;
@@ -595,32 +628,32 @@ describe("state integration", () => {
   it("records completion and deferral events against the active day", () => {
     const plan = buildDayPlan(getState());
     const routine = plan.items.find((item) => item.title === "Back rehab");
-    const project = plan.items.find((item) => item.title === "Diet App");
+    const projectTask = plan.items.find((item) => item.title === "Finish auth bug");
 
     expect(routine).toBeDefined();
-    expect(project).toBeDefined();
+    expect(projectTask).toBeDefined();
 
     completePlanItem(routine!.id, 18);
     expect(buildDayPlan(getState()).items.find((item) => item.id === routine!.id)?.status).toBe("completed");
     completePlanItem(routine!.id, 18);
     expect(buildDayPlan(getState()).items.find((item) => item.id === routine!.id)?.status).toBe("planned");
-    deferPlanItem(project!.id, "overplanned");
+    deferPlanItem(projectTask!.id, "overplanned");
 
     const state = getState();
     expect(state.completions).toHaveLength(0);
     expect(state.deferrals).toHaveLength(1);
-    expect(state.executionEvents.some((event) => event.type === "deferred" && event.planItemId === project!.id)).toBe(true);
+    expect(state.executionEvents.some((event) => event.type === "deferred" && event.planItemId === projectTask!.id)).toBe(true);
   });
 
-  it("completes linked atomic tasks and selected project subtasks", () => {
+  it("completes linked atomic tasks and selected explicit folder-block subtasks", async () => {
     const plan = buildDayPlan(getState());
     const message = plan.items.find((item) => item.title === "Message Will");
-    const project = plan.items.find((item) => item.title === "Diet App");
 
     completePlanItem(message!.id);
     expect(getState().tasks.find((task) => task.id === message!.taskId)?.status).toBe("completed");
     expect(buildDayPlan(getState()).items.find((item) => item.title === "Message Will")?.status).toBe("completed");
 
+    const project = await createDietAppFolderBlock();
     const selected = project!.selectedTaskIds ?? [];
     completePlanItem(project!.id, undefined, [selected[0]]);
     expect(getState().tasks.find((task) => task.id === selected[0])?.status).toBe("completed");
@@ -632,7 +665,8 @@ describe("state integration", () => {
     expect(buildDayPlan(getState()).items.find((item) => item.id === project!.id)?.status).toBe("completed");
   });
 
-  it("lets folder block selection change without completing child tasks", () => {
+  it("lets explicit folder block selection change without completing child tasks", async () => {
+    await createDietAppFolderBlock();
     let plan = buildDayPlan(getState());
     let project = plan.items.find((item) => item.title === "Diet App");
     const originalSelected = project!.selectedTaskIds ?? [];
@@ -679,8 +713,8 @@ describe("state integration", () => {
 
   it("records partial progress without completing the task", () => {
     const plan = buildDayPlan(getState());
-    const project = plan.items.find((item) => item.title === "Diet App");
-    const firstTaskId = project!.selectedTaskIds![0];
+    const project = plan.items.find((item) => item.title === "Finish auth bug");
+    const firstTaskId = project!.taskId!;
 
     recordPlanItemOutcome({
       planItemId: project!.id,
@@ -699,7 +733,7 @@ describe("state integration", () => {
   it("summarizes and stores a compact daily review for planner calibration", () => {
     const plan = buildDayPlan(getState());
     const routine = plan.items.find((item) => item.title === "Back rehab");
-    const project = plan.items.find((item) => item.title === "Diet App");
+    const project = plan.items.find((item) => item.title === "Finish auth bug");
     const message = plan.items.find((item) => item.title === "Message Will");
 
     completePlanItem(routine!.id, 25);

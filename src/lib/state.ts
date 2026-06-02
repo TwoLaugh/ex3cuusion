@@ -1150,6 +1150,44 @@ function applyAction(state: AppState, action: AiAction, confirmed: boolean, sour
     return;
   }
 
+  if (action.type === "schedule_block") {
+    const payload = action.payload as { folderId?: string; date?: string; minutes?: number };
+    const folderId = typeof payload.folderId === "string" ? payload.folderId : undefined;
+    const folder = folderId ? (state.folders ?? []).find((entry) => entry.id === folderId && entry.status !== "archived") : undefined;
+    if (!folder || folder.canBlock !== true) {
+      action.status = "failed";
+      action.skippedReason = "Could not find a blockable folder.";
+      return;
+    }
+    const date = validDate(payload.date) ? payload.date : state.currentDate;
+    const selectedTaskIds = defaultFolderBlockTaskIds(state, folder.id, date);
+    if (!selectedTaskIds.length) {
+      action.status = "failed";
+      action.skippedReason = "Could not find tasks to place in the folder block.";
+      return;
+    }
+    state.folderBlockSelections ??= [];
+    const existing = state.folderBlockSelections.find((selection) => selection.date === date && selection.folderId === folder.id);
+    if (existing) {
+      existing.selectedTaskIds = selectedTaskIds;
+      existing.updatedAt = timestampForState(state);
+    } else {
+      state.folderBlockSelections.push({
+        date,
+        folderId: folder.id,
+        selectedTaskIds,
+        updatedAt: timestampForState(state)
+      });
+    }
+    if (typeof payload.minutes === "number") {
+      folder.defaultBlockMinutes = clampNumber(payload.minutes, 5, 480, folder.defaultBlockMinutes ?? 30);
+    }
+    action.status = "applied";
+    action.appliedEntityId = folder.id;
+    action.skippedReason = undefined;
+    return;
+  }
+
   if (action.type === "schedule_task") {
     const task = findTaskForAction(state, action);
     if (!task) {
@@ -1772,8 +1810,10 @@ function findFolderMention(state: AppState, name: string): Folder | undefined {
   const folders = (state.folders ?? []).filter((folder) => folder.status !== "archived");
   const lower = name.trim().toLowerCase();
   if (!lower) return undefined;
-  const pathMatch = folders.find((folder) => (folderFullPath(state, folder.id) ?? "").toLowerCase() === lower);
-  if (pathMatch) return pathMatch;
+  if (lower.includes("/")) {
+    const pathMatch = folders.find((folder) => (folderFullPath(state, folder.id) ?? "").toLowerCase() === lower);
+    if (pathMatch) return pathMatch;
+  }
 
   const exactNameMatches = folders.filter((folder) => folder.name.toLowerCase() === lower);
   if (exactNameMatches.length === 1) return exactNameMatches[0];
@@ -1872,6 +1912,20 @@ function isSelectableBlockTask(state: AppState, folderId: string, taskId: string
   if (task.status === "blocked" && !task.blocked?.unblockAction) return false;
   if (task.status === "waiting" && !task.waiting?.followUpDate) return false;
   return true;
+}
+
+function defaultFolderBlockTaskIds(state: AppState, folderId: string, date: string): string[] {
+  return state.tasks
+    .filter((task) => {
+      if (!isSelectableBlockTask(state, folderId, task.id)) return false;
+      if (hasActiveChildren(state, task.id)) return false;
+      if (task.completionBehavior === "keep_as_suggestion") return false;
+      if (task.scheduledDate && task.scheduledDate !== date) return false;
+      return true;
+    })
+    .sort((left, right) => right.priority + right.importance + right.urgency - (left.priority + left.importance + left.urgency))
+    .slice(0, 3)
+    .map((task) => task.id);
 }
 
 function validTaskType(value: unknown): Task["type"] | undefined {

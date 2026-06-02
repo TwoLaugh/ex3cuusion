@@ -178,6 +178,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
     "For a request to collect reusable ideas or suggestions — a list the user would draw from repeatedly rather than complete once — use ask_clarification with completionBehavior keep_as_suggestion and completionMode suggestion_used, asking whether to keep it as a reusable suggestion list. Such a list is never 'done', so do not frame it as clarificationKind definition_of_done; use completion_behavior. " +
     "For time-boxed work (wording like 'work on X for N hours/minutes'), return create_task with completionBehavior repeatable, completionMode timebox, the stated effort in minutes, and the matching existing folder if one exists. " +
     "When the user lists several tasks that belong to one piece of work, return a create_folder for that work (or reuse an existing folder by its exact name/path) and a create_task for each item with folderName set to that folder — not several unrelated flat tasks. Do NOT group unrelated errands (e.g. milk, bins, call dentist); leave those as separate simple tasks. " +
+    "Folders are structure, not execution blocks. Do not create a schedule_block merely because tasks share a folder; create or schedule the individual tasks unless the user explicitly asks to block out a folder/project as one grouped work session. " +
     "When a message contains multiple distinct work areas, make separate folders for the separate areas (for example job work vs a personal project) and place only the tasks that belong there. Do not put job/work tasks into a personal project folder merely because they appeared in the same message. " +
     "A create_folder may set parentFolderName to nest under an existing folder; null means a top-level folder. " +
     "folderName must be null unless it refers to an existing folder OR a folder being created earlier in the SAME batch (same-batch grouping, resolved at apply time). For update_task, folderName null means leave placement unchanged; folderName \"\" means clear the task's folder so it appears as a normal unfiled/top-level task. " +
@@ -1603,8 +1604,10 @@ function findFolderId(state: AppState, name: string | null): string | undefined 
   const folders = (state.folders ?? []).filter((folder) => folder.status !== "archived");
   const lower = name.trim().toLowerCase();
   if (!lower) return undefined;
-  const pathMatch = folders.find((folder) => (folderPath(state.folders, folder.id) ?? "").toLowerCase() === lower);
-  if (pathMatch) return pathMatch.id;
+  if (lower.includes("/")) {
+    const pathMatch = folders.find((folder) => (folderPath(state.folders, folder.id) ?? "").toLowerCase() === lower);
+    if (pathMatch) return pathMatch.id;
+  }
 
   const exactNameMatches = folders.filter((folder) => folder.name.toLowerCase() === lower);
   if (exactNameMatches.length === 1) return exactNameMatches[0].id;
