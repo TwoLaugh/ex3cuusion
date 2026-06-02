@@ -8,10 +8,13 @@ import { buildWeekPlan } from "./week-plan";
 import type { AiAction, AiDebugTrace, AppState, CaptureSession, ClarificationKind, CompletionBehavior, CompletionMode, DateIntent, InboxEntry, SchedulingMetadata, Task } from "./types";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+const DEFAULT_INBOX_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_REASONING_EFFORT = "medium";
+const DEFAULT_INBOX_REASONING_EFFORT = "medium";
 const DEFAULT_OPENAI_TIMEOUT_MS = 45_000;
 const DEFAULT_OPENAI_MAX_RETRIES = 0;
 const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+type AiCallKind = "inbox" | "organizer" | "revision";
 
 const aiDecisionSchema = z.object({
   relevantScope: z.enum(["task", "day", "week", "backlog", "folder", "mixed", "none"]),
@@ -138,7 +141,7 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
     throw new Error("OPENAI_API_KEY is not configured");
   }
 
-  const model = openAiModel();
+  const model = openAiModel("inbox");
   const openai = new OpenAI({
     apiKey,
     timeout: openAiTimeoutMs(),
@@ -153,7 +156,7 @@ async function defaultInterpreter(input: string, state: AppState): Promise<Parse
 
 async function defaultActionInterpreter(input: string, state: AppState, openai: OpenAI, model: string): Promise<ParsedAiResponse & { model?: string; debugTrace?: AiDebugTrace }> {
   const contextInstruction =
-    "The context includes plannerEditView, a compact readable view of the current day, week, folders, and tasks. Prefer plannerEditView for reasoning, then use fullState when exact fields are needed. " +
+    "The context includes plannerEditView, a compact readable view of the current day, week, folders, and tasks. Prefer plannerEditView for reasoning, then use exactEntities when exact task or folder IDs and fields are needed. " +
     "Before choosing actions, fill decision with the relevant scope, what the user intends, what the current planner state means, and what should change. If intendedChange is not nothing, actions must not be empty. If actions is empty, noOpReason must explain why the planner state is already correct; otherwise noOpReason must be real JSON null, not a string. ";
   const instructions =
     "You are the state-editing brain for a personal execution planner. " +
@@ -195,7 +198,7 @@ async function defaultActionInterpreter(input: string, state: AppState, openai: 
   const modelInput =
     `User input: ${input}\n\n` +
     `Current planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
-  const reasoning = openAiReasoning(model);
+  const reasoning = openAiReasoning(model, "inbox");
   logAiCallStart("ai-inbox", model, modelInput, reasoning);
   const response = await openai.responses.parse({
     model,
@@ -240,14 +243,14 @@ export async function defaultOrganizerInterpreter(input: string, state: AppState
     return fixtureOrganizerInterpreter(input, state);
   }
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
-  const model = openAiModel();
+  const model = openAiModel("organizer");
   const openai = new OpenAI({
     apiKey,
     timeout: openAiTimeoutMs(),
     maxRetries: openAiMaxRetries()
   });
   const modelInput = `Conservative maintenance pass. Full planner context JSON:\n${JSON.stringify(buildInboxModelContext(state), null, 2)}`;
-  const reasoning = openAiReasoning(model);
+  const reasoning = openAiReasoning(model, "organizer");
   logAiCallStart("ai-organizer", model, modelInput, reasoning);
   const response = await openai.responses.parse({
     model,
@@ -319,7 +322,8 @@ function aiDebugEnabled(): boolean {
   return process.env.EX3CUUSION_AI_DEBUG === "1" || (process.env.NODE_ENV !== "production" && process.env.EX3CUUSION_AI_DEBUG !== "0");
 }
 
-function openAiModel(): string {
+function openAiModel(kind: AiCallKind): string {
+  if (kind === "inbox") return process.env.OPENAI_INBOX_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_INBOX_OPENAI_MODEL;
   return process.env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL;
 }
 
@@ -333,10 +337,13 @@ function openAiMaxRetries(): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_OPENAI_MAX_RETRIES;
 }
 
-function openAiReasoning(model: string): { effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"; summary?: "concise" } | undefined {
+function openAiReasoning(model: string, kind: AiCallKind): { effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"; summary?: "concise" } | undefined {
   if (!/^gpt-5/i.test(model)) return undefined;
-  const effort = process.env.OPENAI_REASONING_EFFORT?.trim() || DEFAULT_REASONING_EFFORT;
-  if (!reasoningEfforts.has(effort)) return { effort: DEFAULT_REASONING_EFFORT };
+  const effort =
+    kind === "inbox"
+      ? process.env.OPENAI_INBOX_REASONING_EFFORT?.trim() || process.env.OPENAI_REASONING_EFFORT?.trim() || DEFAULT_INBOX_REASONING_EFFORT
+      : process.env.OPENAI_REASONING_EFFORT?.trim() || DEFAULT_REASONING_EFFORT;
+  if (!reasoningEfforts.has(effort)) return { effort: kind === "inbox" ? DEFAULT_INBOX_REASONING_EFFORT : DEFAULT_REASONING_EFFORT };
   return { effort: effort as "none" | "minimal" | "low" | "medium" | "high" | "xhigh", ...(aiDebugEnabled() ? { summary: "concise" as const } : {}) };
 }
 
@@ -379,55 +386,54 @@ function folderContext(state: AppState) {
     .map((folder) => ({ id: folder.id, name: folder.name, path: folderPath(state.folders, folder.id), parentFolderId: folder.parentFolderId }));
 }
 
-function buildInboxModelContext(state: AppState) {
+export function buildInboxModelContext(state: AppState) {
   const currentDayPlan = buildDayPlan(state);
   const weekPlan = buildWeekPlan(state);
   return {
     plannerEditView: buildPlannerEditView(state, currentDayPlan, weekPlan),
-    fullState: {
+    exactEntities: {
       currentDate: state.currentDate,
       currentTime: state.currentTime,
       availableMinutes: state.availableMinutes,
       folders: folderContext(state),
-      tasks: state.tasks,
-      deferrals: state.deferrals,
-      completions: state.completions,
-      executionEvents: state.executionEvents,
+      tasks: compactTaskContext(state),
+      deferrals: state.deferrals.slice(0, 20),
+      completions: state.completions.slice(0, 20),
+      executionEvents: state.executionEvents.slice(0, 30),
       folderBlockSelections: state.folderBlockSelections,
-      dailyReviews: state.dailyReviews,
-      currentDayPlan,
-      weekPlan
+      dailyReviews: state.dailyReviews.slice(0, 10)
     },
-    recentInbox: state.inbox.slice(0, 10).map((entry) => ({
+    recentInbox: state.inbox.slice(0, 3).map((entry) => ({
       id: entry.id,
       createdAt: entry.createdAt,
       input: entry.input,
       summary: entry.summary,
-      actions: entry.actions.map((action) => ({
-        id: action.id,
-        type: action.type,
-        label: action.label,
-        status: action.status,
-        safety: action.safety,
-        appliedEntityId: action.appliedEntityId,
-        payload: action.payload
-      }))
+      actions: entry.actions.map((action) => compactActionSummary(action))
     })),
-    captureSessions: state.captureSessions.slice(0, 10).map((session) => ({
+    captureSessions: state.captureSessions.slice(0, 3).map((session) => ({
       id: session.id,
       status: session.status,
       source: session.source,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       summary: session.summary,
-      actionIds: session.actionIds,
-      draftActionIds: session.draftActionIds,
       appliedEntityIds: session.appliedEntityIds,
       unresolvedFields: session.unresolvedFields,
       answeredFields: session.answeredFields,
-      questions: session.questions,
-      recentMessages: session.messages.slice(-6),
-      revisionEvents: session.revisionEvents.slice(-6)
+      openQuestions: session.questions.map((question) => ({
+        id: question.id,
+        kind: question.kind,
+        question: question.question,
+        status: question.status,
+        materiality: question.materiality,
+        rationale: question.rationale
+      })),
+      latestUserMessage: [...session.messages].reverse().find((message) => message.role === "user")?.content ?? null,
+      recentRevisions: session.revisionEvents.slice(-2).map((revision) => ({
+        taskId: revision.taskId,
+        summary: revision.summary,
+        changes: revision.changes
+      }))
     }))
   };
 }
@@ -472,10 +478,8 @@ function buildPlannerEditView(state: AppState, currentDayPlan: ReturnType<typeof
         taskId: item.taskId ?? null,
         folderId: item.folderId ?? null,
         startTime: item.startTime ?? null,
-        endTime: item.endTime ?? null,
         estimatedMinutes: item.estimatedMinutes,
-        section: item.section,
-        status: item.status
+        section: item.section
       }))
     })),
     backlog: {
@@ -502,6 +506,48 @@ function buildPlannerEditView(state: AppState, currentDayPlan: ReturnType<typeof
   };
 }
 
+function compactTaskContext(state: AppState) {
+  const folderNameById = new Map((state.folders ?? []).map((folder) => [folder.id, folderPath(state.folders, folder.id) ?? folder.name]));
+  return state.tasks
+    .filter((task) => !["archived", "completed"].includes(task.status))
+    .map((task) => ({
+      id: task.id,
+      title: task.title,
+      type: task.type,
+      folderId: task.folderId ?? null,
+      folder: task.folderId ? folderNameById.get(task.folderId) ?? task.folderId : null,
+      parentTaskId: task.parentTaskId ?? null,
+      status: task.status,
+      scheduledDate: task.scheduledDate ?? null,
+      scheduledTime: task.scheduledTime ?? null,
+      dueDate: task.dueDate ?? null,
+      dateIntent: task.dateIntent ?? null,
+      effortMinutes: task.effortMinutes,
+      priority: task.priority,
+      importance: task.importance,
+      urgency: task.urgency,
+      completionBehavior: task.completionBehavior,
+      completionMode: task.completionMode ?? null,
+      definitionOfDone: task.definitionOfDone ?? null,
+      scheduling: task.scheduling ?? null,
+      repeatPolicy: task.repeatPolicy,
+      tags: task.tags ?? []
+    }));
+}
+
+function compactActionSummary(action: AiAction) {
+  return {
+    type: action.type,
+    status: action.status,
+    appliedEntityId: action.appliedEntityId,
+    taskId: action.payload.taskId ?? undefined,
+    title: action.payload.title ?? action.label,
+    scheduledDate: action.payload.scheduledDate ?? undefined,
+    scheduledTime: action.payload.scheduledTime ?? undefined,
+    dueDate: action.payload.dueDate ?? undefined
+  };
+}
+
 async function defaultRevisionInterpreter({
   message,
   state,
@@ -522,13 +568,13 @@ async function defaultRevisionInterpreter({
     throw new Error("OPENAI_API_KEY is not configured");
   }
 
-  const model = openAiModel();
+  const model = openAiModel("revision");
   const openai = new OpenAI({
     apiKey,
     timeout: openAiTimeoutMs(),
     maxRetries: openAiMaxRetries()
   });
-  const reasoning = openAiReasoning(model);
+  const reasoning = openAiReasoning(model, "revision");
   logAiCallStart("ai-revision", model, `${message}\n${task.id}`, reasoning);
   const response = await openai.responses.parse({
     model,

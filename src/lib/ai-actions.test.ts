@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fixtureInterpreter, interpretInboxInput } from "./ai-actions";
+import { buildInboxModelContext, fixtureInterpreter, interpretInboxInput } from "./ai-actions";
 import { createSeedState } from "./seed";
 
 // The fixture interpreter is a deterministic TEST DOUBLE for exercising the
@@ -431,5 +431,60 @@ describe("interpretInboxInput", () => {
       instructions: "Test instructions",
       response: "{\"summary\":\"ok\"}"
     });
+  });
+
+  it("keeps inbox model context compact and excludes old debug traces", () => {
+    const state = createSeedState();
+    state.currentDate = "2026-06-01";
+    state.currentTime = "08:30";
+    state.inbox = [
+      {
+        id: "inbox_debug",
+        createdAt: "2026-06-01T08:30:00.000Z",
+        input: "move the task",
+        summary: "Moved the task.",
+        actions: [
+          {
+            id: "action_debug",
+            type: "schedule_task",
+            label: "Move task",
+            status: "applied",
+            safety: "auto_apply",
+            createdAt: "2026-06-01T08:30:00.000Z",
+            model: "fixture",
+            payload: {
+              taskId: state.tasks[0].id,
+              title: state.tasks[0].title,
+              scheduledDate: "2026-06-01",
+              scheduledTime: "09:00",
+              hugeUnneededPayload: "x".repeat(20_000)
+            },
+            appliedEntityId: state.tasks[0].id
+          }
+        ],
+        debugTrace: {
+          calls: [
+            {
+              label: "Old prompt",
+              model: "fixture",
+              createdAt: "2026-06-01T08:30:00.000Z",
+              instructions: "x".repeat(20_000),
+              input: "old prompt should not be re-sent",
+              response: "old response should not be re-sent",
+              parsedResponse: { summary: "old" }
+            }
+          ]
+        }
+      }
+    ];
+
+    const serialized = JSON.stringify(buildInboxModelContext(state));
+
+    expect(serialized).toContain("plannerEditView");
+    expect(serialized).toContain("exactEntities");
+    expect(serialized).not.toContain("debugTrace");
+    expect(serialized).not.toContain("old prompt should not be re-sent");
+    expect(serialized).not.toContain("hugeUnneededPayload");
+    expect(serialized.length).toBeLessThan(25_000);
   });
 });
