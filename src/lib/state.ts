@@ -1,8 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, schedulingForMode, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
 import { nextId } from "./ids";
 import { blockFolderId, buildDayPlan, hasActiveChildren } from "./planner";
-import { getRepository } from "./repository";
+import { defaultStateFilePath, getRepository } from "./repository";
 import { createRealisticCharacterState } from "./scenarios";
 import type {
   AiAction,
@@ -81,10 +83,11 @@ export function resetState(): AppState {
   return getState();
 }
 
-// --- AI change history & undo (T061) -------------------------------------------------------
+// --- AI change history & undo (T061, persistence T077) --------------------------------------
 // Apply model: auto-apply with undo. Before any AI operation mutates state we snapshot the
 // prior state; undo restores it. History is kept OUTSIDE AppState so it never leaks into the
-// model context or state serialization. In-memory/per-process (not persisted to Postgres yet).
+// model context or state serialization. When the state itself is file-persisted (the default),
+// history is write-through persisted to a sibling .history.json so undo survives restarts.
 
 interface ChangeHistoryEntry {
   id: string;
@@ -97,13 +100,50 @@ interface ChangeHistoryEntry {
 const MAX_CHANGE_HISTORY = 50;
 const globalHistoryStore = globalThis as typeof globalThis & { __ex3cuusionChangeHistory?: ChangeHistoryEntry[] };
 
+// History persists only alongside file-backed state: postgres mode has its own durability story
+// (not covered yet), memory mode is explicitly throwaway, and tests must stay hermetic.
+function historyFilePath(): string | undefined {
+  if (process.env.NODE_ENV === "test") return undefined;
+  const mode = process.env.EX3CUUSION_STATE_REPOSITORY;
+  if (mode === "postgres" || mode === "memory") return undefined;
+  const stateFile = process.env.EX3CUUSION_STATE_FILE;
+  if (stateFile) return `${stateFile}.history.json`;
+  return path.join(path.dirname(defaultStateFilePath()), "history.json");
+}
+
 function changeHistory(): ChangeHistoryEntry[] {
-  globalHistoryStore.__ex3cuusionChangeHistory ??= [];
+  if (globalHistoryStore.__ex3cuusionChangeHistory === undefined) {
+    globalHistoryStore.__ex3cuusionChangeHistory = loadPersistedHistory();
+  }
   return globalHistoryStore.__ex3cuusionChangeHistory;
+}
+
+function loadPersistedHistory(): ChangeHistoryEntry[] {
+  const file = historyFilePath();
+  if (!file) return [];
+  try {
+    if (!fs.existsSync(file)) return [];
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    return Array.isArray(parsed) ? (parsed as ChangeHistoryEntry[]) : [];
+  } catch {
+    return []; // a corrupt history file should never block the app; undo just starts fresh
+  }
+}
+
+function persistHistory(): void {
+  const file = historyFilePath();
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(changeHistory()));
+  } catch {
+    // best-effort: failing to persist history must not break the mutation itself
+  }
 }
 
 function clearChangeHistory(): void {
   globalHistoryStore.__ex3cuusionChangeHistory = [];
+  persistHistory();
 }
 
 function changeTimestamp(state: AppState): string {
@@ -116,6 +156,7 @@ function recordChange(source: string, summary: string): void {
   const history = changeHistory();
   history.push({ id: nextId("history"), source, summary, createdAt: changeTimestamp(state), snapshot: structuredClone(state) });
   while (history.length > MAX_CHANGE_HISTORY) history.shift();
+  persistHistory();
 }
 
 export interface ChangeHistoryItem {
@@ -140,6 +181,7 @@ export function undoChange(id?: string): AppState {
   if (index < 0) return getState();
   replaceState(structuredClone(history[index].snapshot));
   history.splice(index);
+  persistHistory();
   return getState();
 }
 

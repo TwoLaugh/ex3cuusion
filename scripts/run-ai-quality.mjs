@@ -51,7 +51,8 @@ const JUDGE_INSTRUCTIONS =
   "missing required clarification, fabricated junk, ignoring the request, or an invalid/failed " +
   "action. Give a one-sentence reason and a severity (none when pass; minor or major when fail).";
 
-const serverEnv = { ...process.env, OPENAI_MODEL: model };
+// Quality servers must be hermetic: never read/write the durable .data/ store.
+const serverEnv = { ...process.env, OPENAI_MODEL: model, EX3CUUSION_STATE_REPOSITORY: "memory" };
 delete serverEnv.EX3CUUSION_AI_MODE;
 const runner = isWindows ? "cmd.exe" : "npx";
 const serverArgs = isWindows

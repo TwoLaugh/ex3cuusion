@@ -20,7 +20,9 @@ if (live && !process.env.OPENAI_API_KEY) {
 
 const serverEnv = {
     ...process.env,
-    OPENAI_MODEL: process.env.OPENAI_MODEL ?? "gpt-5.5"
+    OPENAI_MODEL: process.env.OPENAI_MODEL ?? "gpt-5.5",
+    // Eval servers must be hermetic: never read/write the durable .data/ store.
+    EX3CUUSION_STATE_REPOSITORY: "memory"
   };
 if (!live) serverEnv.EX3CUUSION_AI_MODE = "fixture";
 if (live) delete serverEnv.EX3CUUSION_AI_MODE;

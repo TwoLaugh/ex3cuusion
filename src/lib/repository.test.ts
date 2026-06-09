@@ -1,10 +1,42 @@
 import { describe, expect, it } from "vitest";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createSeedState } from "./seed";
-import { createPostgresRepositoryForTests } from "./repository";
+import { createFileRepositoryForTests, createPostgresRepositoryForTests } from "./repository";
 
 const describePostgres = process.env.DATABASE_URL ? describe : describe.skip;
+
+describe("file repository", () => {
+  // Regression: the file repo used to re-parse the file on every read(), silently dropping the
+  // in-place mutations state.ts applies to the object read() returns. It must hand back the SAME
+  // live object across reads (like the in-memory and Postgres repos) and flush it to disk.
+  it("keeps a live object across reads, persists mutations, and survives a 'restart'", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ex3-file-repo-"));
+    const filePath = path.join(dir, "state.json");
+    try {
+      const repository = createFileRepositoryForTests(filePath);
+      const first = repository.read(); // seeds on first read
+      expect(first.tasks.length).toBeGreaterThan(0);
+
+      // Mutate the returned object in place — exactly what applyStructureMutation does.
+      first.tasks.push({ ...first.tasks[0], id: "task_file_repo_probe", title: "File repo probe" });
+      const second = repository.read();
+      expect(second.tasks.some((task) => task.id === "task_file_repo_probe")).toBe(true);
+
+      // The persist-on-read flush must have written the mutation to disk.
+      expect(readFileSync(filePath, "utf8")).toContain("task_file_repo_probe");
+
+      // A NEW instance over the same file (process restart) sees the mutation.
+      const rebooted = createFileRepositoryForTests(filePath).read();
+      expect(rebooted.tasks.some((task) => task.id === "task_file_repo_probe")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describePostgres("postgres repository", () => {
   it("resets, writes, and reads AppState through normalized Postgres tables", async () => {
