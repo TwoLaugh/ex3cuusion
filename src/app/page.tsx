@@ -1,19 +1,27 @@
 "use client";
 
-import { Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Menu, Plus, Send, Undo2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Folder, ListChecks, Plus, Send, Settings2, Sparkles, Sun, Undo2, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 import { EditableBadge } from "./components/EditableBadge";
 import { InboxSession } from "./components/InboxSession";
 import { PlanItemActions } from "./components/PlanItemActions";
 import { ReviewDayDialog } from "./components/ReviewDayDialog";
-import { PlanItemMeta, SecondaryPanel, type SecondaryView } from "./components/SecondaryPanel";
-import { addClockMinutes, formatDate, formatDay, formatShortDate, fromMinutes, isClockTime, localNowParts, normalizeMoveTime, systemWeekdayIndex, toMinutes, weekDots } from "./lib/format";
-import { applyPendingTimelineMoves, buildTimeline, pixelsPerMinute, removePendingTimelineMove, type PendingTimelineMove } from "./lib/plan-view";
+import { labelForSection, PlanItemMeta, SecondaryPanel, type SecondaryView } from "./components/SecondaryPanel";
+import { addClockMinutes, formatDate, formatShortDate, fromMinutes, isClockTime, localNowParts, normalizeMoveTime, toMinutes } from "./lib/format";
+import { applyPendingTimelineMoves, buildTimeline, endMinutesFor, pixelsPerMinute, removePendingTimelineMove, type PendingTimelineMove } from "./lib/plan-view";
 import { childStats, clientBlockFolderId, dateIntentLabel } from "./lib/task-view";
 
 type ApiPayload = { state: AppState; plan: DayPlan };
-const secondaryViews: SecondaryView[] = ["Folders", "Tasks", "Planning preferences", "AI activity"];
+type MainView = "Today" | SecondaryView;
+
+const navItems: { label: string; view: MainView; ariaLabel: string; Icon: typeof Sun }[] = [
+  { label: "Today", view: "Today", ariaLabel: "Today", Icon: Sun },
+  { label: "Tasks", view: "Tasks", ariaLabel: "Tasks", Icon: ListChecks },
+  { label: "Folders", view: "Folders", ariaLabel: "Folders", Icon: Folder },
+  { label: "AI activity", view: "AI activity", ariaLabel: "AI activity", Icon: Sparkles },
+  { label: "Preferences", view: "Planning preferences", ariaLabel: "Planning preferences", Icon: Settings2 }
+];
 
 interface TimelineDragState {
   itemId: string;
@@ -34,9 +42,9 @@ interface TimelineDragState {
 
 export default function Home() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [activeView, setActiveView] = useState<SecondaryView | null>(null);
-  const [inboxOpen, setInboxOpen] = useState(false);
+  const [view, setView] = useState<MainView>("Today");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [laterOpen, setLaterOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
@@ -51,7 +59,6 @@ export default function Home() {
   const [notDoneNote, setNotDoneNote] = useState("");
   const [clarificationDrafts, setClarificationDrafts] = useState<Record<string, string>>({});
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
-  const [todayIndex, setTodayIndex] = useState<number | null>(null);
   const [history, setHistory] = useState<{ id: string; source: string; summary: string; createdAt: string }[]>([]);
   // T078: transient post-action toast (one at a time, latest wins). The latest-history-id ref
   // is primed on the first history fetch so pre-existing entries never toast; undo paths set
@@ -61,6 +68,10 @@ export default function Home() {
   const lastHistoryIdRef = useRef<string | null>(null);
   const historyPrimedRef = useRef(false);
   const suppressHistoryToastRef = useRef(false);
+  // T089: the AI session drawer auto-surfaces when a new clarification question appears.
+  // Tracking the last-seen pending question id keeps a manual close sticky until the AI
+  // actually asks something new.
+  const lastPendingQuestionRef = useRef<string | null>(null);
   // True while the view should track real "today" (T068). Manual day navigation turns it off so
   // the live tick does not yank the user back; the "Today" control turns it back on.
   const followingTodayRef = useRef(true);
@@ -376,6 +387,17 @@ export default function Home() {
     };
   }, [payload]);
 
+  // T089: surface the AI session drawer whenever the latest capture session has a freshly
+  // pending clarification question. Closing the drawer only hides it — nothing is reset.
+  useEffect(() => {
+    if (!payload) return;
+    const entry = payload.state.inbox[0];
+    const session = entry ? payload.state.captureSessions.find((candidate) => candidate.id === entry.captureSessionId) : undefined;
+    const pendingId = session?.questions.find((question) => question.status === "pending")?.id ?? null;
+    if (pendingId && pendingId !== lastPendingQuestionRef.current) setAiOpen(true);
+    lastPendingQuestionRef.current = pendingId;
+  }, [payload]);
+
   async function post(url: string, body: Record<string, unknown> = {}) {
     const response = await fetch(url, {
       method: "POST",
@@ -393,7 +415,6 @@ export default function Home() {
     syncClock().catch(() => {
       void refresh();
     });
-    setTodayIndex(systemWeekdayIndex());
   }, []);
 
   // Guarded live clock tick (T068): keep "today" current and roll past midnight, but only while
@@ -464,6 +485,8 @@ export default function Home() {
     try {
       await post("/api/inbox", { input: draft.trim() });
       setDraft("");
+      // T089: the capture resolved — surface the AI session drawer with the outcome.
+      setAiOpen(true);
     } catch (error) {
       setInboxError(error instanceof Error ? error.message : "AI request failed.");
     } finally {
@@ -546,160 +569,265 @@ export default function Home() {
     setMoveError(null);
   }
 
+  // T089: Now/Next/Later composition — pure reads over the (optimistically moved) plan items.
+  // Current = first planned item whose clock window contains "now"; otherwise the next upcoming
+  // planned item; otherwise the Now card shows a quiet empty state.
+  const nowMinutes = toMinutes(state.currentTime);
+  const scheduledPlanned = timelineItems
+    .filter((item) => item.status === "planned" && isClockTime(item.startTime) && isClockTime(item.endTime))
+    .sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
+  const currentItem = scheduledPlanned.find((item) => toMinutes(item.startTime) <= nowMinutes && nowMinutes < endMinutesFor(item));
+  const nowItem = currentItem ?? scheduledPlanned.find((item) => toMinutes(item.startTime) > nowMinutes);
+  const afterNow = nowItem ? scheduledPlanned.slice(scheduledPlanned.indexOf(nowItem) + 1) : [];
+  const nextItems = afterNow.slice(0, 3);
+  const laterItems = afterNow.slice(3);
+  const nowFolderName = nowItem?.folderId ? state.folders?.find((folder) => folder.id === nowItem.folderId)?.name : undefined;
+  const nowDuration = nowItem ? Math.max(1, endMinutesFor(nowItem) - toMinutes(nowItem.startTime)) : 0;
+  const nowLeft = currentItem ? Math.max(0, endMinutesFor(currentItem) - nowMinutes) : 0;
+  const nowProgress = currentItem ? Math.min(1, Math.max(0, (nowMinutes - toMinutes(currentItem.startTime)) / nowDuration)) : 0;
+  const capacityLeft = Math.max(0, plan.availableMinutes - plan.estimatedTotalMinutes);
+  const latestEntry = state.inbox[0];
+  const latestSession = latestEntry ? state.captureSessions.find((session) => session.id === latestEntry.captureSessionId) : undefined;
+  const hasPendingClarification = (latestSession?.questions ?? []).some((question) => question.status === "pending");
+
   return (
-    <main className="shell">
-      <aside className={menuOpen ? "sideNav sideNavOpen" : "sideNav"} aria-label="Secondary pages">
-        <button className="iconButton closeButton" onClick={() => setMenuOpen(false)} aria-label="Close menu">
-          <X size={19} />
-        </button>
-        <nav>
-          {secondaryViews.map((item) => (
+    <div className="appShell">
+      <aside className="navRail" aria-label="Primary navigation">
+        <p className="wordmark">ex3cuusion</p>
+        <nav className="railNav">
+          {navItems.map(({ label, view: navView, ariaLabel, Icon }) => (
             <button
-              key={item}
-              className={activeView === item ? "navItem activeNavItem" : "navItem"}
-              onClick={() => {
-                setActiveView(item);
-                setMenuOpen(false);
-              }}
+              key={navView}
+              className={view === navView ? "navItem activeNavItem" : "navItem"}
+              onClick={() => setView(navView)}
+              aria-label={ariaLabel}
+              aria-current={view === navView ? "page" : undefined}
             >
-              {item}
-              <ChevronRight size={16} />
+              <Icon size={17} />
+              <span className="navLabel">{label}</span>
             </button>
           ))}
         </nav>
+        <div className="railFooter">
+          <p className="railCapacity" data-testid="load-level">
+            {formatDuration(capacityLeft)} left
+          </p>
+          <button className="tidyButton" onClick={runOrganizer} disabled={sending} aria-label="Run a tidy-up maintenance pass">
+            Run tidy-up
+          </button>
+        </div>
       </aside>
 
-      <header className="topbar">
-        <button className="iconButton" onClick={() => setMenuOpen(true)} aria-label="Open menu">
-          <Menu size={22} />
-        </button>
-        <div className="dateNavigator">
-          <div className="dayDots" aria-label="Week position">
-            {weekDots(plan.date, todayIndex).map((dot) => (
-              <span
-                aria-label={dot.label}
-                className={`${dot.viewed ? "viewedDot" : ""} ${dot.today ? "todayDot" : ""}`}
-                key={dot.label}
-                title={dot.label}
-              />
-            ))}
-          </div>
-          <div className="dateControls">
-            <button
-              className="iconButton dateStep"
-              onClick={() => {
-                followingTodayRef.current = false;
-                post("/api/time", { retreat: true });
-              }}
-              aria-label="Previous day"
-            >
-              <ChevronLeft size={20} />
-            </button>
-            <div className="dateDisplay">
-              <h1 aria-label={formatDate(plan.date)}>{formatShortDate(plan.date)}</h1>
-              <p>{formatDay(plan.date)}</p>
-            </div>
-            <button
-              className="iconButton dateStep"
-              onClick={() => {
-                followingTodayRef.current = false;
-                post("/api/time", { advance: true });
-              }}
-              aria-label="Next day"
-            >
-              <ChevronRight size={20} />
-            </button>
-            {plan.date !== localNowParts().date && (
-              <button className="todayButton" onClick={goToToday} aria-label="Jump to today">
-                Today
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="loadBadge" data-testid="load-level">
-          <Clock3 size={16} />
-          {plan.loadLevel} - {state.currentTime} - committed {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
-        </div>
-        <button className="reviewButton" onClick={() => setReviewOpen(true)} aria-label="Review day">
-          <ClipboardCheck size={16} />
-          Review
-        </button>
-      </header>
-
-      {activeView && (
-        <SecondaryPanel
-          view={activeView}
-          state={state}
-          plan={plan}
-          post={post}
-          onClose={() => setActiveView(null)}
-          runOrganizer={runOrganizer}
-          organizerRunning={sending}
-          updateCapacity={updateCapacity}
-        />
-      )}
-
-      <section className="calendarTimeline" aria-label="Timed day plan">
-        <div className="calendarScroll">
-          <div className="timeColumn" style={{ height: timeline?.height }}>
-            {timeline?.hours.map((hour) => (
-              <div className="hourLabel" key={hour.time} style={{ top: hour.top }}>
-                {hour.time}
+      <main className="mainColumn">
+        {view !== "Today" ? (
+          <SecondaryPanel
+            view={view}
+            state={state}
+            plan={plan}
+            post={post}
+            runOrganizer={runOrganizer}
+            organizerRunning={sending}
+            updateCapacity={updateCapacity}
+          />
+        ) : (
+          <>
+            <header className="todayHeader">
+              <div>
+                <h1 aria-label={formatDate(plan.date)}>{formatDate(plan.date)}</h1>
+                <p className="capacityLine">{formatDuration(capacityLeft)} of capacity left</p>
               </div>
-            ))}
-          </div>
-          <div
-            className={timelineDrag ? "calendarGrid draggingTimeline" : "calendarGrid"}
-            ref={calendarGridRef}
-            style={{ height: timeline?.height }}
-          >
-            {timeline?.hours.map((hour) => <div className="hourLine" key={hour.time} style={{ top: hour.top }} />)}
-            {timelineDrag && (
-              <div className="dragPlaceholder" style={dragPlaceholderStyle()} aria-hidden="true">
-                <span>{timelineDrag.previewTime}</span>
+              <div className="dayNav">
+                <button
+                  className="pill pillQuiet iconPill"
+                  onClick={() => {
+                    followingTodayRef.current = false;
+                    post("/api/time", { retreat: true });
+                  }}
+                  aria-label="Previous day"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                {plan.date !== localNowParts().date && (
+                  <button className="pill pillQuiet" onClick={goToToday} aria-label="Jump to today">
+                    Today
+                  </button>
+                )}
+                <button
+                  className="pill pillQuiet iconPill"
+                  onClick={() => {
+                    followingTodayRef.current = false;
+                    post("/api/time", { advance: true });
+                  }}
+                  aria-label="Next day"
+                >
+                  <ChevronRight size={16} />
+                </button>
+                <button className="pill pillSecondary" onClick={() => setReviewOpen(true)} aria-label="Review day">
+                  Review day
+                </button>
               </div>
-            )}
-            {timeline?.items.map(({ item, top, height, left, width, laneCount }) => (
-              <article
-                className={`timelineBlock ${item.status} ${item.estimatedMinutes < 30 ? "compactBlock" : ""} ${
-                  item.estimatedMinutes <= 15 ? "microBlock" : ""
-                } ${laneCount > 1 ? "overlapBlock" : ""} ${
-                  item.schedulingMode && item.schedulingMode !== "exclusive" ? `mode-${item.schedulingMode}` : ""
-                } ${timelineDrag?.itemId === item.id ? "draggingBlock" : ""} ${
-                  timelineDrag && timelineDrag.itemId !== item.id ? "dragAwareBlock" : ""
-                }`}
-                key={item.id}
-                data-testid={`plan-item-${item.title}`}
-                aria-grabbed={timelineDrag?.itemId === item.id}
-                onPointerDown={(event) => beginTimelineDrag(event, item, { top, height, left, width })}
-                style={timelineBlockStyle({ item, top, height, left, width })}
-              >
-                <div className="blockContent">
-                  <div>
-                    <div className="blockTime">
-                      {item.startTime} - {item.endTime}
+            </header>
+
+            <section className="nowCard" aria-label="Now">
+              {nowItem ? (
+                <>
+                  <p className="nowFolder">{nowFolderName ?? labelForSection(nowItem.section)}</p>
+                  <h2 className="nowTitle">{nowItem.title}</h2>
+                  <p className="nowMeta">
+                    {currentItem
+                      ? `${nowLeft}m left of ${nowDuration}m${nextItems[0] ? ` · then ${nextItems[0].title}` : ""}`
+                      : `starts at ${nowItem.startTime} · ${nowDuration}m`}
+                  </p>
+                  {currentItem && (
+                    <div className="progressTrack" aria-hidden="true">
+                      <div className="progressFill" style={{ width: `${Math.round(nowProgress * 100)}%` }} />
                     </div>
-                    <h2>{item.title}</h2>
-                    <PlanItemMeta item={item} />
-                    {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
+                  )}
+                  <div className="nowActions">
+                    <button
+                      className="pill pillPrimary"
+                      onClick={() => post("/api/plan/complete", { planItemId: nowItem.id })}
+                      aria-label={`Complete ${nowItem.title}`}
+                    >
+                      Done
+                    </button>
+                    <button className="pill pillSecondary" onClick={() => setNotDoneItem(nowItem)} aria-label={`Defer ${nowItem.title}`}>
+                      Defer
+                    </button>
+                    <button className="pill pillQuiet" onClick={() => setSelected(nowItem)} aria-label={`Details for ${nowItem.title}`}>
+                      Details
+                    </button>
                   </div>
-                  <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
+                </>
+              ) : (
+                <p className="nowEmpty">Nothing planned — capture something or open the timeline.</p>
+              )}
+            </section>
+
+            {nextItems.length > 0 && (
+              <section className="nextSection" aria-label="Next">
+                <h2 className="sectionEyebrow">Next</h2>
+                {nextItems.map((item) => (
+                  <button className="nextRow" key={item.id} onClick={() => setSelected(item)} aria-label={`Details for ${item.title}`}>
+                    <span className="nextTitle">{item.title}</span>
+                    <span className="nextTime">
+                      {item.startTime} · {Math.max(1, endMinutesFor(item) - toMinutes(item.startTime))}m
+                    </span>
+                  </button>
+                ))}
+              </section>
+            )}
+
+            <details className="laterSection" open={laterOpen} onToggle={(event) => setLaterOpen(event.currentTarget.open)}>
+              <summary className="sectionEyebrow">
+                Later today · {laterItems.length} item{laterItems.length === 1 ? "" : "s"}
+              </summary>
+              {laterItems.length > 0 && (
+                <div className="laterList">
+                  {laterItems.map((item) => (
+                    <button className="nextRow" key={item.id} onClick={() => setSelected(item)} aria-label={`Details for ${item.title}`}>
+                      <span className="nextTitle">{item.title}</span>
+                      <span className="nextTime">
+                        {item.startTime} · {Math.max(1, endMinutesFor(item) - toMinutes(item.startTime))}m
+                      </span>
+                    </button>
+                  ))}
                 </div>
-              </article>
-            ))}
-          </div>
-        </div>
-        {timeline?.unscheduled.map((item) => (
-          <article className={`unscheduledItem ${item.status}`} key={item.id} data-testid={`plan-item-${item.title}`}>
-            <div>
-              <h2>{item.title}</h2>
-              <PlanItemMeta item={item} />
-              {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
-            </div>
-            <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
-          </article>
-        ))}
-      </section>
+              )}
+              <section className="calendarTimeline" aria-label="Timed day plan">
+                <div className="calendarScroll">
+                  <div className="timeColumn" style={{ height: timeline?.height }}>
+                    {timeline?.hours.map((hour) => (
+                      <div className="hourLabel" key={hour.time} style={{ top: hour.top }}>
+                        {hour.time}
+                      </div>
+                    ))}
+                  </div>
+                  <div
+                    className={timelineDrag ? "calendarGrid draggingTimeline" : "calendarGrid"}
+                    ref={calendarGridRef}
+                    style={{ height: timeline?.height }}
+                  >
+                    {timeline?.hours.map((hour) => <div className="hourLine" key={hour.time} style={{ top: hour.top }} />)}
+                    {timelineDrag && (
+                      <div className="dragPlaceholder" style={dragPlaceholderStyle()} aria-hidden="true">
+                        <span>{timelineDrag.previewTime}</span>
+                      </div>
+                    )}
+                    {timeline?.items.map(({ item, top, height, left, width, laneCount }) => (
+                      <article
+                        className={`timelineBlock ${item.status} ${item.estimatedMinutes < 30 ? "compactBlock" : ""} ${
+                          item.estimatedMinutes <= 15 ? "microBlock" : ""
+                        } ${laneCount > 1 ? "overlapBlock" : ""} ${
+                          item.schedulingMode && item.schedulingMode !== "exclusive" ? `mode-${item.schedulingMode}` : ""
+                        } ${timelineDrag?.itemId === item.id ? "draggingBlock" : ""} ${
+                          timelineDrag && timelineDrag.itemId !== item.id ? "dragAwareBlock" : ""
+                        }`}
+                        key={item.id}
+                        data-testid={`plan-item-${item.title}`}
+                        aria-grabbed={timelineDrag?.itemId === item.id}
+                        onPointerDown={(event) => beginTimelineDrag(event, item, { top, height, left, width })}
+                        style={timelineBlockStyle({ item, top, height, left, width })}
+                      >
+                        <div className="blockContent">
+                          <div>
+                            <div className="blockTime">
+                              {item.startTime} - {item.endTime}
+                            </div>
+                            <h2>{item.title}</h2>
+                            <PlanItemMeta item={item} />
+                            {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
+                          </div>
+                          <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+                {timeline?.unscheduled.map((item) => (
+                  <article className={`unscheduledItem ${item.status}`} key={item.id} data-testid={`plan-item-${item.title}`}>
+                    <div>
+                      <h2>{item.title}</h2>
+                      <PlanItemMeta item={item} />
+                      {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
+                    </div>
+                    <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
+                  </article>
+                ))}
+              </section>
+            </details>
+
+            <form
+              className="captureBar"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitInbox();
+              }}
+            >
+              <input
+                className="captureInput"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Capture anything — the AI files it"
+                aria-label="Inbox input"
+              />
+              <button type="button" className="pill pillQuiet aiPill" onClick={() => setAiOpen(true)} aria-label="Open AI session">
+                <Sparkles size={15} />
+                AI
+                {hasPendingClarification && <span className="aiPendingDot" aria-hidden="true" />}
+              </button>
+              <button type="submit" className="captureSend" disabled={sending} aria-label={sending ? "Thinking" : "Send to AI"}>
+                <Send size={16} />
+              </button>
+            </form>
+            {inboxError && (
+              <p className="errorMessage" role="alert">
+                {inboxError}
+              </p>
+            )}
+          </>
+        )}
+      </main>
 
       {selected && selected.type === "folder_block" && (
         <div className="drawer" role="dialog" aria-label={`${selected.title} folder drawer`}>
@@ -855,73 +983,61 @@ export default function Home() {
         </div>
       )}
 
-      <button className="aiButton" onClick={() => setInboxOpen(true)} aria-label="Open AI inbox">
-        <Bot size={28} />
-      </button>
-
-      {inboxOpen && (
-        <div className="overlay" role="dialog" aria-label="AI inbox">
-          <section className="inboxPanel">
-            <button className="iconButton closeButton" onClick={() => setInboxOpen(false)} aria-label="Close AI inbox">
-              <X size={18} />
-            </button>
-            <div className="inboxComposer">
-              <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="Tell me what changed..."
-                aria-label="Inbox input"
-              />
-              <button className="sendIconButton" onClick={submitInbox} disabled={sending} aria-label={sending ? "Thinking" : "Send to AI"}>
-                <Send size={18} />
-              </button>
-            </div>
-            <button className="tidyButton" onClick={runOrganizer} disabled={sending} aria-label="Run a tidy-up maintenance pass">
-              Tidy up
-            </button>
-            {inboxError && (
-              <p className="errorMessage" role="alert">
-                {inboxError}
-              </p>
-            )}
-            {history.length > 0 && (
-              <div className="changeHistory">
-                <span className="changeHistoryTitle">Recent AI changes</span>
-                {history.slice(0, 5).map((change) => (
-                  <div key={change.id} className="changeRow">
-                    <span className="changeSummary">{change.summary}</span>
-                    <button className="undoButton" onClick={() => undoChange(change.id)} aria-label={`Undo ${change.summary}`}>
-                      Undo
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="inboxLog">
-              {/* T087: keep the inbox fresh — only the current/most-recent exchange shows here;
-                  earlier sessions are logged on the AI activity page. */}
-              {state.inbox.slice(0, 1).map((entry, index) => (
-                <InboxSession
-                  key={`${entry.id}_${index}`}
-                  entry={entry}
-                  session={state.captureSessions.find((session) => session.id === entry.captureSessionId)}
-                  clarificationDrafts={clarificationDrafts}
-                  setClarificationDrafts={setClarificationDrafts}
-                  followUpDrafts={followUpDrafts}
-                  setFollowUpDrafts={setFollowUpDrafts}
-                  answerClarification={answerClarification}
-                  sendFollowUp={sendFollowUp}
-                  post={post}
-                />
+      {aiOpen && (
+        <aside className="drawer aiDrawer" role="dialog" aria-label="AI session">
+          <button className="iconButton closeButton" onClick={() => setAiOpen(false)} aria-label="Close AI session">
+            <X size={18} />
+          </button>
+          <p className="eyebrow">AI session</p>
+          {inboxError && (
+            <p className="errorMessage" role="alert">
+              {inboxError}
+            </p>
+          )}
+          {history.length > 0 && (
+            <div className="changeHistory">
+              <span className="changeHistoryTitle">Recent AI changes</span>
+              {history.slice(0, 5).map((change) => (
+                <div key={change.id} className="changeRow">
+                  <span className="changeSummary">{change.summary}</span>
+                  <button className="undoButton" onClick={() => undoChange(change.id)} aria-label={`Undo ${change.summary}`}>
+                    Undo
+                  </button>
+                </div>
               ))}
-              {state.inbox.length > 1 && (
-                <button className="inboxHistoryLink" onClick={() => { setInboxOpen(false); setActiveView("AI activity"); }}>
-                  View {state.inbox.length - 1} earlier session{state.inbox.length - 1 === 1 ? "" : "s"} in AI activity
-                </button>
-              )}
             </div>
-          </section>
-        </div>
+          )}
+          <div className="inboxLog">
+            {state.inbox.length === 0 && <p className="emptyPanel">No captures yet — use the bar on Today.</p>}
+            {/* T087: keep the session drawer fresh — only the current/most-recent exchange shows
+                here; earlier sessions are logged on the AI activity page. */}
+            {state.inbox.slice(0, 1).map((entry, index) => (
+              <InboxSession
+                key={`${entry.id}_${index}`}
+                entry={entry}
+                session={state.captureSessions.find((session) => session.id === entry.captureSessionId)}
+                clarificationDrafts={clarificationDrafts}
+                setClarificationDrafts={setClarificationDrafts}
+                followUpDrafts={followUpDrafts}
+                setFollowUpDrafts={setFollowUpDrafts}
+                answerClarification={answerClarification}
+                sendFollowUp={sendFollowUp}
+                post={post}
+              />
+            ))}
+            {state.inbox.length > 1 && (
+              <button
+                className="inboxHistoryLink"
+                onClick={() => {
+                  setAiOpen(false);
+                  setView("AI activity");
+                }}
+              >
+                View {state.inbox.length - 1} earlier session{state.inbox.length - 1 === 1 ? "" : "s"} in AI activity
+              </button>
+            )}
+          </div>
+        </aside>
       )}
 
       {notDoneItem && (
@@ -988,7 +1104,6 @@ export default function Home() {
               </div>
               {moveError && <p className="errorMessage">{moveError}</p>}
               <button className="sendButton" type="submit">
-                <Clock3 size={16} />
                 Move
               </button>
             </form>
@@ -1014,7 +1129,7 @@ export default function Home() {
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }
 
@@ -1028,14 +1143,17 @@ async function responseError(response: Response): Promise<string> {
   }
 }
 
-function taskSummary(task: AppState["tasks"][number]): string {
-  const scheduling = task.scheduling?.mode && task.scheduling.mode !== "exclusive" ? ` - ${task.scheduling.mode}/${task.scheduling.attentionLoad}` : "";
-  return `${task.status} - ${task.effortMinutes}m - ${task.completionMode ?? task.completionBehavior}${scheduling}`;
-}
-
 function statusLabel(status: PlanItem["status"]): string {
   if (status === "deferred") return "not done";
   return status;
+}
+
+function formatDuration(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours === 0) return `${mins}m`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
 }
 
 function isTaskCompletedToday(task: AppState["tasks"][number], date: string): boolean {

@@ -54,22 +54,6 @@ export function formatDay(dateOnly: string): string {
   }).format(new Date(`${dateOnly}T12:00:00.000Z`));
 }
 
-export function weekDots(dateOnly: string, todayIndex: number | null) {
-  const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const jsDay = new Date(`${dateOnly}T12:00:00.000Z`).getUTCDay();
-  const mondayFirstIndex = (jsDay + 6) % 7;
-  return labels.map((label, index) => ({
-    label,
-    viewed: index === mondayFirstIndex,
-    today: index === todayIndex
-  }));
-}
-
-export function systemWeekdayIndex() {
-  const jsDay = new Date().getDay();
-  return (jsDay + 6) % 7;
-}
-
 // Real local wall-clock now, as the app's date/time format. Used to anchor the app to the
 // user's actual current time on load (the in-memory state would otherwise stay frozen at
 // whatever time the server process first created it).

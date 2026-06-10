@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Layers3, Plus, Save, X } from "lucide-react";
+import { Archive, Layers3, Plus, Save } from "lucide-react";
 import { FormEvent } from "react";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 import { folderPath } from "../lib/folders";
@@ -22,12 +22,13 @@ type Task = AppState["tasks"][number];
 // T083: cap how deep the subtask tree renders (defensive alongside the ancestor cycle guard).
 const maxTreeDepth = 5;
 
+// T089: renders inline in the app shell's main column (the shell's nav rail owns switching),
+// so there is no overlay positioning or close-button chrome here anymore.
 export function SecondaryPanel({
   view,
   state,
   plan,
   post,
-  onClose,
   runOrganizer,
   organizerRunning,
   updateCapacity
@@ -36,7 +37,6 @@ export function SecondaryPanel({
   state: AppState;
   plan: DayPlan;
   post: PostFn;
-  onClose: () => void;
   runOrganizer: () => Promise<void>;
   organizerRunning: boolean;
   updateCapacity: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -56,10 +56,7 @@ export function SecondaryPanel({
 
   return (
     <section className="secondaryPanel" aria-label={view}>
-      <button className="iconButton closeButton" onClick={onClose} aria-label={`Close ${view}`}>
-        <X size={18} />
-      </button>
-      <p className="eyebrow">{view}</p>
+      <h1 className="viewTitle">{view}</h1>
       {view === "Folders" && <FoldersPanel state={state} post={post} />}
       {view === "Tasks" && (
         <div className="taskSections">
@@ -441,7 +438,7 @@ export function PlanItemMeta({ item }: { item: PlanItem }) {
   );
 }
 
-function labelForSection(section: PlanItem["section"]): string {
+export function labelForSection(section: PlanItem["section"]): string {
   return {
     routines: "routine",
     main_blocks: "main block",
