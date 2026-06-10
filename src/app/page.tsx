@@ -571,16 +571,20 @@ export default function Home() {
 
   // T089: Now/Next/Later composition — pure reads over the (optimistically moved) plan items.
   // Current = first planned item whose clock window contains "now"; otherwise the next upcoming
-  // planned item; otherwise the Now card shows a quiet empty state.
+  // planned item; otherwise the Now card shows a quiet empty state. Missed items (T090: window
+  // passed without being acted on) never become "current" but stay visible at the head of Next.
   const nowMinutes = toMinutes(state.currentTime);
-  const scheduledPlanned = timelineItems
-    .filter((item) => item.status === "planned" && isClockTime(item.startTime) && isClockTime(item.endTime))
+  const scheduledActionable = timelineItems
+    .filter((item) => (item.status === "planned" || item.status === "missed") && isClockTime(item.startTime) && isClockTime(item.endTime))
     .sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
+  const scheduledPlanned = scheduledActionable.filter((item) => item.status === "planned");
+  const missedItems = scheduledActionable.filter((item) => item.status === "missed");
   const currentItem = scheduledPlanned.find((item) => toMinutes(item.startTime) <= nowMinutes && nowMinutes < endMinutesFor(item));
   const nowItem = currentItem ?? scheduledPlanned.find((item) => toMinutes(item.startTime) > nowMinutes);
-  const afterNow = nowItem ? scheduledPlanned.slice(scheduledPlanned.indexOf(nowItem) + 1) : [];
+  const afterNow = [...missedItems, ...(nowItem ? scheduledPlanned.slice(scheduledPlanned.indexOf(nowItem) + 1) : [])];
   const nextItems = afterNow.slice(0, 3);
   const laterItems = afterNow.slice(3);
+  const newCandidateCount = plan.newCandidateCount ?? 0;
   const nowFolderName = nowItem?.folderId ? state.folders?.find((folder) => folder.id === nowItem.folderId)?.name : undefined;
   const nowDuration = nowItem ? Math.max(1, endMinutesFor(nowItem) - toMinutes(nowItem.startTime)) : 0;
   const nowLeft = currentItem ? Math.max(0, endMinutesFor(currentItem) - nowMinutes) : 0;
@@ -634,7 +638,19 @@ export default function Home() {
             <header className="todayHeader">
               <div>
                 <h1 aria-label={formatDate(plan.date)}>{formatDate(plan.date)}</h1>
-                <p className="capacityLine">{formatDuration(capacityLeft)} of capacity left</p>
+                <p className="capacityLine">
+                  {formatDuration(capacityLeft)} of capacity left
+                  {plan.committedAt && ` · committed ${plan.committedAt.slice(11, 16)}`}
+                </p>
+                {newCandidateCount > 0 && (
+                  <button
+                    className="hintChip"
+                    onClick={() => post("/api/plan/replan")}
+                    aria-label={`Replan to include ${newCandidateCount} new candidate${newCandidateCount === 1 ? "" : "s"}`}
+                  >
+                    {newCandidateCount} new candidate{newCandidateCount === 1 ? "" : "s"} · Replan?
+                  </button>
+                )}
               </div>
               <div className="dayNav">
                 <button
@@ -661,6 +677,9 @@ export default function Home() {
                   aria-label="Next day"
                 >
                   <ChevronRight size={16} />
+                </button>
+                <button className="pill pillQuiet" onClick={() => post("/api/plan/replan")} aria-label="Replan rest of day">
+                  Replan rest of day
                 </button>
                 <button className="pill pillSecondary" onClick={() => setReviewOpen(true)} aria-label="Review day">
                   Review day
@@ -699,6 +718,15 @@ export default function Home() {
                     </button>
                   </div>
                 </>
+              ) : missedItems.length > 0 ? (
+                <>
+                  <p className="nowEmpty">Everything left missed its window — it is waiting in Next.</p>
+                  <div className="nowActions">
+                    <button className="pill pillSecondary" onClick={() => post("/api/plan/replan")} aria-label="Replan rest of day">
+                      Replan rest of day
+                    </button>
+                  </div>
+                </>
               ) : (
                 <p className="nowEmpty">Nothing planned — capture something or open the timeline.</p>
               )}
@@ -708,9 +736,15 @@ export default function Home() {
               <section className="nextSection" aria-label="Next">
                 <h2 className="sectionEyebrow">Next</h2>
                 {nextItems.map((item) => (
-                  <button className="nextRow" key={item.id} onClick={() => setSelected(item)} aria-label={`Details for ${item.title}`}>
+                  <button
+                    className={item.status === "missed" ? "nextRow missedRow" : "nextRow"}
+                    key={item.id}
+                    onClick={() => setSelected(item)}
+                    aria-label={`Details for ${item.title}`}
+                  >
                     <span className="nextTitle">{item.title}</span>
                     <span className="nextTime">
+                      {item.status === "missed" && "missed · "}
                       {item.startTime} · {Math.max(1, endMinutesFor(item) - toMinutes(item.startTime))}m
                     </span>
                   </button>
@@ -725,9 +759,15 @@ export default function Home() {
               {laterItems.length > 0 && (
                 <div className="laterList">
                   {laterItems.map((item) => (
-                    <button className="nextRow" key={item.id} onClick={() => setSelected(item)} aria-label={`Details for ${item.title}`}>
+                    <button
+                      className={item.status === "missed" ? "nextRow missedRow" : "nextRow"}
+                      key={item.id}
+                      onClick={() => setSelected(item)}
+                      aria-label={`Details for ${item.title}`}
+                    >
                       <span className="nextTitle">{item.title}</span>
                       <span className="nextTime">
+                        {item.status === "missed" && "missed · "}
                         {item.startTime} · {Math.max(1, endMinutesFor(item) - toMinutes(item.startTime))}m
                       </span>
                     </button>

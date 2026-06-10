@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { getState, setAutoOrganizeEnabled, setAvailableMinutes } from "@/lib/state";
 
 const settingsSchema = z.object({
@@ -14,5 +14,5 @@ export async function POST(request: NextRequest) {
   let state = getState();
   if (settings.autoOrganizeEnabled !== undefined) state = setAutoOrganizeEnabled(settings.autoOrganizeEnabled);
   if (settings.availableMinutes !== undefined) state = setAvailableMinutes(settings.availableMinutes);
-  return NextResponse.json({ state, plan: buildDayPlan(state) });
+  return NextResponse.json({ state, plan: dayView() });
 }

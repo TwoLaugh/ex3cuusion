@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { deferPlanItem } from "@/lib/state";
 
 const deferSchema = z.object({
@@ -23,5 +23,5 @@ const deferSchema = z.object({
 export async function POST(request: NextRequest) {
   const input = deferSchema.parse(await request.json());
   const state = deferPlanItem(input.planItemId, input.reason, input.note, input.deferredTo);
-  return NextResponse.json({ state, plan: buildDayPlan(state) });
+  return NextResponse.json({ state, plan: dayView() });
 }

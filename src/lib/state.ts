@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, schedulingForMode, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
+import { buildCommitment, countNewCandidates, findCommitment, renderCommittedPlan, snapshotPlanItem } from "./day-view";
 import { nextId } from "./ids";
 import { blockFolderId, buildDayPlan, hasActiveChildren } from "./planner";
 import { defaultStateFilePath, getRepository } from "./repository";
@@ -13,6 +14,8 @@ import type {
   CaptureSession,
   ClarificationKind,
   ClarificationQuestion,
+  CommittedDayPlan,
+  DayPlan,
   DailyReviewEnergy,
   DailyReviewPlanFit,
   DeferralReason,
@@ -208,6 +211,108 @@ function describeStructureMutation(mutation: StructureMutation): string {
 export function loadRealisticCharacterScenario(): AppState {
   replaceState(createRealisticCharacterState());
   return getState();
+}
+
+// --- Committed day plan (T090) ----------------------------------------------------------------
+// The day plan is MINE, not a perpetually re-computed draft: the first view of a day snapshots
+// the generated plan into state.committedPlans, and every "today" read renders that commitment
+// with live status overlays (dayView). "Replan rest of day" is the only reshuffler; AI/timeline
+// schedule changes replan through the same gate WITHIN their own recorded change.
+
+function replaceCommitment(state: AppState, commitment: CommittedDayPlan): void {
+  state.committedPlans = [...(state.committedPlans ?? []).filter((entry) => entry.date !== commitment.date), commitment];
+}
+
+// Explicit, undoable commit of today's generated plan. The silent auto-commit inside dayView
+// passes record: false so first-view commits create no undo noise.
+export function commitDayPlan(options?: { record?: boolean }): AppState {
+  if (options?.record !== false) recordChange("commit", "Committed the day plan");
+  const state = currentState();
+  replaceCommitment(state, buildCommitment(state));
+  return getState();
+}
+
+// THE single read path for today's plan. Auto-commits silently on the first view of a day, then
+// renders the committed items with live overlays plus the new-candidate staleness count.
+export function dayView(state: AppState = currentState()): DayPlan {
+  state.committedPlans ??= [];
+  let commitment = findCommitment(state, state.currentDate);
+  if (!commitment) {
+    commitment = buildCommitment(state);
+    state.committedPlans.push(commitment);
+  }
+  const plan = renderCommittedPlan(state, commitment);
+  plan.newCandidateCount = countNewCandidates(state, commitment);
+  return plan;
+}
+
+// Regenerate the rest of the day as one undoable change: items already settled today (completed/
+// deferred) keep their committed snapshot; everything else is replaced by a fresh generation.
+export function replanRestOfDay(): AppState {
+  recordChange("replan", "Replanned the rest of the day");
+  replanWithinState(currentState());
+  return getState();
+}
+
+// In-change replan (no recordChange of its own): used by replanRestOfDay and by AI/schedule
+// mutations whose enclosing operation already snapshotted history.
+function replanWithinState(state: AppState): void {
+  const existing = findCommitment(state, state.currentDate);
+  const settledIds = new Set(
+    existing
+      ? renderCommittedPlan(state, existing)
+          .items.filter((item) => item.status === "completed" || item.status === "deferred")
+          .map((item) => item.id)
+      : []
+  );
+  const kept = existing ? existing.items.filter((item) => settledIds.has(item.id)) : [];
+  const fresh = buildDayPlan(state)
+    .items.filter((item) => !settledIds.has(item.id))
+    .map(snapshotPlanItem);
+  replaceCommitment(state, { date: state.currentDate, committedAt: timestampForState(state), items: [...kept, ...fresh] });
+}
+
+function committedTaskIdSet(commitment: CommittedDayPlan): Set<string> {
+  return new Set(
+    commitment.items.flatMap((item) =>
+      [item.taskId, item.parentTaskId, ...(item.selectedTaskIds ?? [])].filter((id): id is string => Boolean(id))
+    )
+  );
+}
+
+// AI changes replan through the same gate: after a batch of actions applies, replan in-change if
+// any applied action scheduled/created a task for today, scheduled a folder block for today, or
+// archived/completed a task that is part of today's committed plan. No commitment -> nothing to
+// keep stable yet; the first dayView will commit a fresh plan that already includes the changes.
+function maybeReplanForActions(state: AppState, actions: AiAction[]): void {
+  const commitment = findCommitment(state, state.currentDate);
+  if (!commitment) return;
+  const committedTaskIds = committedTaskIdSet(commitment);
+  const affectsToday = actions.some((action) => {
+    if (action.status !== "applied") return false;
+    if (action.type === "schedule_block") {
+      const date = typeof action.payload.date === "string" && validDate(action.payload.date) ? action.payload.date : state.currentDate;
+      return date === state.currentDate;
+    }
+    if (!action.appliedEntityId) return false;
+    if (action.type === "archive_task" || action.type === "mark_task_done") return committedTaskIds.has(action.appliedEntityId);
+    if (action.type === "create_task" || action.type === "schedule_task" || action.type === "update_task") {
+      const task = state.tasks.find((entry) => entry.id === action.appliedEntityId);
+      return task?.scheduledDate === state.currentDate;
+    }
+    return false;
+  });
+  if (affectsToday) replanWithinState(state);
+}
+
+// Same gate for direct schedule edits (timeline drag / move dialog / manual date changes): when
+// the edited task lands on today or was part of today's committed plan, replan in-change.
+function maybeReplanForScheduleChange(state: AppState, task: Task): void {
+  const commitment = findCommitment(state, state.currentDate);
+  if (!commitment) return;
+  if (task.scheduledDate === state.currentDate || committedTaskIdSet(commitment).has(task.id)) {
+    replanWithinState(state);
+  }
 }
 
 // True if `nodeId` is within the subtree rooted at `ancestorId` (walks up the parent chain).
@@ -426,6 +531,11 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
       // Manual promote/demote (T072), sharing the AI's date-intent logic (T064).
       applyTaskDateIntent(state, task, mutation.patch.dateIntentKind, task.scheduledDate, task.dueDate);
     }
+    // T090: a schedule edit (this is the endpoint the timeline drag and the move dialog post to)
+    // replans the committed day within this same recorded change when it touches today.
+    if (mutation.patch.scheduledDate !== undefined || mutation.patch.scheduledTime !== undefined || mutation.patch.dateIntentKind) {
+      maybeReplanForScheduleChange(state, task);
+    }
     return getState();
   }
 
@@ -503,7 +613,7 @@ export function updateFolderBlockSelection(input: {
 }): AppState {
   recordChange("block_selection", "Folder block change");
   const state = currentState();
-  const plan = buildDayPlan(state);
+  const plan = dayView(state);
   const item = plan.items.find((entry) => entry.id === input.planItemId);
   if (!item || item.type !== "folder_block" || !item.folderId) return getState();
   const folderId = item.folderId;
@@ -517,6 +627,7 @@ export function updateFolderBlockSelection(input: {
     state.folderBlockSelections = state.folderBlockSelections.filter(
       (selection) => !(selection.date === state.currentDate && selection.folderId === folderId)
     );
+    replanWithinState(state); // T090: the committed block must reflect the regenerated selection
     return getState();
   }
 
@@ -543,13 +654,14 @@ export function updateFolderBlockSelection(input: {
     });
   }
 
+  replanWithinState(state); // T090: keep the committed block's selection/length in sync
   return getState();
 }
 
 export function completePlanItem(planItemId: string, actualMinutes?: number, completedTaskIds?: string[]): AppState {
   recordChange("complete", "Completed a plan item");
   const state = currentState();
-  const plan = buildDayPlan(state);
+  const plan = dayView(state);
   const item = plan.items.find((entry) => entry.id === planItemId);
   if (!item) return getState();
 
@@ -637,7 +749,7 @@ export function completePlanItem(planItemId: string, actualMinutes?: number, com
 export function deferPlanItem(planItemId: string, reason: DeferralReason, note?: string, deferredTo?: string): AppState {
   recordChange("defer", "Deferred a plan item");
   const state = currentState();
-  const plan = buildDayPlan(state);
+  const plan = dayView(state);
   const item = plan.items.find((entry) => entry.id === planItemId);
   if (!item) return getState();
 
@@ -691,7 +803,7 @@ export function recordPlanItemOutcome(input: {
 }): AppState {
   recordChange("outcome", "Recorded a plan outcome");
   const state = currentState();
-  const plan = buildDayPlan(state);
+  const plan = dayView(state);
   const item = plan.items.find((entry) => entry.id === input.planItemId);
   if (!item) return getState();
 
@@ -764,6 +876,7 @@ export async function submitInbox(
     applyAutoAction(state, action, input);
     recordAppliedEntity(session, action);
   }
+  maybeReplanForActions(state, applyOrder); // T090: AI scheduling replans within this same change
   session.status = session.questions.some((question) => question.status === "pending")
     ? "waiting_for_user"
     : entry.actions.every((action) => action.status === "applied")
@@ -839,6 +952,7 @@ export function answerCaptureQuestion(sessionId: string, questionId: string, ans
   pushUnique(session.answeredFields, question.kind);
   applyAutoAction(state, draftAction);
   recordAppliedEntity(session, draftAction);
+  maybeReplanForActions(state, [draftAction]); // T090
   recordRevisionEvent(state, session, {
     source: "clarification_answer",
     actionId: draftAction.id,
@@ -889,6 +1003,7 @@ export async function addCaptureSessionMessage(
       pushUnique(session.answeredFields, pendingQuestion.kind);
       applyAutoAction(state, draftAction);
       recordAppliedEntity(session, draftAction);
+      maybeReplanForActions(state, [draftAction]); // T090
       recordRevisionEvent(state, session, {
         source: "clarification_answer",
         actionId: draftAction.id,
@@ -949,6 +1064,7 @@ export async function addCaptureSessionMessage(
     revisionMeta = { model: "fallback", confidence: 0.4 };
   }
   if (target.action) target.action.payload = { ...target.action.payload, ...taskActionPatch(target.task) };
+  maybeReplanForScheduleChange(state, target.task); // T090: "actually at 5pm" must reach the committed day
   recordRevisionEvent(state, session, {
     source: revisionMeta.model === "fallback" ? "fallback" : "follow_up",
     actionId: target.action?.id,
@@ -1013,6 +1129,7 @@ async function applyFullContextFollowUp(
     }
   }
 
+  maybeReplanForActions(state, entry.actions); // T090
   state.inbox.unshift(entry);
   session.status = session.questions.some((question) => question.status === "pending")
     ? "waiting_for_user"
@@ -1058,6 +1175,7 @@ export function applyCaptureSession(sessionId: string): AppState {
   const state = currentState();
   const session = state.captureSessions.find((candidate) => candidate.id === sessionId);
   if (!session || session.status === "dismissed") return getState();
+  const appliedNow: AiAction[] = [];
   for (const actionId of session.actionIds) {
     const action = findAction(state, actionId);
     if (!action || action.type === "ask_clarification" || action.status !== "proposed") continue;
@@ -1067,7 +1185,9 @@ export function applyCaptureSession(sessionId: string): AppState {
       continue;
     }
     applyAction(state, action, true);
+    appliedNow.push(action);
   }
+  maybeReplanForActions(state, appliedNow); // T090
   session.status = session.questions.some((question) => question.status === "pending") ? "waiting_for_user" : "applied";
   session.updatedAt = timestampForState(state);
   return getState();
@@ -1084,6 +1204,7 @@ export function confirmAiAction(actionId: string): AppState {
     return getState();
   }
   applyAction(state, action, true);
+  maybeReplanForActions(state, [action]); // T090
   return getState();
 }
 

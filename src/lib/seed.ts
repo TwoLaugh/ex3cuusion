@@ -165,6 +165,7 @@ export function createSeedState(): AppState {
     folderBlockSelections: [],
     dailyReviews: [],
     inbox: [],
-    captureSessions: []
+    captureSessions: [],
+    committedPlans: []
   };
 }

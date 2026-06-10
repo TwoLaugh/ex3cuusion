@@ -10,6 +10,8 @@
   --hairline: rgba(236, 231, 220, 0.08);
   --accent: #e0683a;
   --accent-soft: rgba(224, 104, 58, 0.15);
+  --missed: #ba7517; /* T090: muted amber for items whose window passed — faint, not alarming */
+  --missed-soft: rgba(186, 117, 23, 0.14);
   --danger: #e24b4a;
   --radius: 14px;
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
@@ -723,6 +725,51 @@ textarea {
 .unscheduledItem.unscheduled {
   border-style: dashed;
   opacity: 0.75;
+}
+
+/* T090: missed items stay visible (with Done/Defer) in a quiet amber until acted on. */
+.timelineBlock.missed .blockContent,
+.unscheduledItem.missed {
+  opacity: 0.8;
+}
+
+.timelineBlock.missed .blockContent h2,
+.unscheduledItem.missed h2 {
+  color: var(--missed);
+}
+
+.timelineBlock.missed .blockTime {
+  color: rgba(186, 117, 23, 0.75);
+}
+
+.timelineBlock.missed .statusPill,
+.unscheduledItem.missed .statusPill {
+  background: var(--missed-soft);
+  color: var(--missed);
+}
+
+.missedRow .nextTitle {
+  color: var(--missed);
+  opacity: 0.85;
+}
+
+.missedRow .nextTime {
+  color: rgba(186, 117, 23, 0.75);
+}
+
+/* T090: quiet "new candidates" staleness hint under the Today header. */
+.hintChip {
+  background: var(--missed-soft);
+  border: 1px solid rgba(186, 117, 23, 0.35);
+  border-radius: 999px;
+  color: var(--missed);
+  font-size: 12px;
+  margin-top: 8px;
+  padding: 3px 10px;
+}
+
+.hintChip:hover {
+  background: rgba(186, 117, 23, 0.22);
 }
 
 .blockTime {

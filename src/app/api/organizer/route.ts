@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { listChangeHistory, maybeRunDailyOrganizer, runOrganizerPass } from "@/lib/state";
 
 const organizerSchema = z.object({ auto: z.boolean().optional() });
@@ -10,5 +10,5 @@ const organizerSchema = z.object({ auto: z.boolean().optional() });
 export async function POST(request: NextRequest) {
   const { auto } = organizerSchema.parse(await request.json().catch(() => ({})));
   const state = auto ? await maybeRunDailyOrganizer() : await runOrganizerPass();
-  return NextResponse.json({ state, plan: buildDayPlan(state), history: listChangeHistory() });
+  return NextResponse.json({ state, plan: dayView(), history: listChangeHistory() });
 }

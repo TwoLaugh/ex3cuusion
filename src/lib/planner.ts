@@ -75,7 +75,8 @@ function taskScore(state: AppState, task: Task, date: string): number {
   );
 }
 
-function calculateCapacity(state: AppState): number {
+// Exported for the committed day view (T090), which recomputes capacity over committed items.
+export function calculateCapacity(state: AppState): number {
   const dayEndMinutes = 22 * 60;
   const remainingToday = Math.max(45, dayEndMinutes - timeToMinutes(state.currentTime));
   const clockAwareAvailable = Math.min(state.availableMinutes, remainingToday);
@@ -99,7 +100,7 @@ function calculateCapacity(state: AppState): number {
   return Math.max(90, clockAwareAvailable + reviewAdjustment);
 }
 
-function loadLevel(total: number, available: number): LoadLevel {
+export function loadLevel(total: number, available: number): LoadLevel {
   if (total > available * 1.15) return "overloaded";
   if (total > available * 0.85) return "heavy";
   if (total < available * 0.45) return "light";
@@ -251,13 +252,14 @@ export function buildDayPlan(state: AppState): DayPlan {
   };
 }
 
-function countsTowardCommittedLoad(item: PlanItem): boolean {
+export function countsTowardCommittedLoad(item: PlanItem): boolean {
   if (item.type === "soft_invitation" || item.section === "soft_invitations") return false;
   if (item.hardAnchor && /sleep|bed/i.test(item.title)) return false;
   return true;
 }
 
-function completedTaskIdsByPlan(state: AppState, date: string): Map<string, string[]> {
+// Exported so the committed day view (T090) resolves completion identically to generation.
+export function completedTaskIdsByPlan(state: AppState, date: string): Map<string, string[]> {
   const byPlan = new Map<string, string[]>();
   for (const event of state.completions.filter((entry) => entry.date === date)) {
     const existing = byPlan.get(event.planItemId) ?? [];
@@ -266,7 +268,7 @@ function completedTaskIdsByPlan(state: AppState, date: string): Map<string, stri
   return byPlan;
 }
 
-function blockCompletionPlanIds(state: AppState, date: string): Set<string> {
+export function blockCompletionPlanIds(state: AppState, date: string): Set<string> {
   return new Set(
     state.completions
       .filter((entry) => entry.date === date && (!entry.taskIds || entry.taskIds.length === 0))
@@ -345,7 +347,7 @@ function effectiveEffortMinutes(state: AppState, task: Task): number {
   return task.effortMinutes;
 }
 
-function isItemCompleted(
+export function isItemCompleted(
   item: PlanItem,
   completed: Set<string>,
   completedTaskIdsByPlanMap: Map<string, string[]>,

@@ -2,7 +2,7 @@ export type Energy = "low" | "medium" | "high";
 export type Strictness = "flexible" | "normal" | "strict";
 export type TaskStatus = "active" | "scheduled" | "completed" | "deferred" | "blocked" | "waiting" | "archived";
 export type PlanItemType = "routine" | "atomic_task" | "folder_block" | "soft_invitation";
-export type PlanItemStatus = "planned" | "completed" | "deferred" | "unscheduled";
+export type PlanItemStatus = "planned" | "completed" | "deferred" | "unscheduled" | "missed";
 export type LoadLevel = "light" | "normal" | "heavy" | "overloaded";
 export type CompletionBehavior = "exhaust_once" | "repeatable" | "keep_as_suggestion" | "regenerate_after_completion";
 export type CompletionMode =
@@ -225,6 +225,45 @@ export interface DayPlan {
   availableMinutes: number;
   summary: string;
   items: PlanItem[];
+  // T090: set when the plan is a committed-day projection (dayView), absent on pure generation.
+  committedAt?: string;
+  // T090: plannable-today items in a fresh generation that are not in the committed plan.
+  newCandidateCount?: number;
+}
+
+// T090: snapshot of the PlanItem fields needed to re-render a committed item. Status is NOT
+// stored — it is overlaid live from completions/deferrals/executionEvents and the clock.
+export interface CommittedPlanItem {
+  id: string;
+  type: PlanItemType;
+  title: string;
+  section: PlanItem["section"];
+  startTime: string;
+  endTime: string;
+  fixedStartTime?: string;
+  hardAnchor?: boolean;
+  taskId?: string;
+  folderId?: string;
+  selectedTaskIds?: string[];
+  estimatedMinutes: number;
+  clockMinutes?: number;
+  blockingMinutes?: number;
+  schedulingMode?: SchedulingMode;
+  attentionLoad?: AttentionLoad;
+  canOverlap?: boolean;
+  overlapKinds?: OverlapKind[];
+  phaseKind?: TaskPhaseKind;
+  phaseIndex?: number;
+  parentTaskId?: string;
+  reason: string;
+}
+
+// T090: the day plan the user committed to. While one exists for a date, the day view renders it
+// with live status overlays instead of regenerating; "replan rest of day" is the only reshuffler.
+export interface CommittedDayPlan {
+  date: string;
+  committedAt: string;
+  items: CommittedPlanItem[];
 }
 
 export interface DeferralLog {
@@ -426,6 +465,9 @@ export interface AppState {
   dailyReviews: DailyReview[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];
+  // T090: committed day plans, one per date, created on first view of a day or by explicit
+  // commit/replan. Source of truth for today's actionable plan once committed.
+  committedPlans: CommittedDayPlan[];
   // Local date of the last guarded organizer pass (T069); used only by the explicit auto route.
   lastAutoOrganizeDate?: string;
   // Reserved for the guarded auto organizer route. The client uses an explicit button by default.

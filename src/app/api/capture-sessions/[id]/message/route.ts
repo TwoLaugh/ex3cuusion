@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { addCaptureSessionMessage } from "@/lib/state";
 
 const messageSchema = z.object({
@@ -11,5 +11,5 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   const params = await context.params;
   const input = messageSchema.parse(await request.json());
   const state = await addCaptureSessionMessage(params.id, input.message.trim());
-  return NextResponse.json({ state, plan: buildDayPlan(state) });
+  return NextResponse.json({ state, plan: dayView() });
 }
