@@ -218,6 +218,7 @@ function normalizeState(state: AppState): AppState {
   state.dailyReviews ??= [];
   state.captureSessions ??= [];
   state.committedPlans ??= []; // T090
+  state.dayLists ??= []; // T092
 
   for (const session of state.captureSessions) {
     session.messages ??= [];

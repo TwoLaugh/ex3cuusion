@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, schedulingForMode, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
+import { buildMorningList, findDayList, renderDayList, type DayListView } from "./day-list";
 import { buildCommitment, countNewCandidates, findCommitment, renderCommittedPlan, snapshotPlanItem } from "./day-view";
 import { nextId } from "./ids";
 import { blockFolderId, buildDayPlan, hasActiveChildren } from "./planner";
@@ -15,6 +16,8 @@ import type {
   ClarificationKind,
   ClarificationQuestion,
   CommittedDayPlan,
+  DayList,
+  DayListSource,
   DayPlan,
   DailyReviewEnergy,
   DailyReviewPlanFit,
@@ -315,6 +318,240 @@ function maybeReplanForScheduleChange(state: AppState, task: Task): void {
   }
 }
 
+// --- Day list (T092) ---------------------------------------------------------------------------
+// List-first Today: the day's commitment is the user's hand-authored LIST, advised (not authored)
+// by the system. The first read of a day materializes the morning list silently (no history —
+// mirrors the T090 auto-commit); every list change after that is an explicit, undoable mutation.
+// The T090 committedPlans/dayView machinery stays intact as the (secondary) timeline view.
+
+// THE single read-path gate: builds + stores today's list on first access. Silent, like the
+// dayView auto-commit. Returns the LIVE list object inside the repository state.
+export function ensureDayList(state: AppState = currentState()): DayList {
+  state.dayLists ??= [];
+  let list = findDayList(state, state.currentDate);
+  if (!list) {
+    list = buildMorningList(state, state.currentDate);
+    state.dayLists.push(list);
+  }
+  return list;
+}
+
+// The read model for the Today surface (list + habit strip + tray + gauges).
+export function dayListView(state: AppState = currentState()): DayListView {
+  return renderDayList(state, ensureDayList(state));
+}
+
+function normalizeDayListOrder(list: DayList): void {
+  list.entries.forEach((entry, index) => {
+    entry.order = index;
+  });
+}
+
+function truncateTitle(title: string): string {
+  return title.length > 40 ? `${title.slice(0, 37)}...` : title;
+}
+
+// Append a task to today's list. Idempotent: re-adding an existing entry is a silent no-op (no
+// history noise). Default source is "tray" (the one-tap tray add).
+export function addTaskToDayList(taskId: string, options?: { source?: DayListSource }): AppState {
+  const state = currentState();
+  const list = ensureDayList(state);
+  const task = state.tasks.find((entry) => entry.id === taskId && entry.status !== "archived");
+  if (!task || list.entries.some((entry) => entry.taskId === taskId)) return getState();
+  recordChange("day_list", `Added "${truncateTitle(task.title)}" to today's list`);
+  list.entries.push({
+    taskId,
+    order: list.entries.length,
+    pinnedTime: task.scheduledDate === state.currentDate && validTime(task.scheduledTime) ? task.scheduledTime : undefined,
+    source: options?.source ?? "tray"
+  });
+  normalizeDayListOrder(list);
+  return getState();
+}
+
+// Remove an entry from today's list (back to the tray). The task itself is untouched.
+export function removeTaskFromDayList(taskId: string): AppState {
+  const state = currentState();
+  const list = ensureDayList(state);
+  const entry = list.entries.find((candidate) => candidate.taskId === taskId);
+  if (!entry) return getState();
+  const task = state.tasks.find((candidate) => candidate.id === taskId);
+  recordChange("day_list", `Removed "${truncateTitle(task?.title ?? taskId)}" from today's list`);
+  list.entries = list.entries.filter((candidate) => candidate.taskId !== taskId);
+  normalizeDayListOrder(list);
+  return getState();
+}
+
+// Full replacement order for today's list. Unknown/duplicate ids in the request are ignored;
+// entries missing from the request keep their previous relative order at the end. A no-op
+// reorder records nothing.
+export function reorderDayList(orderedTaskIds: string[]): AppState {
+  const state = currentState();
+  const list = ensureDayList(state);
+  const byTaskId = new Map(list.entries.map((entry) => [entry.taskId, entry]));
+  const requested = orderedTaskIds.filter((taskId, index, all) => byTaskId.has(taskId) && all.indexOf(taskId) === index);
+  const requestedSet = new Set(requested);
+  const current = [...list.entries].sort((a, b) => a.order - b.order);
+  const next = [...requested.map((taskId) => byTaskId.get(taskId)!), ...current.filter((entry) => !requestedSet.has(entry.taskId))];
+  if (next.every((entry, index) => entry === current[index])) return getState();
+  recordChange("day_list", "Reordered today's list");
+  list.entries = next;
+  normalizeDayListOrder(list);
+  return getState();
+}
+
+// Pin (or clear, with undefined) a display time on a list entry. Pins sort/display only — the
+// capacity gauge owns the "does the day fit" question. Invalid times are rejected silently.
+export function setDayListPin(taskId: string, pinnedTime?: string): AppState {
+  const state = currentState();
+  const list = ensureDayList(state);
+  const entry = list.entries.find((candidate) => candidate.taskId === taskId);
+  if (!entry) return getState();
+  if (pinnedTime !== undefined && !validTime(pinnedTime)) return getState();
+  if (entry.pinnedTime === pinnedTime) return getState();
+  const title = truncateTitle(state.tasks.find((candidate) => candidate.id === taskId)?.title ?? taskId);
+  recordChange("day_list", pinnedTime ? `Pinned "${title}" at ${pinnedTime}` : `Unpinned "${title}"`);
+  entry.pinnedTime = pinnedTime;
+  return getState();
+}
+
+// Tick a task straight off the list/habit strip — no plan item required (tray-added tasks are
+// not in the committed timeline). Mirrors completePlanItem's task branch exactly, keyed by the
+// CANONICAL plan id (`plan_<date>_<taskId>`) so the timeline resolves the same tick, and toggles
+// off a completion recorded today (by this path or a plan/block tick). Undoable.
+export function completeTaskDirect(taskId: string, actualMinutes?: number): AppState {
+  const state = currentState();
+  const task = state.tasks.find((entry) => entry.id === taskId);
+  if (!task || task.status === "archived") return getState();
+  recordChange("complete", `Ticked "${truncateTitle(task.title)}"`);
+  const planItemId = `plan_${state.currentDate}_${taskId}`;
+
+  const existing = state.completions.find(
+    (event) => event.date === state.currentDate && (event.planItemId === planItemId || event.taskIds?.includes(taskId))
+  );
+  if (existing) {
+    state.completions = state.completions.flatMap((event) => {
+      if (event !== existing) return [event];
+      const remainingTaskIds = (event.taskIds ?? []).filter((id) => id !== taskId);
+      return remainingTaskIds.length ? [{ ...event, taskIds: remainingTaskIds }] : [];
+    });
+    state.executionEvents = state.executionEvents.filter(
+      (event) =>
+        !(
+          event.date === state.currentDate &&
+          event.type === "completed" &&
+          (event.planItemId === planItemId || event.taskIds?.includes(taskId) === true)
+        )
+    );
+    restoreTasksForUndoneCompletion(state, [taskId]);
+    rollBackCompletionTimestamps(state, taskId);
+    return getState();
+  }
+
+  state.deferrals = state.deferrals.filter((event) => !(event.date === state.currentDate && event.planItemId === planItemId));
+  markTasksCompleted(state, [taskId]);
+  state.completions.push({
+    id: nextId("completion"),
+    date: state.currentDate,
+    planItemId,
+    taskIds: [taskId],
+    actualMinutes
+  });
+  addExecutionEvent(state, { type: "completed", planItemId, taskIds: [taskId], actualMinutes });
+  return getState();
+}
+
+// T092: after unticking TODAY's completion of a task that also completed on earlier days,
+// restoreTasksForUndoneCompletion leaves it "completed" (some completion event still exists —
+// from yesterday). Roll completedAt/lastCompletedAt back to the latest REMAINING completion day
+// so today reads as unticked while the history (and streaks) stand. Date-granularity timestamp
+// is fine: every consumer compares dates, not clock times.
+function rollBackCompletionTimestamps(state: AppState, taskId: string): void {
+  const task = state.tasks.find((entry) => entry.id === taskId);
+  if (!task) return;
+  const latestRemaining = state.completions
+    .filter((event) => event.taskIds?.includes(taskId))
+    .map((event) => event.date)
+    .sort()
+    .pop();
+  const rolledBack = latestRemaining ? new Date(`${latestRemaining}T12:00:00.000Z`).toISOString() : undefined;
+  if (task.lastCompletedAt?.slice(0, 10) === state.currentDate) task.lastCompletedAt = rolledBack;
+  if (task.completedAt?.slice(0, 10) === state.currentDate) task.completedAt = rolledBack;
+}
+
+// Inline instant add: create a minimal task and put it on today's list as ONE undoable change.
+// AI enrichment is a SEPARATE follow-up step (enrichCapturedTask via POST /api/day-list/enrich)
+// so the add itself never blocks on a model call.
+export function instantCaptureToDayList(title: string): { state: AppState; taskId?: string } {
+  const cleaned = cleanText(title);
+  if (!cleaned) return { state: getState() };
+  const state = currentState();
+  ensureDayList(state); // materialize the morning list BEFORE the snapshot so undo keeps it
+  recordChange("capture", `Captured "${truncateTitle(cleaned)}" to today's list`);
+  const task: Task = {
+    id: uniqueStateId(state, "task"),
+    title: cleaned,
+    type: "atomic",
+    status: "active",
+    repeatPolicy: { type: "none" },
+    completionBehavior: "exhaust_once",
+    completionMode: "simple_done",
+    plannerFields: { intentType: "obligation", pressureLevel: "soft" },
+    priority: 5,
+    importance: 3,
+    urgency: 3,
+    effortMinutes: 30,
+    energy: "medium",
+    strictness: "normal",
+    source: "manual"
+  };
+  state.tasks.push(task);
+  const list = ensureDayList(state);
+  list.entries.push({ taskId: task.id, order: list.entries.length, source: "manual" });
+  normalizeDayListOrder(list);
+  return { state: getState(), taskId: task.id };
+}
+
+// Async enrichment for an instant capture: interpret the raw title (folder/date/time/effort)
+// through the capture-revision path — deterministic fixture in tests — and apply it to the task
+// as its own undoable change. Best-effort: an interpreter failure leaves the capture as typed.
+export async function enrichCapturedTask(taskId: string, interpreter?: AiRevisionInterpreter): Promise<AppState> {
+  const state = currentState();
+  const task = state.tasks.find((entry) => entry.id === taskId && entry.status !== "archived");
+  if (!task) return getState();
+  const session: CaptureSession = {
+    id: nextId("capture"),
+    status: "open",
+    source: "inbox",
+    createdAt: timestampForState(state),
+    updatedAt: timestampForState(state),
+    messages: [],
+    questions: [],
+    actionIds: [],
+    draftActionIds: [],
+    appliedEntityIds: [task.id],
+    answeredFields: [],
+    revisionEvents: [],
+    unresolvedFields: [],
+    summary: `Instant capture: ${task.title}`
+  };
+  let revision: CaptureRevision;
+  try {
+    revision = await interpretCaptureRevision(task.title, state, session, task, interpreter);
+  } catch {
+    return getState(); // enrichment is best-effort; the captured task stands as typed
+  }
+  recordChange("enrich", `Enriched "${truncateTitle(task.title)}"`);
+  applyRevisionToTask(state, task, revision, ""); // empty message: a model-suggested rename is never applied
+  // Keep the list pin in sync when enrichment scheduled the task for today at a clock time.
+  const entry = findDayList(state, state.currentDate)?.entries.find((candidate) => candidate.taskId === taskId);
+  if (entry && task.scheduledDate === state.currentDate && validTime(task.scheduledTime)) {
+    entry.pinnedTime = task.scheduledTime;
+  }
+  maybeReplanForScheduleChange(state, task); // T090: the timeline stays in sync within this change
+  return getState();
+}
+
 // True if `nodeId` is within the subtree rooted at `ancestorId` (walks up the parent chain).
 function isDescendantOf(state: AppState, nodeId: string, ancestorId: string): boolean {
   let current = state.tasks.find((task) => task.id === nodeId);
@@ -459,7 +696,8 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
         energy: validEnergy(mutation.patch.energy) ?? "medium",
         strictness: validStrictness(mutation.patch.strictness) ?? "normal",
         notes: cleanText(mutation.patch.notes) || undefined,
-        source: "manual"
+        source: "manual",
+        habit: mutation.patch.habit === true ? true : undefined // T092
       });
       return getState();
     }
@@ -514,6 +752,8 @@ export function applyStructureMutation(mutation: StructureMutation): AppState {
     task.energy = validEnergy(mutation.patch.energy) ?? task.energy;
     task.strictness = validStrictness(mutation.patch.strictness) ?? task.strictness;
     task.notes = optionalText(mutation.patch.notes, task.notes);
+    // T092: explicit per-task habit flag (boolean only; false clears it).
+    if (typeof mutation.patch.habit === "boolean") task.habit = mutation.patch.habit ? true : undefined;
     task.repeatPolicy = mutation.patch.repeatPolicy ? normalizeRepeatPolicy(mutation.patch.repeatPolicy) : task.repeatPolicy;
     if (Array.isArray(mutation.patch.tags)) {
       task.tags = mutation.patch.tags.map((tag) => String(tag).trim()).filter(Boolean);

@@ -188,6 +188,29 @@ export interface Task {
   completedAt?: string;
   lastCompletedAt?: string;
   source?: string;
+  // T092: habit tasks live on the Today habit strip (with streaks), never on the day list.
+  habit?: boolean;
+}
+
+// T092: where a day-list entry came from. "recurring" = auto-added by the morning build (due
+// recurring/dated), "manual" = user-authored (incl. instant capture), "tray" = pulled from the
+// tray, "ai" = AI-proposed list add, "carried" = unfinished entry carried from the previous list.
+export type DayListSource = "recurring" | "manual" | "tray" | "ai" | "carried";
+
+export interface DayListEntry {
+  taskId: string;
+  order: number;
+  pinnedTime?: string;
+  source: DayListSource;
+}
+
+// T092: the user's hand-authored list for one day — the day's commitment (list-first Today).
+// Built once on first view of a date (morning build), then mutated only by explicit, undoable
+// list edits. Supersedes committedPlans as the commitment; the timeline keeps using dayView.
+export interface DayList {
+  date: string;
+  committedAt: string;
+  entries: DayListEntry[];
 }
 
 
@@ -468,6 +491,9 @@ export interface AppState {
   // T090: committed day plans, one per date, created on first view of a day or by explicit
   // commit/replan. Source of truth for today's actionable plan once committed.
   committedPlans: CommittedDayPlan[];
+  // T092: hand-authored day lists, one per date, created by the morning build on first view of a
+  // day. The list is the day's commitment; the timeline (committedPlans) is a secondary view.
+  dayLists: DayList[];
   // Local date of the last guarded organizer pass (T069); used only by the explicit auto route.
   lastAutoOrganizeDate?: string;
   // Reserved for the guarded auto organizer route. The client uses an explicit button by default.

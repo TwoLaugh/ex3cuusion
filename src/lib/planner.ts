@@ -7,7 +7,8 @@ type PlanCandidate = Omit<PlanItem, "startTime" | "endTime"> & {
   preferredWindow?: "morning" | "afternoon" | "evening";
 };
 
-function isRepeatPolicyDue(task: Task, date: string): boolean {
+// Exported for the day-list build (T092), which reuses the planner's due/plannable semantics.
+export function isRepeatPolicyDue(task: Task, date: string): boolean {
   if (task.repeatPolicy.type === "none") return true;
   if (task.repeatPolicy.type === "daily") return true;
   return task.repeatPolicy.days?.includes(dayOfWeek(date)) ?? true;
@@ -30,7 +31,8 @@ export function hasActiveChildren(state: AppState, taskId: string): boolean {
   return state.tasks.some((task) => task.parentTaskId === taskId && !["archived", "completed"].includes(task.status));
 }
 
-function isTaskPlannable(task: Task, date: string): boolean {
+// Exported for the day-list build (T092).
+export function isTaskPlannable(task: Task, date: string): boolean {
   if (task.status === "blocked") return Boolean(task.blocked?.unblockAction);
   if (task.status === "waiting") return Boolean(task.waiting?.followUpDate && daysUntil(date, task.waiting.followUpDate) <= 0);
   const statusAllowsPlanning =
@@ -45,7 +47,8 @@ function isTaskPlannable(task: Task, date: string): boolean {
   return true;
 }
 
-function taskScore(state: AppState, task: Task, date: string): number {
+// Exported for the day-list build and tray ranking (T092).
+export function taskScore(state: AppState, task: Task, date: string): number {
   const dueDistance = daysUntil(date, task.dueDate);
   const dueBoost = dueDistance <= 0 ? 25 : dueDistance <= 2 ? 16 : dueDistance <= 5 ? 8 : 0;
   const strictnessBoost = task.strictness === "strict" ? 8 : task.strictness === "normal" ? 4 : 0;

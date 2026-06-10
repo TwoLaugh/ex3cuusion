@@ -192,7 +192,8 @@ export function createRealisticCharacterState(): AppState {
     dailyReviews: [],
     inbox: [],
     captureSessions: [],
-    committedPlans: []
+    committedPlans: [],
+    dayLists: []
   };
 }
 

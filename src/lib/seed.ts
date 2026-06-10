@@ -166,6 +166,7 @@ export function createSeedState(): AppState {
     dailyReviews: [],
     inbox: [],
     captureSessions: [],
-    committedPlans: []
+    committedPlans: [],
+    dayLists: []
   };
 }
