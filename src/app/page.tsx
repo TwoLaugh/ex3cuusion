@@ -1,18 +1,70 @@
 "use client";
 
-import { Check, ChevronLeft, ChevronRight, Folder, ListChecks, Plus, Send, Settings2, Sparkles, Sun, Undo2, X } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Flame,
+  Folder,
+  GripVertical,
+  ListChecks,
+  Pin,
+  Plus,
+  Repeat,
+  Settings2,
+  Sparkles,
+  Sun,
+  Undo2,
+  X
+} from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import type { DayListEntryView, DayListView } from "@/lib/day-list";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 import { EditableBadge } from "./components/EditableBadge";
 import { InboxSession } from "./components/InboxSession";
 import { PlanItemActions } from "./components/PlanItemActions";
 import { ReviewDayDialog } from "./components/ReviewDayDialog";
-import { labelForSection, PlanItemMeta, SecondaryPanel, type SecondaryView } from "./components/SecondaryPanel";
+import { PlanItemMeta, SecondaryPanel, type SecondaryView } from "./components/SecondaryPanel";
 import { addClockMinutes, formatDate, formatShortDate, fromMinutes, isClockTime, localNowParts, normalizeMoveTime, toMinutes } from "./lib/format";
-import { applyPendingTimelineMoves, buildTimeline, endMinutesFor, pixelsPerMinute, removePendingTimelineMove, type PendingTimelineMove } from "./lib/plan-view";
+import { applyPendingTimelineMoves, buildTimeline, pixelsPerMinute, removePendingTimelineMove, type PendingTimelineMove } from "./lib/plan-view";
 import { childStats, clientBlockFolderId, dateIntentLabel } from "./lib/task-view";
 
-type ApiPayload = { state: AppState; plan: DayPlan };
+// T092: the day-list endpoints return dayList alongside state+plan; older mutation endpoints
+// (structure, time, plan/*) still return only state+plan, so dayList is optional here and post()
+// backfills it (see post below).
+type ApiPayload = { state: AppState; plan: DayPlan; dayList?: DayListView };
+
+// T092: list rows open the same task drawer the timeline uses. When the task has no plan item
+// today, the drawer gets a minimal synthetic PlanItem (prefixed id) — the drawer's complete
+// action detects the prefix and ticks via /api/day-list/complete instead of /api/plan/complete.
+const dayListItemPrefix = "daylist_";
+
+function dayListPlanItem(entry: DayListEntryView): PlanItem {
+  return {
+    id: `${dayListItemPrefix}${entry.taskId}`,
+    type: "atomic_task",
+    title: entry.title,
+    section: "later",
+    status: entry.completedToday ? "completed" : "planned",
+    startTime: entry.pinnedTime ?? "",
+    endTime: "",
+    folderId: entry.folderId,
+    taskId: entry.taskId,
+    estimatedMinutes: entry.effortMinutes,
+    reason: "On today's list"
+  };
+}
+
+// T092 balance gauge: each pillar gets a stable muted warm tone from a fixed palette of
+// desaturated warm grays/browns (hash of the folder id, so the assignment never shifts).
+const pillarTones = ["#8a7d66", "#6e6353", "#9c8872", "#5d564a", "#7d6f5e", "#a89b85"];
+
+function pillarTone(folderId: string): string {
+  let hash = 0;
+  for (let index = 0; index < folderId.length; index += 1) hash = (hash * 31 + folderId.charCodeAt(index)) >>> 0;
+  return pillarTones[hash % pillarTones.length];
+}
 type MainView = "Today" | SecondaryView;
 
 const navItems: { label: string; view: MainView; ariaLabel: string; Icon: typeof Sun }[] = [
@@ -45,7 +97,12 @@ export default function Home() {
   const [view, setView] = useState<MainView>("Today");
   const [aiOpen, setAiOpen] = useState(false);
   const [laterOpen, setLaterOpen] = useState(false);
-  const [draft, setDraft] = useState("");
+  // T092 list-first Today: inline-add draft, HTML5-DnD reorder state (mirrors BacklogBoard's
+  // draggable pattern), and the optimistic order applied while a reorder POST is in flight.
+  const [listDraft, setListDraft] = useState("");
+  const [listDragId, setListDragId] = useState<string | null>(null);
+  const [listDragOverId, setListDragOverId] = useState<string | null>(null);
+  const [optimisticListOrder, setOptimisticListOrder] = useState<string[] | null>(null);
   const [sending, setSending] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PlanItem | null>(null);
@@ -408,7 +465,22 @@ export default function Home() {
       const message = await responseError(response);
       throw new Error(message || `Request failed with ${response.status}`);
     }
-    setPayload(await response.json());
+    const data = (await response.json()) as ApiPayload;
+    if (data.dayList) {
+      setPayload(data);
+      return;
+    }
+    // T092: endpoints that predate the day list (structure, time, plan/*) return state+plan only.
+    // Re-read /api/day-list (also fresh state+plan) so the list-first Today never goes stale —
+    // crucial for day navigation, where the list for the new date must materialize.
+    try {
+      const listResponse = await fetch("/api/day-list", { cache: "no-store" });
+      if (listResponse.ok) {
+        setPayload((await listResponse.json()) as ApiPayload);
+        return;
+      }
+    } catch {}
+    setPayload((previous) => (previous?.dayList ? { ...data, dayList: previous.dayList } : data));
   }
 
   useEffect(() => {
@@ -430,6 +502,21 @@ export default function Home() {
 
   const plan = payload?.plan;
   const state = payload?.state;
+  const dayList = payload?.dayList;
+  // Rows in `order` (renderDayList pre-sorts); while a reorder POST is in flight the optimistic
+  // order wins, with any entries it does not know about appended (e.g. a concurrent add).
+  const listEntries = useMemo(() => {
+    const entries = dayList?.entries ?? [];
+    if (!optimisticListOrder) return entries;
+    const byId = new Map(entries.map((entry) => [entry.taskId, entry]));
+    const ordered = optimisticListOrder.flatMap((taskId) => {
+      const entry = byId.get(taskId);
+      if (!entry) return [];
+      byId.delete(taskId);
+      return [entry];
+    });
+    return [...ordered, ...byId.values()];
+  }, [dayList, optimisticListOrder]);
   const selectedTasks = useMemo(() => {
     if (!state || !selected?.selectedTaskIds) return [];
     return selected.selectedTaskIds
@@ -460,9 +547,25 @@ export default function Home() {
 
   useEffect(() => {
     if (!selected || !plan) return;
+    // T092: synthetic day-list drawer items refresh from the day list (field-compared to avoid
+    // a setSelected loop on the freshly built object); plan items refresh from the plan as before.
+    if (selected.id.startsWith(dayListItemPrefix)) {
+      const entry = dayList?.entries.find((candidate) => `${dayListItemPrefix}${candidate.taskId}` === selected.id);
+      if (!entry) return;
+      const rebuilt = dayListPlanItem(entry);
+      if (
+        rebuilt.status !== selected.status ||
+        rebuilt.title !== selected.title ||
+        rebuilt.estimatedMinutes !== selected.estimatedMinutes ||
+        rebuilt.startTime !== selected.startTime
+      ) {
+        setSelected(rebuilt);
+      }
+      return;
+    }
     const refreshed = plan.items.find((item) => item.id === selected.id);
     if (refreshed && refreshed !== selected) setSelected(refreshed);
-  }, [plan, selected]);
+  }, [dayList, plan, selected]);
 
   useEffect(() => {
     if (!moveItem) {
@@ -474,24 +577,59 @@ export default function Home() {
     setMoveError(null);
   }, [moveItem, plan?.date]);
 
-  if (!payload || !plan || !state) {
+  if (!payload || !plan || !state || !dayList) {
     return <main className="loading">Building today...</main>;
   }
 
-  async function submitInbox() {
-    if (!draft.trim()) return;
-    setSending(true);
-    setInboxError(null);
+  // T092 inline instant add (documented capture→enrich contract in api/day-list/capture): the
+  // input clears IMMEDIATELY, the capture POST lands as one undoable change, and enrichment is
+  // fired without awaiting — when it resolves, post() refreshes state quietly and the history
+  // funnel toasts what the AI decided.
+  async function submitListAdd(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = listDraft.trim();
+    if (!title) return;
+    setListDraft("");
     try {
-      await post("/api/inbox", { input: draft.trim() });
-      setDraft("");
-      // T089: the capture resolved — surface the AI session drawer with the outcome.
-      setAiOpen(true);
+      const response = await fetch("/api/day-list/capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title })
+      });
+      if (!response.ok) throw new Error((await responseError(response)) || `Request failed with ${response.status}`);
+      const data = (await response.json()) as ApiPayload & { taskId?: string };
+      setPayload(data);
+      if (data.taskId) void post("/api/day-list/enrich", { taskId: data.taskId }).catch(() => {});
     } catch (error) {
-      setInboxError(error instanceof Error ? error.message : "AI request failed.");
-    } finally {
-      setSending(false);
+      setInboxError(error instanceof Error ? error.message : "Could not add to the list.");
     }
+  }
+
+  // Row click opens the same task drawer the timeline uses: prefer the real plan item for the
+  // task (full actions), else a minimal synthetic item (see dayListPlanItem).
+  function openListEntry(entry: DayListEntryView) {
+    const planItem = plan?.items.find((item) => item.taskId === entry.taskId);
+    setSelected(planItem ?? dayListPlanItem(entry));
+  }
+
+  // Drop a dragged list row onto a target row: reorder locally first (optimistic), then POST the
+  // full order through the post() funnel so the change toasts and is undoable; the response (or a
+  // failure) reconciles by clearing the optimistic order.
+  function dropListRow(targetTaskId: string) {
+    const draggedId = listDragId;
+    setListDragId(null);
+    setListDragOverId(null);
+    if (!draggedId || draggedId === targetTaskId) return;
+    const orderedTaskIds = listEntries.map((entry) => entry.taskId);
+    const from = orderedTaskIds.indexOf(draggedId);
+    const to = orderedTaskIds.indexOf(targetTaskId);
+    if (from < 0 || to < 0) return;
+    orderedTaskIds.splice(from, 1);
+    orderedTaskIds.splice(to, 0, draggedId);
+    setOptimisticListOrder(orderedTaskIds);
+    void post("/api/day-list", { action: "reorder", orderedTaskIds })
+      .catch(() => {})
+      .finally(() => setOptimisticListOrder(null));
   }
 
   async function submitNotDone() {
@@ -569,27 +707,23 @@ export default function Home() {
     setMoveError(null);
   }
 
-  // T089: Now/Next/Later composition — pure reads over the (optimistically moved) plan items.
-  // Current = first planned item whose clock window contains "now"; otherwise the next upcoming
-  // planned item; otherwise the Now card shows a quiet empty state. Missed items (T090: window
-  // passed without being acted on) never become "current" but stay visible at the head of Next.
-  const nowMinutes = toMinutes(state.currentTime);
-  const scheduledActionable = timelineItems
-    .filter((item) => (item.status === "planned" || item.status === "missed") && isClockTime(item.startTime) && isClockTime(item.endTime))
-    .sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
-  const scheduledPlanned = scheduledActionable.filter((item) => item.status === "planned");
-  const missedItems = scheduledActionable.filter((item) => item.status === "missed");
-  const currentItem = scheduledPlanned.find((item) => toMinutes(item.startTime) <= nowMinutes && nowMinutes < endMinutesFor(item));
-  const nowItem = currentItem ?? scheduledPlanned.find((item) => toMinutes(item.startTime) > nowMinutes);
-  const afterNow = [...missedItems, ...(nowItem ? scheduledPlanned.slice(scheduledPlanned.indexOf(nowItem) + 1) : [])];
-  const nextItems = afterNow.slice(0, 3);
-  const laterItems = afterNow.slice(3);
+  // T092 list-first composition: the hand-authored list is the primary surface; the timeline is
+  // a secondary section. The Now card / Next-3 / Later rows are gone — the slim now-emphasis on
+  // the top unticked list row replaces them.
   const newCandidateCount = plan.newCandidateCount ?? 0;
-  const nowFolderName = nowItem?.folderId ? state.folders?.find((folder) => folder.id === nowItem.folderId)?.name : undefined;
-  const nowDuration = nowItem ? Math.max(1, endMinutesFor(nowItem) - toMinutes(nowItem.startTime)) : 0;
-  const nowLeft = currentItem ? Math.max(0, endMinutesFor(currentItem) - nowMinutes) : 0;
-  const nowProgress = currentItem ? Math.min(1, Math.max(0, (nowMinutes - toMinutes(currentItem.startTime)) / nowDuration)) : 0;
   const capacityLeft = Math.max(0, plan.availableMinutes - plan.estimatedTotalMinutes);
+  const firstUntickedId = listEntries.find((entry) => !entry.completedToday)?.taskId;
+  const untickedCount = listEntries.filter((entry) => !entry.completedToday).length;
+  const { capacityMinutes, listMinutes } = dayList.gauges;
+  const overfull = listMinutes > capacityMinutes;
+  const capacityRatio = capacityMinutes > 0 ? Math.min(1, listMinutes / capacityMinutes) : listMinutes > 0 ? 1 : 0;
+  const firstMissingPillar = dayList.gauges.missingPillars[0];
+  const trayGroups = [
+    ["due", dayList.tray.due],
+    ["balance", dayList.tray.balance],
+    ["backlog", dayList.tray.backlog]
+  ] as const;
+  const traySuggestionCount = dayList.tray.due.length + dayList.tray.balance.length + dayList.tray.backlog.length;
   const latestEntry = state.inbox[0];
   const latestSession = latestEntry ? state.captureSessions.find((session) => session.id === latestEntry.captureSessionId) : undefined;
   const hasPendingClarification = (latestSession?.questions ?? []).some((question) => question.status === "pending");
@@ -638,19 +772,7 @@ export default function Home() {
             <header className="todayHeader">
               <div>
                 <h1 aria-label={formatDate(plan.date)}>{formatDate(plan.date)}</h1>
-                <p className="capacityLine">
-                  {formatDuration(capacityLeft)} of capacity left
-                  {plan.committedAt && ` · committed ${plan.committedAt.slice(11, 16)}`}
-                </p>
-                {newCandidateCount > 0 && (
-                  <button
-                    className="hintChip"
-                    onClick={() => post("/api/plan/replan")}
-                    aria-label={`Replan to include ${newCandidateCount} new candidate${newCandidateCount === 1 ? "" : "s"}`}
-                  >
-                    {newCandidateCount} new candidate{newCandidateCount === 1 ? "" : "s"} · Replan?
-                  </button>
-                )}
+                <p className="capacityLine">your list · committed {dayList.committedAt.slice(11, 16)}</p>
               </div>
               <div className="dayNav">
                 <button
@@ -678,8 +800,9 @@ export default function Home() {
                 >
                   <ChevronRight size={16} />
                 </button>
-                <button className="pill pillQuiet" onClick={() => post("/api/plan/replan")} aria-label="Replan rest of day">
-                  Replan rest of day
+                <button type="button" className="pill pillQuiet iconPill aiPill" onClick={() => setAiOpen(true)} aria-label="Open AI session">
+                  <Sparkles size={15} />
+                  {hasPendingClarification && <span className="aiPendingDot" aria-hidden="true" />}
                 </button>
                 <button className="pill pillSecondary" onClick={() => setReviewOpen(true)} aria-label="Review day">
                   Review day
@@ -687,93 +810,202 @@ export default function Home() {
               </div>
             </header>
 
-            <section className="nowCard" aria-label="Now">
-              {nowItem ? (
-                <>
-                  <p className="nowFolder">{nowFolderName ?? labelForSection(nowItem.section)}</p>
-                  <h2 className="nowTitle">{nowItem.title}</h2>
-                  <p className="nowMeta">
-                    {currentItem
-                      ? `${nowLeft}m left of ${nowDuration}m${nextItems[0] ? ` · then ${nextItems[0].title}` : ""}`
-                      : `starts at ${nowItem.startTime} · ${nowDuration}m`}
-                  </p>
-                  {currentItem && (
-                    <div className="progressTrack" aria-hidden="true">
-                      <div className="progressFill" style={{ width: `${Math.round(nowProgress * 100)}%` }} />
-                    </div>
-                  )}
-                  <div className="nowActions">
-                    <button
-                      className="pill pillPrimary"
-                      onClick={() => post("/api/plan/complete", { planItemId: nowItem.id })}
-                      aria-label={`Complete ${nowItem.title}`}
-                    >
-                      Done
-                    </button>
-                    <button className="pill pillSecondary" onClick={() => setNotDoneItem(nowItem)} aria-label={`Defer ${nowItem.title}`}>
-                      Defer
-                    </button>
-                    <button className="pill pillQuiet" onClick={() => setSelected(nowItem)} aria-label={`Details for ${nowItem.title}`}>
-                      Details
-                    </button>
-                  </div>
-                </>
-              ) : missedItems.length > 0 ? (
-                <>
-                  <p className="nowEmpty">Everything left missed its window — it is waiting in Next.</p>
-                  <div className="nowActions">
-                    <button className="pill pillSecondary" onClick={() => post("/api/plan/replan")} aria-label="Replan rest of day">
-                      Replan rest of day
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <p className="nowEmpty">Nothing planned — capture something or open the timeline.</p>
-              )}
+            <section className="gaugesRow" aria-label="Capacity and balance gauges">
+              <div className="gauge">
+                <div className="gaugeHead">
+                  <span className="gaugeLabel">capacity</span>
+                  <span className={overfull ? "gaugeValue gaugeAmber" : "gaugeValue"}>
+                    {formatDuration(listMinutes)} of {formatDuration(capacityMinutes)}
+                  </span>
+                </div>
+                <div className="gaugeTrack" aria-hidden="true">
+                  <div className="gaugeFill" style={{ width: `${Math.round(capacityRatio * 100)}%` }} />
+                </div>
+              </div>
+              <div className="gauge">
+                <div className="gaugeHead">
+                  <span className="gaugeLabel">balance</span>
+                  {firstMissingPillar && <span className="gaugeValue gaugeAmber">no {firstMissingPillar} yet</span>}
+                </div>
+                <div className="gaugeTrack balanceTrack" aria-hidden="true">
+                  {dayList.gauges.balance.map((pillar) => (
+                    <div
+                      key={pillar.folderId}
+                      className="balanceSegment"
+                      style={{ width: `${Math.round(pillar.share * 100)}%`, background: pillarTone(pillar.folderId) }}
+                      title={pillar.name}
+                    />
+                  ))}
+                </div>
+              </div>
             </section>
 
-            {nextItems.length > 0 && (
-              <section className="nextSection" aria-label="Next">
-                <h2 className="sectionEyebrow">Next</h2>
-                {nextItems.map((item) => (
+            {dayList.habits.length > 0 && (
+              <section className="habitStrip" aria-label="Habits">
+                <span className="habitLabel">Habits</span>
+                {dayList.habits.map((habit) => (
                   <button
-                    className={item.status === "missed" ? "nextRow missedRow" : "nextRow"}
-                    key={item.id}
-                    onClick={() => setSelected(item)}
-                    aria-label={`Details for ${item.title}`}
+                    key={habit.taskId}
+                    className={habit.completedToday ? "habitChip habitDone" : "habitChip"}
+                    onClick={() => void post("/api/day-list/complete", { taskId: habit.taskId })}
+                    aria-label={habit.completedToday ? `Untick habit ${habit.title}` : `Tick habit ${habit.title}`}
                   >
-                    <span className="nextTitle">{item.title}</span>
-                    <span className="nextTime">
-                      {item.status === "missed" && "missed · "}
-                      {item.startTime} · {Math.max(1, endMinutesFor(item) - toMinutes(item.startTime))}m
-                    </span>
+                    {habit.completedToday && <Check size={12} aria-hidden="true" />}
+                    {habit.title} · {habit.effortMinutes}m
+                    {habit.streak >= 2 && (
+                      <span className="habitStreak" aria-label={`${habit.streak} day streak`}>
+                        <Flame size={11} aria-hidden="true" />
+                        {habit.streak}
+                      </span>
+                    )}
                   </button>
                 ))}
               </section>
             )}
 
-            <details className="laterSection" open={laterOpen} onToggle={(event) => setLaterOpen(event.currentTarget.open)}>
-              <summary className="sectionEyebrow">
-                Later today · {laterItems.length} item{laterItems.length === 1 ? "" : "s"}
-              </summary>
-              {laterItems.length > 0 && (
-                <div className="laterList">
-                  {laterItems.map((item) => (
-                    <button
-                      className={item.status === "missed" ? "nextRow missedRow" : "nextRow"}
-                      key={item.id}
-                      onClick={() => setSelected(item)}
-                      aria-label={`Details for ${item.title}`}
+            <section className="dayListSection" aria-label="Day list">
+              <div className="dayList">
+                {listEntries.map((entry) => {
+                  const folderName = entry.folderId ? state.folders?.find((folder) => folder.id === entry.folderId)?.name : undefined;
+                  const rowClass = [
+                    "listRow",
+                    entry.completedToday ? "tickedRow" : "",
+                    entry.taskId === firstUntickedId ? "nowRow" : "",
+                    listDragId && listDragId !== entry.taskId && listDragOverId === entry.taskId ? "dragOverRow" : ""
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+                  return (
+                    <div
+                      key={entry.taskId}
+                      className={rowClass}
+                      onClick={(event) => {
+                        if ((event.target as HTMLElement).closest(".listCheck, .listHandle, .listRemove")) return;
+                        openListEntry(entry);
+                      }}
+                      onDragOver={(event) => {
+                        if (!listDragId) return;
+                        event.preventDefault();
+                        setListDragOverId(entry.taskId);
+                      }}
+                      onDrop={() => dropListRow(entry.taskId)}
                     >
-                      <span className="nextTitle">{item.title}</span>
-                      <span className="nextTime">
-                        {item.status === "missed" && "missed · "}
-                        {item.startTime} · {Math.max(1, endMinutesFor(item) - toMinutes(item.startTime))}m
+                      <span
+                        className="listHandle"
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          setListDragId(entry.taskId);
+                        }}
+                        onDragEnd={() => {
+                          setListDragId(null);
+                          setListDragOverId(null);
+                        }}
+                        aria-hidden="true"
+                      >
+                        <GripVertical size={14} />
                       </span>
-                    </button>
-                  ))}
+                      <button
+                        className={entry.taskId === firstUntickedId ? "listCheck nowCheck" : "listCheck"}
+                        onClick={() => void post("/api/day-list/complete", { taskId: entry.taskId })}
+                        aria-label={entry.completedToday ? `Untick ${entry.title}` : `Tick ${entry.title}`}
+                      >
+                        {entry.completedToday && <Check size={13} aria-hidden="true" />}
+                      </button>
+                      <button className="listTitle" onClick={() => openListEntry(entry)} aria-label={`Details for ${entry.title}`}>
+                        {entry.source === "recurring" && <Repeat size={11} className="sourceGlyph" aria-hidden="true" />}
+                        {entry.source === "carried" && <ArrowRight size={11} className="sourceGlyph" aria-hidden="true" />}
+                        <span className="listTitleText">{entry.title}</span>
+                      </button>
+                      <span className={entry.missedPin ? "listMeta missedMeta" : "listMeta"}>
+                        {entry.pinnedTime ? (
+                          <>
+                            <Pin size={11} aria-hidden="true" />
+                            {entry.pinnedTime}
+                          </>
+                        ) : (
+                          `${folderName ? `${folderName} · ` : ""}${entry.effortMinutes}m`
+                        )}
+                      </span>
+                      <button
+                        className="listRemove"
+                        onClick={() => void post("/api/day-list", { action: "remove", taskId: entry.taskId })}
+                        aria-label={`Remove ${entry.title} to tray`}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  );
+                })}
+                <form className="listAddRow" onSubmit={(event) => void submitListAdd(event)}>
+                  <input
+                    className="listAddInput"
+                    value={listDraft}
+                    onChange={(event) => setListDraft(event.target.value)}
+                    placeholder="type to add — files itself in the background"
+                    aria-label="Add to today's list"
+                  />
+                </form>
+              </div>
+            </section>
+
+            {traySuggestionCount > 0 && (
+              <details className="traySection" open={untickedCount < 3}>
+                <summary className="trayLabel">
+                  Tray · {traySuggestionCount} suggestion{traySuggestionCount === 1 ? "" : "s"}
+                </summary>
+                <div className="trayRows">
+                  {trayGroups.map(([group, tasks]) =>
+                    tasks.map((task) => (
+                      <div className="trayRow" key={`${group}_${task.taskId}`}>
+                        <span className={`trayTag trayTag_${group}`}>{group}</span>
+                        <span className="trayTitle">{task.title}</span>
+                        <span className="trayMeta">
+                          {group === "balance" && task.pillarName ? `${task.pillarName} · ` : ""}
+                          {task.effortMinutes}m
+                        </span>
+                        <button
+                          className="trayAdd"
+                          onClick={() => void post("/api/day-list", { action: "add", taskId: task.taskId, source: "tray" })}
+                          aria-label={`Add ${task.title} to today's list`}
+                        >
+                          add
+                        </button>
+                      </div>
+                    ))
+                  )}
                 </div>
-              )}
+              </details>
+            )}
+
+            <details className="laterSection" open={laterOpen} onToggle={(event) => setLaterOpen(event.currentTarget.open)}>
+              <summary className="sectionEyebrow timelineSummary">
+                <span>Timeline &amp; schedule</span>
+                {newCandidateCount > 0 && (
+                  <button
+                    className="hintChip"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void post("/api/plan/replan");
+                    }}
+                    aria-label={`Replan to include ${newCandidateCount} new candidate${newCandidateCount === 1 ? "" : "s"}`}
+                  >
+                    {newCandidateCount} new candidate{newCandidateCount === 1 ? "" : "s"} · Replan?
+                  </button>
+                )}
+                <button
+                  className="pill pillQuiet timelineReplan"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void post("/api/plan/replan");
+                  }}
+                  aria-label="Replan rest of day"
+                >
+                  Replan rest of day
+                </button>
+              </summary>
               <section className="calendarTimeline" aria-label="Timed day plan">
                 <div className="calendarScroll">
                   <div className="timeColumn" style={{ height: timeline?.height }}>
@@ -837,29 +1069,6 @@ export default function Home() {
               </section>
             </details>
 
-            <form
-              className="captureBar"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitInbox();
-              }}
-            >
-              <input
-                className="captureInput"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="Capture anything — the AI files it"
-                aria-label="Inbox input"
-              />
-              <button type="button" className="pill pillQuiet aiPill" onClick={() => setAiOpen(true)} aria-label="Open AI session">
-                <Sparkles size={15} />
-                AI
-                {hasPendingClarification && <span className="aiPendingDot" aria-hidden="true" />}
-              </button>
-              <button type="submit" className="captureSend" disabled={sending} aria-label={sending ? "Thinking" : "Send to AI"}>
-                <Send size={16} />
-              </button>
-            </form>
             {inboxError && (
               <p className="errorMessage" role="alert">
                 {inboxError}
@@ -1016,7 +1225,13 @@ export default function Home() {
           )}
           <div className="drawerActions">
             {selected.taskId && <button onClick={() => setMoveItem(selected)}>Reschedule</button>}
-            <button onClick={() => post("/api/plan/complete", { planItemId: selected.id })}>
+            <button
+              onClick={() =>
+                selected.id.startsWith(dayListItemPrefix) && selected.taskId
+                  ? post("/api/day-list/complete", { taskId: selected.taskId })
+                  : post("/api/plan/complete", { planItemId: selected.id })
+              }
+            >
               {selected.status === "completed" ? "Mark not done" : "Mark done"}
             </button>
           </div>
@@ -1048,7 +1263,7 @@ export default function Home() {
             </div>
           )}
           <div className="inboxLog">
-            {state.inbox.length === 0 && <p className="emptyPanel">No captures yet — use the bar on Today.</p>}
+            {state.inbox.length === 0 && <p className="emptyPanel">No captures yet — type into the list on Today.</p>}
             {/* T087: keep the session drawer fresh — only the current/most-recent exchange shows
                 here; earlier sessions are logged on the AI activity page. */}
             {state.inbox.slice(0, 1).map((entry, index) => (

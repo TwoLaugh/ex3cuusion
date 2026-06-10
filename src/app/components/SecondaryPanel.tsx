@@ -387,6 +387,10 @@ function TaskCard({ state, post, task, nested }: { state: AppState; post: PostFn
                 />
               </label>
             </div>
+            <label className="fieldLabel folderCheckbox">
+              <input type="checkbox" name="habit" defaultChecked={task.habit === true} aria-label={`Habit ${task.title}`} />
+              Habit (lives on the Today habit strip, with streaks)
+            </label>
             <input name="tags" defaultValue={(task.tags ?? []).join(", ")} placeholder="tags, comma, separated" aria-label={`Tags ${task.title}`} />
             <label className="fieldLabel">
               Parent task (subtask of)

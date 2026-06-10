@@ -277,64 +277,7 @@ textarea {
   padding-top: 2px;
 }
 
-/* ---------- Now card ---------- */
-
-.nowCard {
-  background: var(--surface);
-  border-radius: 16px;
-  margin-bottom: 32px;
-  padding: 24px;
-}
-
-.nowFolder {
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  margin: 0 0 6px;
-  text-transform: capitalize;
-}
-
-.nowTitle {
-  font-size: 22px;
-  font-weight: 500;
-  line-height: 1.3;
-  margin: 0 0 6px;
-}
-
-.nowMeta {
-  color: var(--ink-muted);
-  font-size: 13px;
-  margin: 0;
-}
-
-.nowEmpty {
-  color: var(--ink-muted);
-  margin: 0;
-}
-
-.progressTrack {
-  background: var(--raised);
-  border-radius: 999px;
-  height: 3px;
-  margin-top: 16px;
-  overflow: hidden;
-}
-
-.progressFill {
-  background: var(--accent);
-  border-radius: 999px;
-  height: 100%;
-}
-
-.nowActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 20px;
-}
-
-/* ---------- Next / Later ---------- */
+/* ---------- T092 list-first Today ---------- */
 
 .sectionEyebrow {
   color: var(--ink-faint);
@@ -345,45 +288,402 @@ textarea {
   text-transform: uppercase;
 }
 
-.nextSection {
-  margin-bottom: 32px;
-}
+/* Gauges row: two slim 3px bars (capacity fill, stacked pillar balance). */
 
-.nextRow {
-  align-items: baseline;
-  background: transparent;
-  border: 0;
-  border-top: 1px solid var(--hairline);
-  color: var(--ink);
+.gaugesRow {
   display: flex;
-  gap: 14px;
-  justify-content: space-between;
-  padding: 12px 2px;
-  text-align: left;
-  width: 100%;
+  gap: 24px;
+  margin-bottom: 26px;
 }
 
-.nextRow:first-of-type {
+.gauge {
+  flex: 1;
+  min-width: 0;
+}
+
+.gaugeHead {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.gaugeLabel {
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.gaugeValue {
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gaugeAmber {
+  color: var(--missed);
+}
+
+.gaugeTrack {
+  background: var(--raised);
+  border-radius: 999px;
+  display: flex;
+  height: 3px;
+  overflow: hidden;
+}
+
+.gaugeFill {
+  background: var(--accent);
+  border-radius: 999px;
+  height: 100%;
+}
+
+.balanceSegment {
+  height: 100%;
+}
+
+/* Habit strip: wrapped pill chips, tick = filled, streaks get a small flame. */
+
+.habitStrip {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 26px;
+}
+
+.habitLabel {
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.habitChip {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  display: inline-flex;
+  font-size: 13px;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 12px;
+}
+
+.habitChip:hover {
+  color: var(--ink);
+}
+
+.habitChip.habitDone {
+  background: var(--ink-muted);
+  border-color: var(--ink-muted);
+  color: var(--bg);
+}
+
+.habitChip.habitDone:hover {
+  color: var(--bg);
+}
+
+.habitStreak {
+  align-items: center;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  gap: 2px;
+}
+
+/* THE LIST: generous hairline rows, slim now-emphasis on the top unticked row. */
+
+.dayListSection {
+  margin-bottom: 26px;
+}
+
+.listRow {
+  align-items: center;
+  border-top: 1px solid var(--hairline);
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  padding: 12px 2px;
+}
+
+.listRow:first-child {
   border-top: 0;
 }
 
-.nextRow:hover .nextTitle {
+.dragOverRow {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.listHandle {
+  color: var(--ink-faint);
+  cursor: grab;
+  display: inline-flex;
+  flex: none;
+  opacity: 0.55;
+  touch-action: none;
+}
+
+.listHandle:active {
+  cursor: grabbing;
+}
+
+.listCheck {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--ink-faint);
+  border-radius: 7px;
+  color: var(--accent);
+  display: inline-flex;
+  flex: none;
+  height: 20px;
+  justify-content: center;
+  padding: 0;
+  width: 20px;
+}
+
+.listCheck:hover {
+  border-color: var(--ink-muted);
+}
+
+.listCheck.nowCheck {
+  border-color: var(--accent);
+}
+
+.listTitle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  display: flex;
+  flex: 1;
+  font-size: 15px;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.nowRow .listTitle {
+  font-weight: 500;
+}
+
+.tickedRow .listTitle {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-faint);
+}
+
+.listTitleText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceGlyph {
+  color: var(--ink-faint);
+  flex: none;
+}
+
+.listMeta {
+  align-items: center;
+  color: var(--ink-faint);
+  display: inline-flex;
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  gap: 4px;
+}
+
+.missedMeta {
+  color: var(--missed);
+}
+
+.listRemove {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--ink-faint);
+  display: inline-flex;
+  flex: none;
+  height: 22px;
+  justify-content: center;
+  opacity: 0;
+  padding: 0;
+  width: 22px;
+}
+
+.listRow:hover .listRemove,
+.listRemove:focus-visible {
+  opacity: 1;
+}
+
+.listRemove:hover {
   color: var(--ink);
 }
 
-.nextTitle {
+/* Inline add: a borderless input as the last list row, aligned with row titles. */
+
+.listAddRow {
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  padding: 8px 2px 0 56px;
+}
+
+.listAddInput {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink);
+  flex: 1;
   font-size: 15px;
+  min-width: 0;
+  padding: 6px 0;
+}
+
+.listAddInput:focus-visible {
+  outline: none;
+}
+
+/* TRAY: a surface card of grouped suggestions, collapsible. */
+
+.traySection {
+  background: var(--surface);
+  border-radius: var(--radius);
+  margin-bottom: 26px;
+  padding: 14px 18px;
+}
+
+.traySection > summary {
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  list-style: none;
+  text-transform: uppercase;
+}
+
+.traySection > summary::-webkit-details-marker {
+  display: none;
+}
+
+.traySection > summary::after {
+  content: " ▸";
+  letter-spacing: 0;
+}
+
+.traySection[open] > summary::after {
+  content: " ▾";
+}
+
+.trayRows {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+}
+
+.trayRow {
+  align-items: center;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  gap: 10px;
+  padding: 9px 0;
+}
+
+.trayRow:first-child {
+  border-top: 0;
+}
+
+.trayTag {
+  flex: none;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  width: 58px;
+}
+
+.trayTag_due {
+  color: var(--accent);
+}
+
+.trayTag_balance {
+  color: var(--missed);
+}
+
+.trayTag_backlog {
+  color: var(--ink-faint);
+}
+
+.trayTitle {
+  color: var(--ink-muted);
+  flex: 1;
+  font-size: 14px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.nextTime {
-  color: var(--ink-muted);
+.trayRow:hover .trayTitle {
+  color: var(--ink);
+}
+
+.trayMeta {
+  color: var(--ink-faint);
   flex: none;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.trayAdd {
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  flex: none;
+  font-size: 12px;
+  min-height: 26px;
+  padding: 0 12px;
+}
+
+.trayAdd:hover {
+  color: var(--ink);
+}
+
+/* Timeline section summary row: title + replan pill + new-candidates chip inline. */
+
+.timelineSummary {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.timelineSummary .hintChip {
+  letter-spacing: normal;
+  margin-top: 0;
+  text-transform: none;
+}
+
+.timelineSummary .timelineReplan {
+  font-size: 12px;
+  letter-spacing: normal;
+  min-height: 26px;
+  padding: 0 12px;
+  text-transform: none;
 }
 
 .laterSection {
@@ -410,38 +710,7 @@ textarea {
   content: " ▾";
 }
 
-.laterList {
-  margin-top: 8px;
-}
-
-/* ---------- Capture bar ---------- */
-
-.captureBar {
-  align-items: center;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  bottom: 16px;
-  box-shadow: var(--shadow);
-  display: flex;
-  gap: 8px;
-  margin-top: 36px;
-  padding: 8px 8px 8px 18px;
-  position: sticky;
-}
-
-.captureInput {
-  background: transparent;
-  border: 0;
-  color: var(--ink);
-  flex: 1;
-  min-width: 0;
-  padding: 6px 0;
-}
-
-.captureInput:focus-visible {
-  outline: none;
-}
+/* ---------- AI session pill (lives in the Today header since T092) ---------- */
 
 .aiPill {
   position: relative;
@@ -452,27 +721,9 @@ textarea {
   border-radius: 999px;
   height: 7px;
   position: absolute;
-  right: 6px;
-  top: 6px;
+  right: 4px;
+  top: 4px;
   width: 7px;
-}
-
-.captureSend {
-  align-items: center;
-  background: var(--accent);
-  border: 0;
-  border-radius: 999px;
-  color: #161410;
-  display: inline-flex;
-  flex: none;
-  height: 38px;
-  justify-content: center;
-  width: 38px;
-}
-
-.captureSend:disabled {
-  cursor: wait;
-  opacity: 0.55;
 }
 
 /* ---------- Timeline (T081 drag behavior preserved) ---------- */
@@ -748,16 +999,7 @@ textarea {
   color: var(--missed);
 }
 
-.missedRow .nextTitle {
-  color: var(--missed);
-  opacity: 0.85;
-}
-
-.missedRow .nextTime {
-  color: rgba(186, 117, 23, 0.75);
-}
-
-/* T090: quiet "new candidates" staleness hint under the Today header. */
+/* T090: quiet "new candidates" staleness hint (T092: lives in the timeline summary row). */
 .hintChip {
   background: var(--missed-soft);
   border: 1px solid rgba(186, 117, 23, 0.35);

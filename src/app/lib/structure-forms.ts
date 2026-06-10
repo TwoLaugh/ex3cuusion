@@ -66,6 +66,9 @@ export function structurePatch(entity: "task" | "folder", formData: FormData): R
     scheduledTime: fieldText(formData, "scheduledTime"),
     completionBehavior: fieldText(formData, "completionBehavior"),
     completionMode: fieldText(formData, "completionMode"),
+    // T092: explicit habit flag (checkbox → boolean, mirroring canBlock above); state.ts clears
+    // the flag when false.
+    habit: formData.get("habit") === "on",
     energy: fieldText(formData, "energy"),
     strictness: fieldText(formData, "strictness"),
     schedulingMode: fieldText(formData, "schedulingMode"),
