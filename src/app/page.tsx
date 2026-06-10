@@ -3,6 +3,7 @@
 import { Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Menu, Plus, Send, Undo2, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
+import { EditableBadge } from "./components/EditableBadge";
 import { InboxSession } from "./components/InboxSession";
 import { PlanItemActions } from "./components/PlanItemActions";
 import { ReviewDayDialog } from "./components/ReviewDayDialog";
@@ -52,6 +53,14 @@ export default function Home() {
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
   const [todayIndex, setTodayIndex] = useState<number | null>(null);
   const [history, setHistory] = useState<{ id: string; source: string; summary: string; createdAt: string }[]>([]);
+  // T078: transient post-action toast (one at a time, latest wins). The latest-history-id ref
+  // is primed on the first history fetch so pre-existing entries never toast; undo paths set
+  // the suppress ref so the resulting history shrink does not re-toast an older entry.
+  const [toast, setToast] = useState<{ key: number; message: string; undoId?: string } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastHistoryIdRef = useRef<string | null>(null);
+  const historyPrimedRef = useRef(false);
+  const suppressHistoryToastRef = useRef(false);
   // True while the view should track real "today" (T068). Manual day navigation turns it off so
   // the live tick does not yank the user back; the "Today" control turns it back on.
   const followingTodayRef = useRef(true);
@@ -282,14 +291,37 @@ export default function Home() {
   }
 
   // Undo an AI change (auto-apply-with-undo, T061). post() updates the plan/state; the
-  // [payload] effect below refreshes the change list.
+  // [payload] effect below refreshes the change list. Suppresses the history-diff toast (T078)
+  // and shows a plain confirmation instead.
   async function undoChange(id: string) {
+    suppressHistoryToastRef.current = true;
     try {
       await post("/api/history", { id });
+      showToast("Change undone");
     } catch {
       // ignore — list refresh will reflect actual state
+      suppressHistoryToastRef.current = false;
     }
   }
+
+  // T078: show a transient toast (~6s auto-dismiss, manual X, one at a time — latest wins).
+  function showToast(message: string, undoId?: string) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ key: Date.now(), message, undoId });
+    toastTimerRef.current = setTimeout(() => setToast(null), 6000);
+  }
+
+  function dismissToast() {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = null;
+    setToast(null);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   // Trigger a proactive maintenance pass (T066). Result is one undoable "organizer" change.
   async function runOrganizer() {
@@ -310,14 +342,33 @@ export default function Home() {
     await post("/api/settings", { availableMinutes: Number(form.get("availableMinutes")) });
   }
 
-  // Keep the recent-AI-changes list in sync after any state change.
+  // Keep the recent-AI-changes list in sync after any state change. Every successful mutating
+  // post() lands here (post() sets payload), so this is also the single funnel for post-action
+  // toasts (T078): a new latest history entry means an undoable change just happened. Pure
+  // reads and the live clock tick leave the latest id unchanged, so they never toast.
   useEffect(() => {
     if (!payload) return;
     let active = true;
     fetch("/api/history")
       .then((response) => (response.ok ? response.json() : { history: [] }))
-      .then((data) => {
-        if (active) setHistory(data.history ?? []);
+      .then((data: { history?: { id: string; source: string; summary: string; createdAt: string }[] }) => {
+        if (!active) return;
+        const entries = data.history ?? [];
+        setHistory(entries);
+        const latestId = entries[0]?.id ?? null;
+        const previousId = lastHistoryIdRef.current;
+        lastHistoryIdRef.current = latestId;
+        if (!historyPrimedRef.current) {
+          historyPrimedRef.current = true;
+          return;
+        }
+        if (suppressHistoryToastRef.current) {
+          suppressHistoryToastRef.current = false;
+          return;
+        }
+        if (latestId && latestId !== previousId) {
+          showToast(entries[0].summary, latestId);
+        }
       })
       .catch(() => {});
     return () => {
@@ -366,6 +417,8 @@ export default function Home() {
   }, [state, selected]);
   const selectedFolder = selected?.folderId ? state?.folders?.find((folder) => folder.id === selected.folderId) : undefined;
   const selectedTask = selected?.taskId ? state?.tasks.find((task) => task.id === selected.taskId) : undefined;
+  // T079: label for the editable due-date badge in the task drawer.
+  const selectedDueLabel = selectedTask?.dueDate ? `due ${formatShortDate(selectedTask.dueDate)}` : "due —";
   const selectedBacklog = useMemo(() => {
     if (!state || !selected?.folderId) return [];
     const selectedIds = new Set(selected.selectedTaskIds ?? []);
@@ -739,9 +792,40 @@ export default function Home() {
           {selectedTask && (
             <>
               <div className="badgeRow">
-                <span className="taskBadge">{dateIntentLabel(selectedTask)}</span>
+                {dateIntentLabel(selectedTask) !== selectedDueLabel && <span className="taskBadge">{dateIntentLabel(selectedTask)}</span>}
+                <EditableBadge
+                  taskId={selectedTask.id}
+                  field="dueDate"
+                  inputType="date"
+                  value={selectedTask.dueDate}
+                  display={selectedDueLabel}
+                  ariaLabel={`Edit due date ${selectedTask.title}`}
+                  post={post}
+                />
                 <span className="taskBadge">{selectedTask.energy}</span>
-                <span className="taskBadge">p{selectedTask.priority}/i{selectedTask.importance}/u{selectedTask.urgency}</span>
+                <EditableBadge
+                  taskId={selectedTask.id}
+                  field="priority"
+                  inputType="number"
+                  min={1}
+                  max={10}
+                  value={selectedTask.priority}
+                  display={`p${selectedTask.priority}`}
+                  ariaLabel={`Edit priority ${selectedTask.title}`}
+                  post={post}
+                />
+                <span className="taskBadge">i{selectedTask.importance}/u{selectedTask.urgency}</span>
+                <EditableBadge
+                  taskId={selectedTask.id}
+                  field="effortMinutes"
+                  inputType="number"
+                  min={1}
+                  max={720}
+                  value={selectedTask.effortMinutes}
+                  display={`${selectedTask.effortMinutes}m`}
+                  ariaLabel={`Edit minutes ${selectedTask.title}`}
+                  post={post}
+                />
                 {selectedTask.scheduling?.mode && selectedTask.scheduling.mode !== "exclusive" && (
                   <span className="taskBadge highlightBadge">{selectedTask.scheduling.mode}</span>
                 )}
@@ -913,6 +997,23 @@ export default function Home() {
       )}
 
       {reviewOpen && <ReviewDayDialog state={state} post={post} onClose={() => setReviewOpen(false)} />}
+
+      <div className="toastRegion" aria-live="polite">
+        {toast && (
+          <div className="toast" key={toast.key} data-testid="toast">
+            <span className="toastMessage">{toast.message}</span>
+            {toast.undoId && (
+              <button className="toastUndo" onClick={() => void undoChange(toast.undoId!)}>
+                <Undo2 size={13} />
+                Undo
+              </button>
+            )}
+            <button className="toastDismiss" onClick={dismissToast} aria-label="Dismiss notification">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+      </div>
     </main>
   );
 }

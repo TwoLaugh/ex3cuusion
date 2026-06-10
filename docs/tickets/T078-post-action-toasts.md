@@ -15,3 +15,5 @@ summarizing what happened with an inline Undo — so auto-apply feels safe and v
 ## Acceptance Criteria
 
 - Applying an AI action or running Tidy-up shows a toast like "Archived 1 duplicate — Undo".
+
+## Status: DONE (2026-06-10, branch daily-driver-polish)

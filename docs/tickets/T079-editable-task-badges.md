@@ -10,3 +10,5 @@ instead of opening the full editor.
 ## Scope
 
 - Make the task-card badges interactive (popover or inline control) posting a structure update.
+
+## Status: DONE (2026-06-10, branch daily-driver-polish)

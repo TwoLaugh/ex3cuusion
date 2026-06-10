@@ -6,3 +6,5 @@ Status: planned (UI polish).
 
 Render subtasks nested/indented under their parent in the Tasks view (T071 currently shows
 badges + rollups, not visual nesting).
+
+## Status: DONE (2026-06-10, branch daily-driver-polish)

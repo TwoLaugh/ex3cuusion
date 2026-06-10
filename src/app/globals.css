@@ -1840,3 +1840,192 @@ textarea {
   width: auto;
   min-height: 0;
 }
+
+/* T078: post-action toasts with undo */
+.toastRegion {
+  align-items: flex-end;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  position: fixed;
+  right: 18px;
+  z-index: 50;
+}
+
+.toast {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  max-width: min(380px, calc(100vw - 36px));
+  padding: 10px 12px;
+  pointer-events: auto;
+}
+
+.toastMessage {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toastUndo {
+  align-items: center;
+  background: rgba(107, 214, 184, 0.1);
+  border: 1px solid rgba(107, 214, 184, 0.3);
+  border-radius: 6px;
+  color: var(--accent-strong);
+  display: flex;
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 4px;
+  padding: 3px 8px;
+}
+
+.toastUndo:hover {
+  background: rgba(107, 214, 184, 0.2);
+}
+
+.toastDismiss {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  display: flex;
+  flex: none;
+  padding: 2px;
+}
+
+.toastDismiss:hover {
+  color: var(--ink);
+}
+
+/* T079: click-to-edit task badges */
+.editableBadge {
+  cursor: pointer;
+  text-decoration: underline dotted rgba(184, 208, 255, 0.55);
+  text-underline-offset: 3px;
+}
+
+.editableBadge:hover,
+.editableBadge:focus-visible {
+  border-color: rgba(139, 184, 255, 0.6);
+}
+
+.badgeInput {
+  background: var(--bg-soft);
+  border: 1px solid rgba(139, 184, 255, 0.6);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 2px 7px;
+  width: 84px;
+}
+
+.badgeInput[type="date"] {
+  width: 140px;
+}
+
+/* T082: bulk multi-select on the backlog board */
+.backlogCardHead {
+  align-items: flex-start;
+  display: flex;
+  gap: 6px;
+}
+
+.backlogCard .backlogSelect {
+  flex: none;
+  margin: 1px 0 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.backlogCard:hover .backlogSelect,
+.backlogCard .backlogSelect:focus-visible,
+.backlogCard .backlogSelect:checked,
+.hasSelection .backlogCard .backlogSelect {
+  opacity: 1;
+}
+
+.columnSelectAll {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+}
+
+.bulkBar {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  bottom: 10px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  position: sticky;
+  z-index: 5;
+}
+
+.bulkBar button {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.bulkBar button:hover {
+  background: rgba(127, 127, 127, 0.15);
+}
+
+.bulkBar button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.bulkCount {
+  font-weight: 700;
+}
+
+.bulkLabel {
+  opacity: 0.6;
+}
+
+/* T083: subtask tree indentation in the Tasks view */
+.taskTreeNode {
+  display: grid;
+  gap: 8px;
+}
+
+.subtaskChildren {
+  border-left: 1px dashed var(--line-strong);
+  display: grid;
+  gap: 8px;
+  margin-left: 14px;
+  padding-left: 12px;
+}
+
+.subtaskChildren > .taskTreeNode {
+  position: relative;
+}
+
+.subtaskChildren > .taskTreeNode::before {
+  border-top: 1px dashed var(--line-strong);
+  content: "";
+  left: -12px;
+  position: absolute;
+  top: 22px;
+  width: 10px;
+}

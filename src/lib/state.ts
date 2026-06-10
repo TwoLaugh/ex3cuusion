@@ -190,6 +190,21 @@ function summarizeInbox(input: string): string {
   return `Inbox: ${trimmed.length > 60 ? `${trimmed.slice(0, 57)}...` : trimmed}`;
 }
 
+// Human-readable history/toast summary for a manual structure mutation, e.g.
+// 'Updated task "Finish auth bug"' instead of the generic "Manual update task" (T078).
+function describeStructureMutation(mutation: StructureMutation): string {
+  const verb = mutation.action === "create" ? "Created" : mutation.action === "archive" ? "Archived" : "Updated";
+  const state = currentState();
+  const name =
+    mutation.action === "create"
+      ? cleanText((mutation.patch as { title?: string; name?: string }).title ?? (mutation.patch as { name?: string }).name)
+      : mutation.entity === "task"
+        ? state.tasks.find((task) => task.id === mutation.id)?.title
+        : (state.folders ?? []).find((folder) => folder.id === mutation.id)?.name;
+  const label = name ? ` "${name.length > 40 ? `${name.slice(0, 37)}...` : name}"` : "";
+  return `${verb} ${mutation.entity}${label}`;
+}
+
 export function loadRealisticCharacterScenario(): AppState {
   replaceState(createRealisticCharacterState());
   return getState();
@@ -246,7 +261,7 @@ function resolveFolderParent(state: AppState, requested: string | undefined, sel
 }
 
 export function applyStructureMutation(mutation: StructureMutation): AppState {
-  recordChange("manual_edit", `Manual ${mutation.action} ${mutation.entity}`);
+  recordChange("manual_edit", describeStructureMutation(mutation));
   const state = currentState();
 
   if (mutation.entity === "folder") {
