@@ -1,0 +1,357 @@
+"use client";
+
+import { Archive, Layers3, Plus, Save, X } from "lucide-react";
+import { FormEvent } from "react";
+import type { AppState, DayPlan, PlanItem } from "@/lib/types";
+import { folderPath } from "../lib/folders";
+import { submitStructureForm, type PostFn } from "../lib/structure-forms";
+import { buildBacklogSummary, buildTaskGroups, childStats, dateIntentLabel, isDescendantOfClient } from "../lib/task-view";
+import { BacklogBoard } from "./BacklogBoard";
+import { FolderPicker, FoldersPanel } from "./FoldersPanel";
+
+export type SecondaryView = "Folders" | "Tasks" | "Planning preferences" | "AI activity";
+
+const taskStatuses = ["active", "scheduled", "completed", "deferred", "blocked", "waiting", "archived"] as const;
+const completionBehaviors = ["exhaust_once", "repeatable", "keep_as_suggestion", "regenerate_after_completion"] as const;
+const completionModes = ["simple_done", "outcome_done", "timebox", "repeatable_checkoff", "progress_accumulating", "suggestion_used"] as const;
+
+export function SecondaryPanel({
+  view,
+  state,
+  plan,
+  post,
+  onClose,
+  runOrganizer,
+  organizerRunning,
+  updateCapacity
+}: {
+  view: SecondaryView;
+  state: AppState;
+  plan: DayPlan;
+  post: PostFn;
+  onClose: () => void;
+  runOrganizer: () => Promise<void>;
+  organizerRunning: boolean;
+  updateCapacity: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  const taskGroups = buildTaskGroups(state, plan);
+  const backlogSummary = buildBacklogSummary(state, plan);
+
+  return (
+    <section className="secondaryPanel" aria-label={view}>
+      <button className="iconButton closeButton" onClick={onClose} aria-label={`Close ${view}`}>
+        <X size={18} />
+      </button>
+      <p className="eyebrow">{view}</p>
+      {view === "Folders" && <FoldersPanel state={state} post={post} />}
+      {view === "Tasks" && (
+        <div className="taskSections">
+          <details className="backlogBoardWrap" open>
+            <summary>Backlog board — drag to reschedule</summary>
+            <BacklogBoard state={state} post={post} />
+          </details>
+          <form className="structureForm wideStructureForm" aria-label="Create task" onSubmit={(event) => submitStructureForm(event, post, "task", "create")}>
+            <h2>New task</h2>
+            <input name="title" placeholder="Task title" aria-label="Task title" />
+            <FolderPicker state={state} ariaLabel="Task folder" defaultValue="" includeNone />
+            <input name="effortMinutes" type="number" min="1" max="720" defaultValue="30" aria-label="Task minutes" />
+            <input name="dueDate" type="date" aria-label="Task due date" />
+            <button type="submit">
+              <Plus size={15} />
+              Add
+            </button>
+          </form>
+          {taskGroups.map((group) => (
+            <section className="taskSection" aria-label={group.title} key={group.title}>
+              <div className="sectionHeader">
+                <div>
+                  <h2>{group.title}</h2>
+                  <p>{group.description}</p>
+                </div>
+                <span>{group.tasks.length}</span>
+              </div>
+              <div className="taskCards">
+                {group.tasks.length === 0 && <p className="emptyPanel">Nothing here.</p>}
+                {group.tasks.map((task) => (
+                  <article className="taskCard" key={`${group.title}_${task.id}`}>
+                    <div>
+                      <h3>{task.title}</h3>
+                      <p>{task.definitionOfDone || task.notes || task.plannerFields.intentType}</p>
+                    </div>
+                    <div className="badgeRow">
+                      <span className="taskBadge">{task.status}</span>
+                      <span className="taskBadge">{dateIntentLabel(task)}</span>
+                      <span className="taskBadge">{task.effortMinutes}m</span>
+                      {task.folderId && <span className="taskBadge">{folderPath(state, task.folderId)}</span>}
+                      {task.parentTaskId && <span className="taskBadge">↳ subtask</span>}
+                      {task.repeatPolicy?.type && task.repeatPolicy.type !== "none" && (
+                        <span className="taskBadge">↻ {task.repeatPolicy.type}</span>
+                      )}
+                      {childStats(state, task.id).count > 0 && (
+                        <span className="taskBadge highlightBadge">
+                          {childStats(state, task.id).count} subtasks · {childStats(state, task.id).done}/{childStats(state, task.id).count} done · {childStats(state, task.id).minutes}m
+                        </span>
+                      )}
+                      {task.scheduling?.mode && task.scheduling.mode !== "exclusive" && (
+                        <span className="taskBadge highlightBadge">
+                          {task.scheduling.mode}/{task.scheduling.attentionLoad}
+                        </span>
+                      )}
+                    </div>
+                    <details className="inlineEditor">
+                      <summary>Edit</summary>
+                      <form onSubmit={(event) => submitStructureForm(event, post, "task", "update", task.id)}>
+                        <input name="title" defaultValue={task.title} aria-label={`Title ${task.title}`} />
+                        <FolderPicker state={state} ariaLabel={`Folder ${task.title}`} defaultValue={task.folderId ?? ""} includeNone />
+                        <select name="status" defaultValue={task.status} aria-label={`Status ${task.title}`}>
+                          {taskStatuses.map((status) => (
+                            <option value={status} key={status}>
+                              {status}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="compactFields">
+                          <label className="fieldLabel">
+                            Priority
+                            <input name="priority" type="number" min="1" max="10" defaultValue={task.priority} aria-label={`Priority ${task.title}`} />
+                          </label>
+                          <label className="fieldLabel">
+                            Effort (min)
+                            <input name="effortMinutes" type="number" min="1" max="720" defaultValue={task.effortMinutes} aria-label={`Minutes ${task.title}`} />
+                          </label>
+                        </div>
+                        <div className="compactFields">
+                          <input name="dueDate" type="date" defaultValue={task.dueDate ?? ""} aria-label={`Due ${task.title}`} />
+                          <input name="scheduledDate" type="date" defaultValue={task.scheduledDate ?? ""} aria-label={`Scheduled ${task.title}`} />
+                          <input name="scheduledTime" type="time" defaultValue={task.scheduledTime ?? ""} aria-label={`Time ${task.title}`} />
+                        </div>
+                        <div className="compactFields">
+                          <select name="completionBehavior" defaultValue={task.completionBehavior} aria-label={`Behavior ${task.title}`}>
+                            {completionBehaviors.map((behavior) => (
+                              <option value={behavior} key={behavior}>
+                                {behavior}
+                              </option>
+                            ))}
+                          </select>
+                          <select name="completionMode" defaultValue={task.completionMode ?? "simple_done"} aria-label={`Mode ${task.title}`}>
+                            {completionModes.map((mode) => (
+                              <option value={mode} key={mode}>
+                                {mode}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <details className="advancedFields">
+                          <summary>Advanced</summary>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Importance
+                              <input name="importance" type="number" min="1" max="10" defaultValue={task.importance} aria-label={`Importance ${task.title}`} />
+                            </label>
+                            <label className="fieldLabel">
+                              Urgency
+                              <input name="urgency" type="number" min="1" max="10" defaultValue={task.urgency} aria-label={`Urgency ${task.title}`} />
+                            </label>
+                          </div>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Energy
+                              <select name="energy" defaultValue={task.energy} aria-label={`Energy ${task.title}`}>
+                                {["low", "medium", "high"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="fieldLabel">
+                              Strictness
+                              <select name="strictness" defaultValue={task.strictness} aria-label={`Strictness ${task.title}`}>
+                                {["flexible", "normal", "strict"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="fieldLabel">
+                              Overlap
+                              <select
+                                name="schedulingMode"
+                                defaultValue={["concurrent", "background", "phased"].includes(task.scheduling?.mode ?? "") ? task.scheduling!.mode : "exclusive"}
+                                aria-label={`Overlap mode ${task.title}`}
+                              >
+                                {["exclusive", "concurrent", "background", "phased"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Min (min)
+                              <input name="minMinutes" type="number" min="1" max="720" defaultValue={task.minMinutes ?? ""} aria-label={`Min minutes ${task.title}`} />
+                            </label>
+                            <label className="fieldLabel">
+                              Max (min)
+                              <input name="maxMinutes" type="number" min="1" max="720" defaultValue={task.maxMinutes ?? ""} aria-label={`Max minutes ${task.title}`} />
+                            </label>
+                          </div>
+                          <div className="compactFields">
+                            <label className="fieldLabel">
+                              Repeats
+                              <select name="repeatType" defaultValue={task.repeatPolicy?.type ?? "none"} aria-label={`Repeats ${task.title}`}>
+                                {["none", "daily", "weekly"].map((value) => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="fieldLabel">
+                              Weekly days (0-6)
+                              <input
+                                name="repeatDays"
+                                defaultValue={task.repeatPolicy?.type === "weekly" ? (task.repeatPolicy.days ?? []).join(", ") : ""}
+                                placeholder="1, 3, 5"
+                                aria-label={`Repeat days ${task.title}`}
+                              />
+                            </label>
+                          </div>
+                          <input name="tags" defaultValue={(task.tags ?? []).join(", ")} placeholder="tags, comma, separated" aria-label={`Tags ${task.title}`} />
+                          <label className="fieldLabel">
+                            Parent task (subtask of)
+                            <select name="parentTaskId" defaultValue={task.parentTaskId ?? ""} aria-label={`Parent task ${task.title}`}>
+                              <option value="">No parent</option>
+                              {state.tasks
+                                .filter(
+                                  (candidate) =>
+                                    candidate.id !== task.id &&
+                                    candidate.status !== "archived" &&
+                                    !isDescendantOfClient(state, candidate.id, task.id)
+                                )
+                                .map((candidate) => (
+                                  <option value={candidate.id} key={candidate.id}>{candidate.title}</option>
+                                ))}
+                            </select>
+                          </label>
+                        </details>
+                        <textarea name="definitionOfDone" defaultValue={task.definitionOfDone ?? ""} aria-label={`Definition of done ${task.title}`} />
+                        <textarea name="notes" defaultValue={task.notes ?? ""} aria-label={`Notes ${task.title}`} />
+                        <div className="formActions">
+                          <button type="submit">
+                            <Save size={15} />
+                            Save
+                          </button>
+                          <button type="button" onClick={() => post("/api/structure", { entity: "task", action: "archive", id: task.id })}>
+                            <Archive size={15} />
+                            Archive
+                          </button>
+                        </div>
+                      </form>
+                    </details>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+      {view === "Planning preferences" && (
+        <div className="panelGrid">
+          <article>
+            <h2>Capacity</h2>
+            <p>{plan.summary}</p>
+            <span>
+              {plan.loadLevel} - committed {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
+            </span>
+            <form className="inlineForm" onSubmit={updateCapacity}>
+              <label>
+                Focus capacity
+                <input name="availableMinutes" type="number" min="90" max="960" step="15" defaultValue={state.availableMinutes} aria-label="Focus capacity minutes" />
+              </label>
+              <button aria-label="Save focus capacity">
+                <Save size={14} />
+              </button>
+            </form>
+          </article>
+          <article>
+            <h2>Time Model</h2>
+            <p>{schedulingSummary(state)}</p>
+            <span>{state.currentDate} - {state.currentTime}</span>
+          </article>
+          <article>
+            <h2>Backlog</h2>
+            <p>{backlogSummary.text}</p>
+            <span>
+              {backlogSummary.thisWeek} this week - {backlogSummary.nextWeek} next week - {backlogSummary.someday} someday
+            </span>
+          </article>
+          <article>
+            <h2>Automation</h2>
+            <p>Run a conservative tidy-up only when you ask for it.</p>
+            <button className="tidyButton" onClick={runOrganizer} disabled={organizerRunning} aria-label="Run a tidy-up maintenance pass">
+              {organizerRunning ? "Tidying..." : "Run tidy-up"}
+            </button>
+          </article>
+        </div>
+      )}
+      {view === "AI activity" && (
+        <div className="panelList">
+          {state.captureSessions.length === 0 && <p className="emptyPanel">No AI activity yet.</p>}
+          {state.captureSessions.map((session) => (
+            <article key={session.id}>
+              <div>
+                <h2>{session.summary}</h2>
+                <p>{session.questions[0]?.question ?? session.messages[0]?.content ?? "No open questions."}</p>
+                {session.revisionEvents.length > 0 && (
+                  <small>
+                    Last revision: {session.revisionEvents[session.revisionEvents.length - 1].changes.join(", ") || session.revisionEvents[session.revisionEvents.length - 1].summary}
+                  </small>
+                )}
+              </div>
+              <span>
+                {session.status} - {session.actionIds.length} action{session.actionIds.length === 1 ? "" : "s"} - {session.appliedEntityIds.length} applied -{" "}
+                {session.revisionEvents.length} revision{session.revisionEvents.length === 1 ? "" : "s"}
+              </span>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function PlanItemMeta({ item }: { item: PlanItem }) {
+  return (
+    <div className="metaRow">
+      <span>{item.estimatedMinutes}m - {labelForSection(item.section)}</span>
+      {item.schedulingMode && item.schedulingMode !== "exclusive" && (
+        <span className="modeBadge" title={schedulingLabel(item)}>
+          <Layers3 size={13} />
+          {item.schedulingMode}
+        </span>
+      )}
+      {item.attentionLoad && item.attentionLoad !== "full" && <span className="loadPill">{item.attentionLoad}</span>}
+    </div>
+  );
+}
+
+function labelForSection(section: PlanItem["section"]): string {
+  return {
+    routines: "routine",
+    main_blocks: "main block",
+    quick_tasks: "quick task",
+    soft_invitations: "soft invitation",
+    later: "later"
+  }[section];
+}
+
+function schedulingLabel(item: PlanItem): string {
+  const blocking = item.blockingMinutes ?? item.estimatedMinutes;
+  const clock = item.clockMinutes ?? item.estimatedMinutes;
+  return `${item.schedulingMode} - ${item.attentionLoad ?? "full"} attention - ${blocking}/${clock}m blocking`;
+}
+
+function schedulingSummary(state: AppState): string {
+  const counts = state.tasks.reduce<Record<string, number>>((acc, task) => {
+    const mode = task.scheduling?.mode ?? "exclusive";
+    acc[mode] = (acc[mode] ?? 0) + 1;
+    return acc;
+  }, {});
+  return `${counts.background ?? 0} background, ${counts.concurrent ?? 0} concurrent, ${counts.phased ?? 0} phased tasks tracked. Passive work can overlap; full-focus work still blocks the day.`;
+}
