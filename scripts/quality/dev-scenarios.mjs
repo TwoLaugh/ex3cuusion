@@ -22,7 +22,7 @@ export const devScenarios = [
     time: "08:30",
     input: "for the Q3 launch: draft the announcement, line up the email sequence, and brief the design team",
     rubric:
-      "Several tasks that clearly belong to one piece of work (a launch). GOOD: group them under a single project/work-block — a create_project (or an existing project) — with the individual tasks attached to that project (their projectId set), not unrelated flat tasks. Acceptable to also schedule a block. BAD: flat tasks with no shared project, or merging everything into one task.",
+      "Several tasks that clearly belong to one piece of work (a launch). GOOD: group them under a single folder/work-block — a create_folder (or an existing folder) — with the individual tasks attached to that folder (their folderId set, or pendingFolderName naming the same-batch folder), not unrelated flat tasks. Acceptable to also schedule a block. BAD: flat tasks with no shared folder, or merging everything into one task.",
     minPassRate: 0.6
   },
   {

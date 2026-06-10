@@ -20,7 +20,15 @@ import { heldoutScenarios } from "./quality/heldout-scenarios.mjs";
 
 const heldout = process.argv.includes("--heldout");
 const jsonReport = process.argv.includes("--json");
-const scenarios = heldout ? heldoutScenarios : devScenarios;
+// --only <id>[,<id>...] re-runs specific scenarios without burning a whole live suite.
+const onlyIndex = process.argv.indexOf("--only");
+const onlyIds = onlyIndex >= 0 ? new Set((process.argv[onlyIndex + 1] ?? "").split(",").filter(Boolean)) : null;
+const allScenarios = heldout ? heldoutScenarios : devScenarios;
+const scenarios = onlyIds ? allScenarios.filter((scenario) => onlyIds.has(scenario.id)) : allScenarios;
+if (onlyIds && scenarios.length === 0) {
+  console.error(`--only matched no scenarios. Known ids: ${allScenarios.map((s) => s.id).join(", ")}`);
+  process.exit(1);
+}
 const port = Number(process.env.QUALITY_PORT ?? 3023);
 const baseUrl = `http://127.0.0.1:${port}`;
 const isWindows = process.platform === "win32";
@@ -52,8 +60,10 @@ const JUDGE_INSTRUCTIONS =
   "action. Give a one-sentence reason and a severity (none when pass; minor or major when fail).";
 
 // Quality servers must be hermetic: never read/write the durable .data/ store.
-const serverEnv = { ...process.env, OPENAI_MODEL: model, EX3CUUSION_STATE_REPOSITORY: "memory" };
-delete serverEnv.EX3CUUSION_AI_MODE;
+// EX3CUUSION_AI_MODE is SET (not deleted): a deleted env var gets silently back-filled from
+// .env.local by Next.js, which once flipped a whole quality run to the fixture interpreter
+// (every scenario "took no action" -> 0/12). Any value other than "fixture" means live.
+const serverEnv = { ...process.env, OPENAI_MODEL: model, EX3CUUSION_STATE_REPOSITORY: "memory", EX3CUUSION_AI_MODE: "live" };
 const runner = isWindows ? "cmd.exe" : "npx";
 const serverArgs = isWindows
   ? ["/c", "npx", "next", "dev", "--hostname", "127.0.0.1", "--port", String(port)]
@@ -132,7 +142,12 @@ function observe(debug) {
       dateIntent: typeof p.dateIntent === "string" ? p.dateIntent : p.dateIntent?.kind,
       priority: p.priority,
       effortMinutes: p.effortMinutes,
-      projectId: p.projectId
+      // T088: folders replaced projects; folderId is the grouping link on task payloads
+      // (set at apply time for same-batch grouping), pendingFolderName is the model's
+      // intended folder for a task whose folder is created in the same batch.
+      folderId: p.folderId,
+      parentFolderId: p.parentFolderId,
+      pendingFolderName: a.pendingFolderName
     });
   });
   const questions = (debug.captureSessions?.[0]?.questions ?? []).map((q) =>

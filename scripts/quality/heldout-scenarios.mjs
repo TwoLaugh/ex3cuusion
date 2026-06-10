@@ -53,7 +53,7 @@ export const heldoutScenarios = [
     time: "08:30",
     input: "I'm organising a small dinner party — plan the menu, send the invites, and tidy the flat",
     rubric:
-      "Several tasks belonging to one event/piece of work. GOOD: group them under a single project/work-block (a create_project or existing project) with the tasks attached. BAD: unrelated flat tasks with no shared project, or one merged task.",
+      "Several tasks belonging to one event/piece of work. GOOD: group them under a single folder/work-block (a create_folder or existing folder) with the tasks attached (folderId set, or pendingFolderName naming the same-batch folder). BAD: unrelated flat tasks with no shared folder, or one merged task.",
     minPassRate: 0.6
   },
   {
