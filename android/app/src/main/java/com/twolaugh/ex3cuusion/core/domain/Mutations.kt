@@ -2,6 +2,8 @@ package com.twolaugh.ex3cuusion.core.domain
 
 import com.twolaugh.ex3cuusion.core.ai.CaptureRevision
 import com.twolaugh.ex3cuusion.core.ai.RevisionDateIntent
+import com.twolaugh.ex3cuusion.core.store.normalizeState
+import com.twolaugh.ex3cuusion.core.store.stateJson
 import com.twolaugh.ex3cuusion.core.model.ActiveTimer
 import com.twolaugh.ex3cuusion.core.model.AppState
 import com.twolaugh.ex3cuusion.core.model.Folder
@@ -392,6 +394,120 @@ class DomainEngine(
             next = "task_" + index.toString().padStart(4, '0')
         } while (next in ids)
         return next
+    }
+
+    // state.ts uniqueFolderId: folder_0001-style, scanning existing ids for the next free number.
+    private fun uniqueFolderId(): String {
+        val ids = state.folders.mapTo(HashSet()) { it.id }
+        val numbered = Regex("""^folder_(\d+)$""")
+        var index = ids.mapNotNull { numbered.find(it)?.groupValues?.get(1)?.toIntOrNull() }.maxOrNull() ?: 0
+        var next: String
+        do {
+            index += 1
+            next = "folder_" + index.toString().padStart(4, '0')
+        } while (next in ids)
+        return next
+    }
+
+    // --- T106: folder structure mutations (applyStructureMutation's folder branch, state.ts) -------
+
+    // T088: true if folder `nodeId` is within the subtree rooted at `ancestorId` (walks up the
+    // parentFolderId chain), used to reject folder-parenting choices that would create a cycle.
+    private fun isFolderDescendantOf(nodeId: String, ancestorId: String): Boolean {
+        var current = state.folders.find { it.id == nodeId }
+        val seen = mutableSetOf<String>()
+        while (current?.parentFolderId != null && current.id !in seen) {
+            seen.add(current.id)
+            if (current.parentFolderId == ancestorId) return true
+            current = state.folders.find { it.id == current!!.parentFolderId }
+        }
+        return false
+    }
+
+    // resolveFolderParent (state.ts): the parent id, or null to clear/reject. Rejects self-
+    // parenting and any choice that would create a cycle (parenting a folder under one of its
+    // own descendants).
+    private fun resolveFolderParent(requested: String?, selfId: String? = null): String? {
+        if (requested.isNullOrEmpty()) return null
+        if (requested == selfId) return null
+        val parent = state.folders.find { it.id == requested } ?: return null
+        if (selfId != null && isFolderDescendantOf(requested, selfId)) return null
+        return parent.id
+    }
+
+    fun createFolder(patch: FolderPatch): String {
+        val cleanedName = patch.name?.trim()?.takeIf { it.isNotEmpty() }
+        recordChange("manual_edit", "Created folder${cleanedName?.let { " \"${truncateTitle(it)}\"" } ?: ""}")
+        val folder = Folder(
+            id = uniqueFolderId(),
+            name = cleanedName ?: "New folder",
+            parentFolderId = resolveFolderParent(patch.parentFolderId),
+            weight = patch.weight?.let { min(10, max(1, it)) },
+            canBlock = patch.canBlock,
+            defaultBlockMinutes = patch.defaultBlockMinutes?.let { min(480, max(5, it)) },
+            contextNote = patch.contextNote?.trim()?.takeIf { it.isNotEmpty() },
+            status = patch.status ?: FolderStatus.Active
+        )
+        state = state.copy(folders = state.folders + folder)
+        persist()
+        return folder.id
+    }
+
+    fun updateFolder(folderId: String, patch: FolderPatch) {
+        val folder = state.folders.find { it.id == folderId } ?: return
+        recordChange("manual_edit", "Updated folder \"${truncateTitle(folder.name)}\"")
+        state = state.copy(
+            folders = state.folders.map { current ->
+                if (current.id != folderId) current
+                else {
+                    var next = current
+                    patch.name?.trim()?.takeIf { it.isNotEmpty() }?.let { next = next.copy(name = it) }
+                    // "" clears (folder becomes top level); a cycle-creating choice also clears,
+                    // exactly like the web's resolveFolderParent.
+                    if (patch.parentFolderId != null) {
+                        next = next.copy(parentFolderId = resolveFolderParent(patch.parentFolderId, current.id))
+                    }
+                    patch.weight?.let { next = next.copy(weight = clamp(it, 1, 10, current.weight ?: 5)) }
+                    patch.canBlock?.let { next = next.copy(canBlock = it) }
+                    patch.defaultBlockMinutes?.let {
+                        next = next.copy(defaultBlockMinutes = clamp(it, 5, 480, current.defaultBlockMinutes ?: 30))
+                    }
+                    // optionalText semantics: "" clears, non-empty sets.
+                    patch.contextNote?.let { next = next.copy(contextNote = it.trim().takeIf { t -> t.isNotEmpty() }) }
+                    patch.status?.let { next = next.copy(status = it) }
+                    next
+                }
+            }
+        )
+        persist()
+    }
+
+    fun archiveFolder(folderId: String) {
+        val folder = state.folders.find { it.id == folderId } ?: return
+        recordChange("manual_edit", "Archived folder \"${truncateTitle(folder.name)}\"")
+        state = state.copy(
+            folders = state.folders.map { if (it.id == folderId) it.copy(status = FolderStatus.Archived) else it }
+        )
+        persist()
+    }
+
+    // --- T107: data bridge import --------------------------------------------------------------------
+
+    // Parse + normalize a shared state.json and REPLACE the live state with it, as ONE undoable
+    // change ("Imported data" — the snapshot is recorded before the swap, so undo restores the
+    // pre-import state exactly). The phone's clock wins: the imported document's currentDate/
+    // currentTime (the web workbench's clock) are discarded so today's list stays today's.
+    // Garbage/wrong-shape JSON fails BEFORE anything is recorded — a rejected import is a no-op.
+    fun importState(json: String): Result<ImportSummary> {
+        val parsed = try {
+            normalizeState(stateJson.decodeFromString(AppState.serializer(), json))
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        recordChange("import", "Imported data")
+        state = parsed.copy(currentDate = state.currentDate, currentTime = state.currentTime)
+        persist()
+        return Result.success(ImportSummary(taskCount = parsed.tasks.size, folderCount = parsed.folders.size))
     }
 
     // --- T105: AI enrichment apply path --------------------------------------------------------------
@@ -785,3 +901,17 @@ data class TaskPatch(
     val strictness: Strictness? = null,
     val energy: Energy? = null
 )
+
+// T106: patch shape for folder create/update (mirrors the web folder structure-mutation patch).
+data class FolderPatch(
+    val name: String? = null,
+    val parentFolderId: String? = null,
+    val weight: Int? = null,
+    val canBlock: Boolean? = null,
+    val defaultBlockMinutes: Int? = null,
+    val contextNote: String? = null,
+    val status: FolderStatus? = null
+)
+
+// T107: what an import would apply, surfaced for the confirm dialog.
+data class ImportSummary(val taskCount: Int, val folderCount: Int)

@@ -1,9 +1,11 @@
 package com.twolaugh.ex3cuusion.ui.today
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,10 +26,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,11 +54,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
@@ -71,10 +80,12 @@ import java.time.ZoneOffset
 
 // --- THE LIST --------------------------------------------------------------------------------------
 
-// Rows live in the screen's single scrollable column (not a LazyColumn), so reorder is a
-// hand-rolled long-press drag: the pressed row elevates and translates with the finger, swapping
-// places in a local order list whenever it crosses 60% of a neighbour's height; the engine's
-// reorderDayList commits once, on drop.
+internal val hairline = Color(0x14ECE7DC)
+
+// Rows live in the screen's single scrollable column. Reorder is a dedicated GRIP HANDLE that
+// drags immediately on touch (no long-press): a handle-scoped gesture can't lose the race against
+// the scroll container or the swipe-to-dismiss the way the old whole-row long-press drag did on
+// real hardware (user feedback, 2026-06-11). Long-press now belongs to hold-to-complete.
 @Composable
 internal fun DayListSection(
     entries: List<DayListEntryView>,
@@ -99,6 +110,43 @@ internal fun DayListSection(
     val byId = entries.associateBy { it.taskId }
     val displayOrder = dragOrder?.filter { it in byId } ?: taskIds
 
+    fun moveDraggedRow(amountY: Float) {
+        val id = dragId ?: return
+        dragOffset += amountY
+        val order = dragOrder ?: return
+        val index = order.indexOf(id)
+        if (index < 0) return
+        if (dragOffset > 0f && index < order.lastIndex) {
+            val belowId = order[index + 1]
+            val belowHeight = rowHeights[belowId] ?: 0
+            if (belowHeight > 0 && dragOffset > belowHeight * 0.6f) {
+                dragOrder = order.toMutableList().apply {
+                    removeAt(index)
+                    add(index + 1, id)
+                }
+                dragOffset -= belowHeight
+            }
+        } else if (dragOffset < 0f && index > 0) {
+            val aboveId = order[index - 1]
+            val aboveHeight = rowHeights[aboveId] ?: 0
+            if (aboveHeight > 0 && -dragOffset > aboveHeight * 0.6f) {
+                dragOrder = order.toMutableList().apply {
+                    removeAt(index)
+                    add(index - 1, id)
+                }
+                dragOffset += aboveHeight
+            }
+        }
+    }
+
+    fun endDrag(cancelled: Boolean) {
+        val finalOrder = dragOrder
+        dragId = null
+        dragOffset = 0f
+        dragOrder = null
+        if (!cancelled && finalOrder != null && finalOrder != taskIds) onReorder(finalOrder)
+    }
+
     Column(Modifier.fillMaxWidth()) {
         if (entries.isEmpty()) {
             Text(
@@ -119,69 +167,30 @@ internal fun DayListSection(
                         .onSizeChanged { rowHeights[id] = it.height }
                         .zIndex(if (isDragging) 1f else 0f)
                         .graphicsLayer { translationY = if (isDragging) dragOffset else 0f }
-                        .pointerInput(taskIds) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = {
-                                    dragId = id
-                                    dragOffset = 0f
-                                    dragOrder = taskIds
-                                },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    dragOffset += amount.y
-                                    val order = dragOrder ?: return@detectDragGesturesAfterLongPress
-                                    val index = order.indexOf(id)
-                                    if (index < 0) return@detectDragGesturesAfterLongPress
-                                    if (dragOffset > 0f && index < order.lastIndex) {
-                                        val belowId = order[index + 1]
-                                        val belowHeight = rowHeights[belowId] ?: 0
-                                        if (belowHeight > 0 && dragOffset > belowHeight * 0.6f) {
-                                            dragOrder = order.toMutableList().apply {
-                                                removeAt(index)
-                                                add(index + 1, id)
-                                            }
-                                            dragOffset -= belowHeight
-                                        }
-                                    } else if (dragOffset < 0f && index > 0) {
-                                        val aboveId = order[index - 1]
-                                        val aboveHeight = rowHeights[aboveId] ?: 0
-                                        if (aboveHeight > 0 && -dragOffset > aboveHeight * 0.6f) {
-                                            dragOrder = order.toMutableList().apply {
-                                                removeAt(index)
-                                                add(index - 1, id)
-                                            }
-                                            dragOffset += aboveHeight
-                                        }
-                                    }
-                                },
-                                onDragEnd = {
-                                    val finalOrder = dragOrder
-                                    dragId = null
-                                    dragOffset = 0f
-                                    dragOrder = null
-                                    if (finalOrder != null && finalOrder != taskIds) onReorder(finalOrder)
-                                },
-                                onDragCancel = {
-                                    dragId = null
-                                    dragOffset = 0f
-                                    dragOrder = null
-                                }
-                            )
-                        }
                 ) {
                     DismissibleListRow(
                         entry = entry,
                         isNow = entry.taskId == firstUntickedId,
                         isDragging = isDragging,
+                        anyDragging = dragId != null,
                         isEnriching = entry.taskId in enrichingTaskIds,
                         showPlay = entry.taskId == firstUntickedId && !timerRunning,
                         onTick = { onTick(entry.taskId) },
                         onRemove = { onRemove(entry.taskId) },
                         onStartTimer = { onStartTimer(entry.taskId) },
                         onSomeday = { onSomeday(entry.taskId) },
-                        onLetGo = { onLetGo(entry.taskId) }
+                        onLetGo = { onLetGo(entry.taskId) },
+                        onDragStart = {
+                            dragId = id
+                            dragOffset = 0f
+                            dragOrder = taskIds
+                        },
+                        onDragBy = { moveDraggedRow(it) },
+                        onDragEnd = { endDrag(cancelled = false) },
+                        onDragCancel = { endDrag(cancelled = true) }
                     )
                 }
+                HorizontalDivider(thickness = 0.5.dp, color = hairline)
             }
         }
 
@@ -189,20 +198,25 @@ internal fun DayListSection(
     }
 }
 
-// Swipe-to-dismiss (end-to-start) = remove to tray. The chosen removal affordance — there is no
-// trailing remove icon.
+// Swipe-to-dismiss (end-to-start) = remove to tray; disabled while a reorder drag is live so the
+// two gestures can never fight.
 @Composable
 private fun DismissibleListRow(
     entry: DayListEntryView,
     isNow: Boolean,
     isDragging: Boolean,
+    anyDragging: Boolean,
     isEnriching: Boolean,
     showPlay: Boolean,
     onTick: () -> Unit,
     onRemove: () -> Unit,
     onStartTimer: () -> Unit,
     onSomeday: () -> Unit,
-    onLetGo: () -> Unit
+    onLetGo: () -> Unit,
+    onDragStart: () -> Unit,
+    onDragBy: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
@@ -217,6 +231,7 @@ private fun DismissibleListRow(
     SwipeToDismissBox(
         state = dismissState,
         enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = !anyDragging,
         backgroundContent = {
             Box(
                 Modifier
@@ -241,7 +256,11 @@ private fun DismissibleListRow(
             onTick = onTick,
             onStartTimer = onStartTimer,
             onSomeday = onSomeday,
-            onLetGo = onLetGo
+            onLetGo = onLetGo,
+            onDragStart = onDragStart,
+            onDragBy = onDragBy,
+            onDragEnd = onDragEnd,
+            onDragCancel = onDragCancel
         )
     }
 }
@@ -256,13 +275,28 @@ private fun ListRow(
     onTick: () -> Unit,
     onStartTimer: () -> Unit,
     onSomeday: () -> Unit,
-    onLetGo: () -> Unit
+    onLetGo: () -> Unit,
+    onDragStart: () -> Unit,
+    onDragBy: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit
 ) {
     val ticked = entry.completedToday
+    val hold = rememberHoldToComplete()
+
+    // Completion ceremony: a brief settle pulse on the checkbox when the tick lands.
+    val settleScale = remember { Animatable(1f) }
+    LaunchedEffect(ticked) {
+        if (ticked) {
+            settleScale.snapTo(1.25f)
+            settleScale.animateTo(1f, tween(260))
+        }
+    }
+
     Surface(
         color = if (isDragging) Ex3Colors.raised else Ex3Colors.bg,
         shadowElevation = if (isDragging) 6.dp else 0.dp,
-        shape = RoundedCornerShape(if (isDragging) 10.dp else 0.dp),
+        shape = RoundedCornerShape(if (isDragging) 8.dp else 0.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -270,78 +304,94 @@ private fun ListRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 52.dp)
-                .padding(vertical = 2.dp)
         ) {
-            // Round checkbox; the top unticked row gets the slim now-emphasis (accent border).
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onTick),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .clip(CircleShape)
-                        .then(
-                            if (ticked) Modifier.background(Ex3Colors.inkMuted)
-                            else Modifier.border(
-                                width = if (isNow) 1.5.dp else 1.dp,
-                                color = if (isNow) Ex3Colors.accent else Ex3Colors.inkFaint,
-                                shape = CircleShape
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (ticked) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = null,
-                            tint = Ex3Colors.bg,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-            }
-
-            Column(
+            // Hold zone = checkbox + title: press and hold anywhere here to complete (or untick).
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .weight(1f)
-                    .padding(vertical = 10.dp)
+                    .holdToComplete(hold, durationMs = 600, onComplete = onTick)
             ) {
-                Text(
-                    text = entry.title,
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontWeight = if (isNow) FontWeight.Medium else FontWeight.Normal,
-                        textDecoration = if (ticked) TextDecoration.LineThrough else TextDecoration.None
-                    ),
-                    color = if (ticked) Ex3Colors.inkFaint else Ex3Colors.ink,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                // T095 carry honesty: at 3+ carries the row offers someday / let go inline.
-                if (entry.carryNudge && !ticked) {
-                    Spacer(Modifier.height(2.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text(
-                            text = "someday",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Ex3Colors.inkMuted,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable(onClick = onSomeday)
-                                .padding(vertical = 6.dp, horizontal = 2.dp)
-                        )
-                        Text(
-                            text = "let go",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Ex3Colors.inkMuted,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable(onClick = onLetGo)
-                                .padding(vertical = 6.dp, horizontal = 2.dp)
-                        )
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    val progress = hold.progress.value
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .scale(settleScale.value)
+                            .clip(CircleShape)
+                            .then(
+                                if (ticked) Modifier.background(Ex3Colors.inkMuted)
+                                else Modifier
+                                    .border(
+                                        width = if (isNow) 1.5.dp else 1.dp,
+                                        color = if (isNow) Ex3Colors.accent else Ex3Colors.inkFaint,
+                                        shape = CircleShape
+                                    )
+                                    .background(Ex3Colors.accent.copy(alpha = 0.25f * progress))
+                            )
+                            .drawBehind {
+                                // The hold ring: fills clockwise as the press is held.
+                                if (!ticked && progress > 0f) {
+                                    drawArc(
+                                        color = Ex3Colors.accent,
+                                        startAngle = -90f,
+                                        sweepAngle = 360f * progress,
+                                        useCenter = false,
+                                        style = Stroke(width = 2.dp.toPx())
+                                    )
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (ticked) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = Ex3Colors.bg,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = 10.dp)
+                ) {
+                    Text(
+                        text = entry.title,
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontWeight = if (isNow) FontWeight.Medium else FontWeight.Normal,
+                            textDecoration = if (ticked) TextDecoration.LineThrough else TextDecoration.None
+                        ),
+                        color = if (ticked) Ex3Colors.inkFaint else Ex3Colors.ink,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    // T095 carry honesty: at 3+ carries the row offers someday / let go inline.
+                    if (entry.carryNudge && !ticked) {
+                        Spacer(Modifier.height(2.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Text(
+                                text = "someday",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Ex3Colors.inkMuted,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(onClick = onSomeday)
+                                    .padding(vertical = 6.dp, horizontal = 2.dp)
+                            )
+                            Text(
+                                text = "let go",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Ex3Colors.inkMuted,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(onClick = onLetGo)
+                                    .padding(vertical = 6.dp, horizontal = 2.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -362,8 +412,33 @@ private fun ListRow(
                 style = MaterialTheme.typography.labelMedium,
                 color = if (entry.missedPin && !isEnriching) Ex3Colors.missed else Ex3Colors.inkFaint,
                 maxLines = 1,
-                modifier = Modifier.padding(start = 8.dp, end = 4.dp)
+                modifier = Modifier.padding(start = 8.dp)
             )
+
+            // The reorder grip: drag starts immediately on touch, scoped to this handle only.
+            Box(
+                modifier = Modifier
+                    .size(width = 40.dp, height = 48.dp)
+                    .pointerInput(entry.taskId) {
+                        detectDragGestures(
+                            onDragStart = { onDragStart() },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                onDragBy(amount.y)
+                            },
+                            onDragEnd = { onDragEnd() },
+                            onDragCancel = { onDragCancel() }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.DragIndicator,
+                    contentDescription = "Reorder",
+                    tint = Ex3Colors.inkFaint.copy(alpha = 0.55f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }
@@ -384,6 +459,7 @@ private fun listRowMeta(entry: DayListEntryView): String {
 @Composable
 private fun InlineAddRow(onCapture: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -403,8 +479,12 @@ private fun InlineAddRow(onCapture: (String) -> Unit) {
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = {
                 val text = draft.trim()
-                draft = "" // clears immediately; capture is local-only (AI enrichment = T105)
-                if (text.isNotEmpty()) onCapture(text)
+                draft = "" // clears immediately; enrichment runs async (T105)
+                if (text.isNotEmpty()) {
+                    onCapture(text) // keep focus: rapid batch entry
+                } else {
+                    focusManager.clearFocus() // empty done = put the cursor away (user feedback)
+                }
             }),
             decorationBox = { innerTextField ->
                 Box {

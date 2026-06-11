@@ -5,6 +5,13 @@ package com.twolaugh.ex3cuusion.ui.today
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -131,10 +138,14 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                 )
             }
 
+            val focusManager = LocalFocusManager.current
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
+                    // Taps on empty space release the inline-add cursor (user feedback: the
+                    // typing marker used to stick around after an abandoned add).
+                    .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
                     .padding(horizontal = 20.dp)
             ) {
                 Spacer(Modifier.height(16.dp))
@@ -174,10 +185,14 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
 
                 if (view.habits.isNotEmpty()) {
                     Spacer(Modifier.height(20.dp))
+                    SectionLabel("HABITS")
+                    Spacer(Modifier.height(8.dp))
                     HabitStrip(habits = view.habits, onToggle = viewModel::tick)
                 }
 
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(24.dp))
+                SectionLabel("LIST")
+                Spacer(Modifier.height(2.dp))
                 DayListSection(
                     entries = view.entries,
                     enrichingTaskIds = ui.enrichingTaskIds,
@@ -377,19 +392,49 @@ private fun HabitStrip(habits: List<DayListHabitView>, onToggle: (String) -> Uni
     }
 }
 
+// A short letterspaced section label — the at-a-glance separator between zones of the screen.
+@Composable
+internal fun SectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = androidx.compose.ui.unit.TextUnit(1.8f, androidx.compose.ui.unit.TextUnitType.Sp)),
+        color = Ex3Colors.inkFaint
+    )
+}
+
 @Composable
 private fun HabitChip(habit: DayListHabitView, onToggle: () -> Unit) {
     val ticked = habit.completedToday
+    // Hold-to-complete with a left-to-right fill sweep; a quick settle pulse when the tick lands.
+    val hold = rememberHoldToComplete()
+    val settle = remember { Animatable(1f) }
+    LaunchedEffect(ticked) {
+        if (ticked) {
+            settle.snapTo(1.08f)
+            settle.animateTo(1f, tween(240))
+        }
+    }
     Surface(
-        onClick = onToggle,
-        shape = RoundedCornerShape(999.dp),
+        shape = RoundedCornerShape(8.dp),
         color = if (ticked) Ex3Colors.inkMuted else Color.Transparent,
-        border = if (ticked) null else androidx.compose.foundation.BorderStroke(1.dp, Ex3Colors.inkFaint)
+        border = if (ticked) null else androidx.compose.foundation.BorderStroke(1.dp, Ex3Colors.inkFaint),
+        modifier = Modifier
+            .scale(settle.value)
+            .holdToComplete(hold, durationMs = 450, onComplete = onToggle)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp),
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+            modifier = Modifier
+                .drawBehind {
+                    if (!ticked && hold.progress.value > 0f) {
+                        drawRect(
+                            color = Ex3Colors.accent.copy(alpha = 0.22f),
+                            size = size.copy(width = size.width * hold.progress.value)
+                        )
+                    }
+                }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             if (ticked) {
                 Icon(
