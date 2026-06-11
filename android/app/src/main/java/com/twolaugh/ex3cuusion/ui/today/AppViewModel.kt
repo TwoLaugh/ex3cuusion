@@ -3,21 +3,33 @@ package com.twolaugh.ex3cuusion.ui.today
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.twolaugh.ex3cuusion.core.ai.CaptureEnricher
+import com.twolaugh.ex3cuusion.core.ai.EnrichmentContext
+import com.twolaugh.ex3cuusion.core.ai.EnrichmentFailure
+import com.twolaugh.ex3cuusion.core.ai.EnrichmentResult
 import com.twolaugh.ex3cuusion.core.domain.CloseoutView
 import com.twolaugh.ex3cuusion.core.domain.DayListView
 import com.twolaugh.ex3cuusion.core.domain.DomainEngine
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
+import com.twolaugh.ex3cuusion.core.domain.folderPath
 import com.twolaugh.ex3cuusion.core.model.ActiveTimer
 import com.twolaugh.ex3cuusion.core.model.AppState
 import com.twolaugh.ex3cuusion.core.model.DayListSource
+import com.twolaugh.ex3cuusion.core.model.FolderStatus
 import com.twolaugh.ex3cuusion.core.store.StateStore
 import com.twolaugh.ex3cuusion.core.store.UndoStack
 import com.twolaugh.ex3cuusion.core.store.normalizeState
+import com.twolaugh.ex3cuusion.ui.settings.SettingsStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -31,7 +43,9 @@ data class UiState(
     val canUndo: Boolean = false,
     val lastChangeSummary: String? = null,
     val closeoutVisible: Boolean = false,
-    val closeout: CloseoutView? = null
+    val closeout: CloseoutView? = null,
+    // T105: captures with an AI enrichment call in flight (the row shows a "filing..." glimmer).
+    val enrichingTaskIds: Set<String> = emptySet()
 )
 
 // T104 app wiring: owns the DomainEngine + StateStore + UndoStack (no DI framework — the app has
@@ -43,12 +57,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val undoStack = UndoStack(File(application.filesDir, "history.json"))
     private val engine: DomainEngine
 
+    // T105: AI settings (key/model/switch) + the enricher factory (injectable shape kept for the
+    // future; production always builds the real HTTPS enricher).
+    val settings = SettingsStore(application)
+
     // Close-out presentation state, in-memory only (v1: forgotten on process death, per ticket).
     private val manuallyClosedDates = mutableSetOf<String>()
     private val dismissedCloseoutDates = mutableSetOf<String>()
 
+    // T105: captures whose enrichment call is in flight.
+    private val enrichingTaskIds = mutableSetOf<String>()
+
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    // One-shot snackbar messages (enrichment results land asynchronously, after the capture).
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     init {
         // First run: an empty-but-valid state — NO demo tasks, just the "Personal" pillar that
@@ -102,7 +127,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             canUndo = undoStack.size > 0,
             lastChangeSummary = engine.listChangeHistory().firstOrNull()?.summary,
             closeoutVisible = closeoutVisible,
-            closeout = if (closeoutVisible) engine.closeoutView(date) else null
+            closeout = if (closeoutVisible) engine.closeoutView(date) else null,
+            enrichingTaskIds = enrichingTaskIds.toSet()
         )
     }
 
@@ -129,8 +155,69 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun instantCapture(title: String) {
-        engine.instantCaptureToDayList(title)
+        val taskId = engine.instantCaptureToDayList(title)
         refresh()
+        if (taskId != null) enrichCapture(taskId)
+    }
+
+    // T105: best-effort async enrichment of a fresh capture. The network call runs on IO; the
+    // engine mutation and UI refresh come back to Main (the engine is not thread-safe). Failures
+    // are silent except a bad key — the one thing the user can actually fix.
+    private fun enrichCapture(taskId: String) {
+        if (!settings.enrichmentActive) return
+        val state = engine.state
+        val task = state.tasks.find { it.id == taskId } ?: return
+        val context = EnrichmentContext(
+            currentDate = state.currentDate,
+            currentTime = state.currentTime,
+            folderPaths = state.folders
+                .filter { it.status != FolderStatus.Archived }
+                .mapNotNull { folderPath(state, it.id) },
+            effortMinutes = task.effortMinutes,
+            priority = task.priority,
+            importance = task.importance,
+            urgency = task.urgency,
+            completionBehavior = wireName(task.completionBehavior),
+            completionMode = task.completionMode?.let { wireName(it) }
+        )
+        val enricher = CaptureEnricher(apiKey = settings.apiKey, model = settings.model)
+        enrichingTaskIds.add(taskId)
+        _uiState.value = _uiState.value.copy(enrichingTaskIds = enrichingTaskIds.toSet())
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = try {
+                enricher.enrich(task.title, context)
+            } catch (e: Exception) { // belt and braces: enrichment must never crash capture
+                EnrichmentResult.Failure(EnrichmentFailure.Network, e.message)
+            }
+            withContext(Dispatchers.Main) {
+                enrichingTaskIds.remove(taskId)
+                when (result) {
+                    is EnrichmentResult.Success -> {
+                        val applied = engine.applyEnrichment(taskId, result.revision)
+                        refresh()
+                        if (applied != null) _messages.tryEmit(enrichmentSnackbar(applied.folderName, applied.changes))
+                    }
+                    is EnrichmentResult.Failure -> {
+                        refresh() // clears the "filing..." glimmer
+                        if (result.reason == EnrichmentFailure.Auth) {
+                            _messages.tryEmit("Couldn't reach AI — check your API key in Settings")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The wire literal of a @SerialName-annotated enum value (e.g. ExhaustOnce -> "exhaust_once").
+    private inline fun <reified T : Enum<T>> wireName(value: T): String =
+        kotlinx.serialization.json.Json.encodeToString(
+            kotlinx.serialization.serializer<T>(), value
+        ).trim('"')
+
+    private fun enrichmentSnackbar(folderName: String?, changes: List<String>): String {
+        val summary = changes.filterNot { folderName != null && it.startsWith("moved under") }.take(2).joinToString(" · ")
+        val parts = listOfNotNull(folderName, summary.takeIf { it.isNotEmpty() })
+        return "AI filed: ${parts.joinToString(" · ").ifEmpty { "no changes" }}"
     }
 
     fun resolveStale(taskId: String, resolution: StaleResolution) {

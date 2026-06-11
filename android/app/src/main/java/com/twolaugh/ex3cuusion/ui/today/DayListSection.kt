@@ -78,6 +78,7 @@ import java.time.ZoneOffset
 @Composable
 internal fun DayListSection(
     entries: List<DayListEntryView>,
+    enrichingTaskIds: Set<String> = emptySet(),
     timerRunning: Boolean,
     onTick: (String) -> Unit,
     onRemove: (String) -> Unit,
@@ -172,6 +173,7 @@ internal fun DayListSection(
                         entry = entry,
                         isNow = entry.taskId == firstUntickedId,
                         isDragging = isDragging,
+                        isEnriching = entry.taskId in enrichingTaskIds,
                         showPlay = entry.taskId == firstUntickedId && !timerRunning,
                         onTick = { onTick(entry.taskId) },
                         onRemove = { onRemove(entry.taskId) },
@@ -194,6 +196,7 @@ private fun DismissibleListRow(
     entry: DayListEntryView,
     isNow: Boolean,
     isDragging: Boolean,
+    isEnriching: Boolean,
     showPlay: Boolean,
     onTick: () -> Unit,
     onRemove: () -> Unit,
@@ -233,6 +236,7 @@ private fun DismissibleListRow(
             entry = entry,
             isNow = isNow,
             isDragging = isDragging,
+            isEnriching = isEnriching,
             showPlay = showPlay,
             onTick = onTick,
             onStartTimer = onStartTimer,
@@ -247,6 +251,7 @@ private fun ListRow(
     entry: DayListEntryView,
     isNow: Boolean,
     isDragging: Boolean,
+    isEnriching: Boolean,
     showPlay: Boolean,
     onTick: () -> Unit,
     onStartTimer: () -> Unit,
@@ -353,9 +358,9 @@ private fun ListRow(
             }
 
             Text(
-                text = listRowMeta(entry),
+                text = if (isEnriching) "filing..." else listRowMeta(entry),
                 style = MaterialTheme.typography.labelMedium,
-                color = if (entry.missedPin) Ex3Colors.missed else Ex3Colors.inkFaint,
+                color = if (entry.missedPin && !isEnriching) Ex3Colors.missed else Ex3Colors.inkFaint,
                 maxLines = 1,
                 modifier = Modifier.padding(start = 8.dp, end = 4.dp)
             )

@@ -39,6 +39,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -92,7 +93,7 @@ private val HEADER_DATE_FORMAT = DateTimeFormatter.ofPattern("EEEE d MMMM", Loca
 // --- the screen ------------------------------------------------------------------------------------
 
 @Composable
-fun TodayScreen(viewModel: AppViewModel) {
+fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -100,6 +101,11 @@ fun TodayScreen(viewModel: AppViewModel) {
     LifecycleResumeEffect(Unit) {
         viewModel.syncClock()
         onPauseOrDispose { }
+    }
+
+    // T105: async results (enrichment applied / bad API key) surface as snackbars.
+    LaunchedEffect(viewModel) {
+        viewModel.messages.collect { snackbarHostState.showSnackbar(it) }
     }
 
     Scaffold(
@@ -143,7 +149,8 @@ fun TodayScreen(viewModel: AppViewModel) {
                             scope.launch { snackbarHostState.showSnackbar("Undid: $summary") }
                         }
                     },
-                    onCloseDay = viewModel::closeDay
+                    onCloseDay = viewModel::closeDay,
+                    onOpenSettings = onOpenSettings
                 )
 
                 if (ui.closeoutVisible && ui.closeout != null) {
@@ -173,6 +180,7 @@ fun TodayScreen(viewModel: AppViewModel) {
                 Spacer(Modifier.height(20.dp))
                 DayListSection(
                     entries = view.entries,
+                    enrichingTaskIds = ui.enrichingTaskIds,
                     timerRunning = ui.activeTimer != null,
                     onTick = viewModel::tick,
                     onRemove = viewModel::removeFromList,
@@ -209,7 +217,8 @@ private fun TodayHeader(
     doneCount: Int,
     undoEnabled: Boolean,
     onUndo: () -> Unit,
-    onCloseDay: () -> Unit
+    onCloseDay: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     Row(verticalAlignment = Alignment.Top) {
         Column(Modifier.weight(1f)) {
@@ -247,6 +256,13 @@ private fun TodayHeader(
                     onClick = {
                         menuOpen = false
                         onCloseDay()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Settings", style = MaterialTheme.typography.bodyMedium) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenSettings()
                     }
                 )
             }

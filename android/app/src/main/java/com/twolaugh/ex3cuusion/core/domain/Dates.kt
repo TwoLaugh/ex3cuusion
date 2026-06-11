@@ -20,6 +20,24 @@ fun addDays(dateOnly: String, days: Int): String =
 // TS getUTCDay(): 0 = Sunday .. 6 = Saturday. java.time DayOfWeek is 1 = Monday .. 7 = Sunday.
 fun dayOfWeek(dateOnly: String): Int = LocalDate.parse(dateOnly).dayOfWeek.value % 7
 
+// Monday-start weeks, exactly like the TS startOfWeek/endOfWeek/weekRange/nextWeekRange.
+data class DateRange(val startDate: String, val endDate: String)
+
+fun startOfWeek(dateOnly: String): String {
+    val day = dayOfWeek(dateOnly)
+    val mondayOffset = if (day == 0) -6 else 1 - day
+    return addDays(dateOnly, mondayOffset)
+}
+
+fun endOfWeek(dateOnly: String): String = addDays(startOfWeek(dateOnly), 6)
+
+fun weekRange(dateOnly: String): DateRange = DateRange(startOfWeek(dateOnly), endOfWeek(dateOnly))
+
+fun nextWeekRange(dateOnly: String): DateRange {
+    val startDate = addDays(startOfWeek(dateOnly), 7)
+    return DateRange(startDate, addDays(startDate, 6))
+}
+
 // TS returns Number.POSITIVE_INFINITY for a missing toDate; Int.MAX_VALUE plays the same role
 // for every comparison the brain makes (due boosts, cooldowns, staleness).
 fun daysUntil(fromDate: String, toDate: String?): Int {

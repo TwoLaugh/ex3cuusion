@@ -1,7 +1,11 @@
 package com.twolaugh.ex3cuusion.core.domain
 
+import com.twolaugh.ex3cuusion.core.ai.CaptureRevision
+import com.twolaugh.ex3cuusion.core.ai.RevisionDateIntent
 import com.twolaugh.ex3cuusion.core.model.ActiveTimer
 import com.twolaugh.ex3cuusion.core.model.AppState
+import com.twolaugh.ex3cuusion.core.model.Folder
+import com.twolaugh.ex3cuusion.core.model.FolderStatus
 import com.twolaugh.ex3cuusion.core.model.CompletionBehavior
 import com.twolaugh.ex3cuusion.core.model.CompletionEvent
 import com.twolaugh.ex3cuusion.core.model.CompletionMode
@@ -390,6 +394,192 @@ class DomainEngine(
         return next
     }
 
+    // --- T105: AI enrichment apply path --------------------------------------------------------------
+
+    // Translation of the web's enrichCapturedTask -> applyRevisionToTask (src/lib/state.ts):
+    // apply a model-authored CaptureRevision to one captured task as ONE undoable change.
+    // Deviations from the web, per the T105 ticket: the change records ONLY when something
+    // actually changed (the web records "Enriched ..." unconditionally), and a gated revision
+    // (shouldApply=false / low confidence) is a pure no-op (the web stashes the note in
+    // task.notes). The task is NEVER renamed — the web passes an empty message, so its rename
+    // guard (shouldApplyRevisionTitle) can never pass; revision.title is ignored entirely.
+    fun applyEnrichment(taskId: String, revision: CaptureRevision): EnrichmentApplied? {
+        val task = state.tasks.find { it.id == taskId && it.status != TaskStatus.Archived } ?: return null
+        // The web's gate in applyRevisionToTask: `!revision.shouldApply || revision.confidence < 0.4`.
+        if (!revision.shouldApply || revision.confidence < ENRICHMENT_CONFIDENCE_FLOOR) return null
+        ensureDayList() // materialize before the snapshot so undo keeps it (instantCapture pattern)
+
+        val changes = mutableListOf<String>()
+        var next = task
+
+        val folder = revision.folderName?.let { findFolderMention(state, it) }
+        if (folder != null) {
+            val inChildFolder = folder.parentFolderId != null
+            next = next.copy(
+                folderId = folder.id,
+                type = when {
+                    inChildFolder -> TaskType.ProjectTask
+                    next.completionBehavior == CompletionBehavior.KeepAsSuggestion -> TaskType.SoftInvitation
+                    else -> TaskType.Atomic
+                },
+                plannerFields = if (inChildFolder) next.plannerFields.copy(intentType = IntentType.Progress) else next.plannerFields
+            )
+            changes += "moved under ${folder.name}"
+        }
+
+        applyRevisionDate(next, revision)?.let { (dated, label) -> next = dated; changes += label }
+        applyRevisionTime(next, revision)?.let { (timed, label) -> next = timed; changes += label }
+
+        // Web: `if (revision.effortMinutes && revision.effortMinutes !== task.effortMinutes)`.
+        // The schema promises 5..480; clamp anyway since nothing else validates it on this side.
+        val effort = revision.effortMinutes?.takeIf { it > 0 }?.let { min(480, max(5, it)) }
+        if (effort != null && effort != next.effortMinutes) {
+            next = next.copy(
+                effortMinutes = effort,
+                estimateConfidence = max(next.estimateConfidence ?: 0.5, revision.confidence)
+            )
+            changes += "set estimate to ${effort}m"
+        }
+
+        // Scores apply when present (web truthiness; schema range 1..9, clamped here too).
+        revision.priority?.let { next = next.copy(priority = clamp(it, 1, 9, next.priority)) }
+        revision.importance?.let { next = next.copy(importance = clamp(it, 1, 9, next.importance)) }
+        revision.urgency?.let { next = next.copy(urgency = clamp(it, 1, 9, next.urgency)) }
+        if (revision.priority != null || revision.importance != null || revision.urgency != null) changes += "updated priority"
+
+        revision.definitionOfDone?.trim()?.takeIf { it.isNotEmpty() }?.let { dod ->
+            next = next.copy(
+                definitionOfDone = dod,
+                completionMode = if (next.completionMode == CompletionMode.SimpleDone) CompletionMode.OutcomeDone else next.completionMode
+            )
+            changes += "updated done-state"
+        }
+
+        if (revision.completionBehavior != null || revision.completionMode != null) {
+            next = next.copy(
+                completionBehavior = revision.completionBehavior ?: next.completionBehavior,
+                completionMode = revision.completionMode ?: next.completionMode
+            )
+            changes += "updated completion behavior"
+        }
+
+        revision.note?.trim()?.takeIf { it.isNotEmpty() }?.let { note ->
+            next = next.copy(notes = listOfNotNull(next.notes, "Follow-up: $note").joinToString("\n"))
+            changes += "added note"
+        }
+
+        // Keep the list pin in sync when enrichment scheduled the task for today at a clock time
+        // (enrichCapturedTask in state.ts).
+        val entry = todayList().entries.find { it.taskId == taskId }
+        val pinTime = next.scheduledTime?.takeIf { next.scheduledDate == state.currentDate && validTime(it) }
+        val pinChanged = entry != null && pinTime != null && entry.pinnedTime != pinTime
+
+        if (next == task && !pinChanged) return null // a no-op records nothing
+
+        recordChange("enrich", "AI filed: ${truncateTitle(task.title)}")
+        updateTaskIn(taskId) { next }
+        if (pinChanged) {
+            replaceTodayList { list ->
+                list.copy(entries = list.entries.map { if (it.taskId == taskId) it.copy(pinnedTime = pinTime) else it })
+            }
+        }
+        persist()
+        return EnrichmentApplied(folderName = folder?.name, changes = changes.distinct())
+    }
+
+    // applyRevisionDate (state.ts): one date altitude per revision, each clearing the others.
+    private fun applyRevisionDate(task: Task, revision: CaptureRevision): Pair<Task, String>? = when (revision.dateIntent) {
+        null, RevisionDateIntent.Unchanged -> null
+        RevisionDateIntent.NextWeek -> {
+            val range = nextWeekRange(state.currentDate)
+            task.copy(
+                scheduledDate = null, scheduledTime = null, dueDate = null,
+                dateIntent = DateIntent(
+                    kind = DateIntentKind.WeekWindow, originalText = revision.summary,
+                    startDate = range.startDate, endDate = range.endDate, confidence = revision.confidence
+                ),
+                plannerFields = task.plannerFields.copy(pressureLevel = PressureLevel.Soft)
+            ) to "moved to next week"
+        }
+        RevisionDateIntent.ThisWeek -> {
+            val range = weekRange(state.currentDate)
+            task.copy(
+                scheduledDate = null, scheduledTime = null, dueDate = null,
+                dateIntent = DateIntent(
+                    kind = DateIntentKind.WeekWindow, originalText = revision.summary,
+                    startDate = range.startDate, endDate = range.endDate, confidence = revision.confidence
+                ),
+                plannerFields = task.plannerFields.copy(pressureLevel = PressureLevel.Soft)
+            ) to "kept in this week"
+        }
+        RevisionDateIntent.Tomorrow -> {
+            val scheduledDate = revision.scheduledDate?.takeIf { validDate(it) } ?: addDays(state.currentDate, 1)
+            task.copy(
+                scheduledDate = scheduledDate, dueDate = null,
+                dateIntent = DateIntent(
+                    kind = DateIntentKind.Tomorrow, originalText = revision.summary,
+                    scheduledDate = scheduledDate, confidence = revision.confidence
+                ),
+                plannerFields = task.plannerFields.copy(pressureLevel = PressureLevel.Scheduled)
+            ) to "scheduled for tomorrow"
+        }
+        RevisionDateIntent.Today -> {
+            val scheduledDate = revision.scheduledDate?.takeIf { validDate(it) } ?: state.currentDate
+            task.copy(
+                scheduledDate = scheduledDate, dueDate = null,
+                dateIntent = DateIntent(
+                    kind = DateIntentKind.Today, originalText = revision.summary,
+                    scheduledDate = scheduledDate, confidence = revision.confidence
+                ),
+                plannerFields = task.plannerFields.copy(pressureLevel = PressureLevel.Scheduled)
+            ) to "scheduled for today"
+        }
+        RevisionDateIntent.Someday -> task.copy(
+            scheduledDate = null, scheduledTime = null, dueDate = null,
+            dateIntent = DateIntent(kind = DateIntentKind.Someday, originalText = revision.summary, confidence = revision.confidence),
+            plannerFields = task.plannerFields.copy(pressureLevel = PressureLevel.Someday)
+        ) to "moved to someday"
+        RevisionDateIntent.SpecificDate -> {
+            if (!validDate(revision.scheduledDate)) null
+            else task.copy(
+                scheduledDate = revision.scheduledDate, dueDate = null,
+                dateIntent = DateIntent(
+                    kind = DateIntentKind.SpecificDate, originalText = revision.summary,
+                    scheduledDate = revision.scheduledDate, confidence = revision.confidence
+                ),
+                plannerFields = task.plannerFields.copy(pressureLevel = PressureLevel.Scheduled)
+            ) to "scheduled for ${revision.scheduledDate}"
+        }
+        RevisionDateIntent.Deadline -> {
+            if (!validDate(revision.dueDate)) null
+            else task.copy(
+                dueDate = revision.dueDate, scheduledDate = null, scheduledTime = null,
+                dateIntent = DateIntent(
+                    kind = DateIntentKind.Deadline, originalText = revision.summary,
+                    dueDate = revision.dueDate, confidence = revision.confidence
+                ),
+                plannerFields = task.plannerFields.copy(pressureLevel = PressureLevel.Due)
+            ) to "deadline set to ${revision.dueDate}"
+        }
+    }
+
+    // applyRevisionTime (state.ts): a valid HH:mm pins the task to a clock time, defaulting the
+    // date to today, and clears any deadline.
+    private fun applyRevisionTime(task: Task, revision: CaptureRevision): Pair<Task, String>? {
+        val time = revision.scheduledTime?.takeIf { validTime(it) } ?: return null
+        val scheduledDate = task.scheduledDate ?: revision.scheduledDate?.takeIf { validDate(it) } ?: state.currentDate
+        val kind = when (scheduledDate) {
+            state.currentDate -> DateIntentKind.Today
+            addDays(state.currentDate, 1) -> DateIntentKind.Tomorrow
+            else -> DateIntentKind.SpecificDate
+        }
+        return task.copy(
+            scheduledDate = scheduledDate, scheduledTime = time, dueDate = null,
+            dateIntent = DateIntent(kind = kind, originalText = revision.summary, scheduledDate = scheduledDate, confidence = revision.confidence),
+            plannerFields = task.plannerFields.copy(pressureLevel = PressureLevel.Scheduled)
+        ) to "scheduled for $time"
+    }
+
     // --- T095: conscious release --------------------------------------------------------------------
 
     // "Let go" — guilt-free, distinct from archive: the task archives with released=true and its
@@ -551,6 +741,30 @@ class DomainEngine(
 }
 
 enum class StaleResolution { Someday, Keep }
+
+// T105: what applyEnrichment changed — null result means nothing was applied. folderName feeds
+// the "AI filed: <folder> · <changes>" snackbar.
+data class EnrichmentApplied(val folderName: String?, val changes: List<String>)
+
+// The web's apply threshold in applyRevisionToTask (state.ts): confidence below this skips the
+// whole revision. NOTE: the web uses 0.4, not the 0.3 the T105 ticket sketch mentioned.
+const val ENRICHMENT_CONFIDENCE_FLOOR = 0.4
+
+// Port of findFolderMention (state.ts): resolve a folderName to an active folder by exact full
+// path (when the name contains "/"), then exact name; with duplicated names, prefer the child
+// folder (the more specific placement). Deliberately NO substring matching: "Housework" must
+// never resolve to "Work".
+internal fun findFolderMention(state: AppState, name: String): Folder? {
+    val folders = state.folders.filter { it.status != FolderStatus.Archived }
+    val lower = name.trim().lowercase()
+    if (lower.isEmpty()) return null
+    if ("/" in lower) {
+        folders.find { (folderPath(state, it.id) ?: "").lowercase() == lower }?.let { return it }
+    }
+    val exactNameMatches = folders.filter { it.name.lowercase() == lower }
+    if (exactNameMatches.size == 1) return exactNameMatches[0]
+    return exactNameMatches.find { it.parentFolderId != null }
+}
 
 // The v1 create/update surface (state.ts applyStructureMutation task branch trimmed to the
 // fields the daily loop needs). Null means "not provided".
