@@ -332,7 +332,9 @@ function recentEventsForTask(state: AppState, taskId: string): ExecutionEvent[] 
     .slice(-5);
 }
 
-function effectiveEffortMinutes(state: AppState, task: Task): number {
+// Exported for the tray's gap-fit check (T093): the calibrated effort estimate is what must fit
+// the gap, not the user's possibly stale raw estimate.
+export function effectiveEffortMinutes(state: AppState, task: Task): number {
   const actuals = state.completions
     .filter(
       (event) =>

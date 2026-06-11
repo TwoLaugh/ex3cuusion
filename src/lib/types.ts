@@ -192,6 +192,22 @@ export interface Task {
   habit?: boolean;
 }
 
+// T093: per-task tray telemetry. Updated by the tray read path (surfacing, idempotent per date)
+// and by the explicit list mutations (add from tray / eject). ignoredStreak is PROVISIONAL on
+// surfacing: it is bumped when the task is shown on a new date and reset the moment the user
+// acts (add or eject — eject is information, not ignoring). firstSurfacedDate is the TMT delay
+// anchor: Task has no createdAt, so "how long has this been waiting" can only be measured from
+// the first time the tray showed it.
+export interface TraySignal {
+  taskId: string;
+  surfacedCount: number;
+  firstSurfacedDate?: string;
+  lastSurfacedDate?: string;
+  addedCount: number;
+  ignoredStreak: number;
+  lastOutcome?: "added" | "ignored" | "ejected";
+}
+
 // T092: where a day-list entry came from. "recurring" = auto-added by the morning build (due
 // recurring/dated), "manual" = user-authored (incl. instant capture), "tray" = pulled from the
 // tray, "ai" = AI-proposed list add, "carried" = unfinished entry carried from the previous list.
@@ -494,6 +510,9 @@ export interface AppState {
   // T092: hand-authored day lists, one per date, created by the morning build on first view of a
   // day. The list is the day's commitment; the timeline (committedPlans) is a secondary view.
   dayLists: DayList[];
+  // T093: per-task tray acceptance telemetry (surfaced/added/ignored/ejected), one entry per task
+  // the tray has ever shown. Drives damping, the resurfacing floor, and the stale-task question.
+  traySignals: TraySignal[];
   // Local date of the last guarded organizer pass (T069); used only by the explicit auto route.
   lastAutoOrganizeDate?: string;
   // Reserved for the guarded auto organizer route. The client uses an explicit button by default.

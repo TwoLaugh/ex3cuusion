@@ -167,6 +167,7 @@ export function createSeedState(): AppState {
     inbox: [],
     captureSessions: [],
     committedPlans: [],
-    dayLists: []
+    dayLists: [],
+    traySignals: []
   };
 }

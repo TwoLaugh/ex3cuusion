@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { addTaskToDayList, dayListView, dayView, getState, removeTaskFromDayList, reorderDayList, setDayListPin } from "@/lib/state";
+import { addTaskToDayList, dayListView, dayView, getState, removeTaskFromDayList, reorderDayList, resolveStaleTask, setDayListPin } from "@/lib/state";
 
 // T092: explicit, undoable mutations on today's hand-authored list. The first read of a day
 // builds the morning list automatically (ensureDayList inside dayListView), so GET here — or the
 // dayList field on /api/state — is all the UI needs to materialize the day.
+// T093: "resolve-stale" answers the aging question on a staleQuestion tray row — resolution
+// "someday" (spaced resurfacing) or "keep" (clear the ignore streak). Never an automatic archive.
 const mutationSchema = z.object({
-  action: z.enum(["add", "remove", "reorder", "pin"]),
+  action: z.enum(["add", "remove", "reorder", "pin", "resolve-stale"]),
   taskId: z.string().optional(),
   orderedTaskIds: z.array(z.string()).optional(),
   pinnedTime: z.string().optional(),
-  source: z.enum(["recurring", "manual", "tray", "ai", "carried"]).optional()
+  source: z.enum(["recurring", "manual", "tray", "ai", "carried"]).optional(),
+  resolution: z.enum(["someday", "keep"]).optional()
 });
 
 export async function GET() {
@@ -23,5 +26,6 @@ export async function POST(request: NextRequest) {
   if (input.action === "remove" && input.taskId) removeTaskFromDayList(input.taskId);
   if (input.action === "reorder" && input.orderedTaskIds) reorderDayList(input.orderedTaskIds);
   if (input.action === "pin" && input.taskId) setDayListPin(input.taskId, input.pinnedTime);
+  if (input.action === "resolve-stale" && input.taskId && input.resolution) resolveStaleTask(input.taskId, input.resolution);
   return NextResponse.json({ state: getState(), plan: dayView(), dayList: dayListView() });
 }

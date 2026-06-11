@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, schedulingForMode, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
-import { buildMorningList, findDayList, renderDayList, type DayListView } from "./day-list";
+import { buildMorningList, ensureTraySignal, findDayList, renderDayList, type DayListView } from "./day-list";
 import { buildCommitment, countNewCandidates, findCommitment, renderCommittedPlan, snapshotPlanItem } from "./day-view";
 import { nextId } from "./ids";
 import { blockFolderId, buildDayPlan, hasActiveChildren } from "./planner";
@@ -366,6 +366,13 @@ export function addTaskToDayList(taskId: string, options?: { source?: DayListSou
     source: options?.source ?? "tray"
   });
   normalizeDayListOrder(list);
+  // T093 acceptance telemetry: a tray add is a positive outcome and clears the ignore streak.
+  if ((options?.source ?? "tray") === "tray") {
+    const signal = ensureTraySignal(state, taskId);
+    signal.addedCount += 1;
+    signal.ignoredStreak = 0;
+    signal.lastOutcome = "added";
+  }
   return getState();
 }
 
@@ -379,6 +386,37 @@ export function removeTaskFromDayList(taskId: string): AppState {
   recordChange("day_list", `Removed "${truncateTitle(task?.title ?? taskId)}" from today's list`);
   list.entries = list.entries.filter((candidate) => candidate.taskId !== taskId);
   normalizeDayListOrder(list);
+  // T093: eject is information, not ignoring — record it and clear the ignore streak.
+  const signal = ensureTraySignal(state, taskId);
+  signal.lastOutcome = "ejected";
+  signal.ignoredStreak = 0;
+  return getState();
+}
+
+// T093 aging -> question: ignoredStreak >= 5 marks a tray row staleQuestion and the AI asks once —
+// someday / keep — instead of silently dropping the task (HARD constraint: no automatic archive).
+// "someday" demotes the task to dateIntent someday and resets its tray signal so the spaced
+// 7/14/30/90 resurfacing schedule restarts at 7 days from this decision; "keep" just clears the
+// ignore streak so damping releases. Undoable like every other list mutation.
+export function resolveStaleTask(taskId: string, resolution: "someday" | "keep"): AppState {
+  const state = currentState();
+  const task = state.tasks.find((entry) => entry.id === taskId && entry.status !== "archived");
+  if (!task) return getState();
+  recordChange(
+    "day_list",
+    resolution === "someday" ? `Moved "${truncateTitle(task.title)}" to someday` : `Kept "${truncateTitle(task.title)}" in the rotation`
+  );
+  const signal = ensureTraySignal(state, taskId);
+  if (resolution === "someday") {
+    applyTaskDateIntent(state, task, "someday");
+    signal.surfacedCount = 0; // restart the spaced schedule at the 7-day interval
+    signal.ignoredStreak = 0;
+    signal.lastOutcome = undefined;
+    signal.lastSurfacedDate = state.currentDate; // anchor: quiet for 7 days from the decision
+    maybeReplanForScheduleChange(state, task); // someday clears dates; keep the timeline in sync
+  } else {
+    signal.ignoredStreak = 0;
+  }
   return getState();
 }
 
