@@ -16,6 +16,7 @@ import com.twolaugh.ex3cuusion.core.model.DateIntentKind
 import com.twolaugh.ex3cuusion.core.model.DayList
 import com.twolaugh.ex3cuusion.core.model.DayListEntry
 import com.twolaugh.ex3cuusion.core.model.DayListSource
+import com.twolaugh.ex3cuusion.core.model.Document
 import com.twolaugh.ex3cuusion.core.model.Energy
 import com.twolaugh.ex3cuusion.core.model.ExecutionEvent
 import com.twolaugh.ex3cuusion.core.model.ExecutionEventType
@@ -29,9 +30,11 @@ import com.twolaugh.ex3cuusion.core.model.TaskStatus
 import com.twolaugh.ex3cuusion.core.model.TaskType
 import com.twolaugh.ex3cuusion.core.model.TrayOutcome
 import com.twolaugh.ex3cuusion.core.model.TraySignal
+import com.twolaugh.ex3cuusion.core.store.MAIN_FOLDER_ID
 import com.twolaugh.ex3cuusion.core.store.StateStore
 import com.twolaugh.ex3cuusion.core.store.UndoStack
 import com.twolaugh.ex3cuusion.core.store.ChangeHistoryItem
+import com.twolaugh.ex3cuusion.core.store.mainFolder
 import java.time.Instant
 import java.util.UUID
 import kotlin.math.max
@@ -503,6 +506,102 @@ class DomainEngine(
         recordChange("manual_edit", "Archived folder \"${truncateTitle(folder.name)}\"")
         state = state.copy(
             folders = state.folders.map { if (it.id == folderId) it.copy(status = FolderStatus.Archived) else it }
+        )
+        persist()
+    }
+
+    // --- T108: folder documents (Keep-style pages) ----------------------------------------------------
+
+    // doc_0001-style ids, scanning existing ids for the next free number (uniqueStateId pattern).
+    private fun uniqueDocumentId(): String {
+        val ids = state.documents.mapTo(HashSet()) { it.id }
+        val numbered = Regex("""^doc_(\d+)$""")
+        var index = ids.mapNotNull { numbered.find(it)?.groupValues?.get(1)?.toIntOrNull() }.maxOrNull() ?: 0
+        var next: String
+        do {
+            index += 1
+            next = "doc_" + index.toString().padStart(4, '0')
+        } while (next in ids)
+        return next
+    }
+
+    private fun findDocument(documentId: String): Document? = state.documents.find { it.id == documentId }
+
+    // A note's display handle for change summaries: the title, else the first line of the body.
+    private fun documentLabel(title: String?, body: String): String =
+        truncateTitle(title?.trim()?.takeIf { it.isNotEmpty() } ?: body.lineSequence().firstOrNull()?.trim().orEmpty())
+
+    // Create a note in `folderId` (an unknown folder falls back to Main, which is materialized
+    // into the state if a never-normalized state lacks it — a note must never dangle). Undoable.
+    fun createDocument(folderId: String, body: String, title: String? = null): String {
+        recordChange("manual_edit", "Created note \"${documentLabel(title, body)}\"")
+        val target = if (state.folders.any { it.id == folderId }) {
+            folderId
+        } else {
+            if (state.folders.none { it.id == MAIN_FOLDER_ID }) {
+                state = state.copy(folders = state.folders + mainFolder())
+            }
+            MAIN_FOLDER_ID
+        }
+        val now = nowIso()
+        val document = Document(
+            id = uniqueDocumentId(),
+            folderId = target,
+            title = title?.trim()?.takeIf { it.isNotEmpty() },
+            body = body,
+            createdAt = now,
+            updatedAt = now
+        )
+        state = state.copy(documents = state.documents + document)
+        persist()
+        return document.id
+    }
+
+    // Edit a note. optionalText semantics on title ("" clears, null = not provided); body null =
+    // not provided. updatedAt bumps only when something actually changed — an unchanged save is
+    // a pure no-op (no history, no recency bump).
+    fun updateDocument(documentId: String, title: String? = null, body: String? = null) {
+        val document = findDocument(documentId) ?: return
+        var next = document
+        if (title != null) next = next.copy(title = title.trim().takeIf { it.isNotEmpty() })
+        if (body != null) next = next.copy(body = body)
+        if (next == document) return
+        recordChange("manual_edit", "Updated note \"${documentLabel(next.title, next.body)}\"")
+        val stamped = next.copy(updatedAt = nowIso())
+        state = state.copy(documents = state.documents.map { if (it.id == documentId) stamped else it })
+        persist()
+    }
+
+    fun deleteDocument(documentId: String) {
+        val document = findDocument(documentId) ?: return
+        recordChange("manual_edit", "Deleted note \"${documentLabel(document.title, document.body)}\"")
+        state = state.copy(documents = state.documents.filter { it.id != documentId })
+        persist()
+    }
+
+    // Refile a note into another folder. Unknown target or already-there = silent no-op. The
+    // move bumps updatedAt so the receiving page rises in the grid's recency order.
+    fun moveDocument(documentId: String, folderId: String) {
+        val document = findDocument(documentId) ?: return
+        if (document.folderId == folderId) return
+        val folder = state.folders.find { it.id == folderId } ?: return
+        recordChange(
+            "manual_edit",
+            "Moved note \"${documentLabel(document.title, document.body)}\" to \"${truncateTitle(folder.name)}\""
+        )
+        val moved = document.copy(folderId = folderId, updatedAt = nowIso())
+        state = state.copy(documents = state.documents.map { if (it.id == documentId) moved else it })
+        persist()
+    }
+
+    // Set a folder's palette index (clamped to the 8-tone palette). Same-colour tap = no-op.
+    fun setFolderColor(folderId: String, index: Int) {
+        val folder = state.folders.find { it.id == folderId } ?: return
+        val clamped = min(7, max(0, index))
+        if (folder.color == clamped) return
+        recordChange("manual_edit", "Recoloured \"${truncateTitle(folder.name)}\"")
+        state = state.copy(
+            folders = state.folders.map { if (it.id == folderId) it.copy(color = clamped) else it }
         )
         persist()
     }

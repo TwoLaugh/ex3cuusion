@@ -47,9 +47,9 @@ class StateStoreTest {
     @Test
     fun `save normalizes before writing`() {
         val dir = tmp.newFolder()
-        StateStore(dir).save(minimalState()) // no folders -> personal fallback must be persisted
+        StateStore(dir).save(minimalState()) // no folders -> personal fallback + Main page persisted
         val reloaded = StateStore(dir).load()
-        assertEquals(listOf("folder_personal"), reloaded?.folders?.map { it.id })
+        assertEquals(listOf("folder_personal", "folder_main"), reloaded?.folders?.map { it.id })
     }
 
     @Test

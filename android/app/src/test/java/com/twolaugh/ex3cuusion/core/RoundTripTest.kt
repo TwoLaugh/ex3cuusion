@@ -82,6 +82,42 @@ class RoundTripTest {
     }
 
     @Test
+    fun `documents and folder colour round-trip, with unknown keys inside them ignored`() {
+        // T108 fixture pattern: graft a documents array + a folder colour into the web-seed text
+        // (as a newer writer would produce it), with an unknown key inside the document to prove
+        // the tolerance survives at every level.
+        val withPages = loadFixtureText()
+            .replaceFirst(
+                "\"folders\": [",
+                """"documents": [
+                    { "id": "doc_0001", "folderId": "domain_health", "title": "Eczema protocol",
+                      "body": "Seal within 30s.\nReview weekly.", "kind": "text",
+                      "createdAt": "2026-06-10T09:00:00.000Z", "updatedAt": "2026-06-11T08:00:00.000Z" }
+                ], "folders": ["""
+            )
+            .replaceFirst(
+                """{ "id": "domain_health", "name": "Health Repair", "weight": 10 }""",
+                """{ "id": "domain_health", "name": "Health Repair", "weight": 10, "color": 4 }"""
+            )
+
+        val first = stateJson.decodeFromString<AppState>(withPages)
+        val doc = first.documents.single()
+        assertEquals("doc_0001", doc.id)
+        assertEquals("domain_health", doc.folderId)
+        assertEquals("Eczema protocol", doc.title)
+        assertEquals("Seal within 30s.\nReview weekly.", doc.body)
+        assertEquals("2026-06-11T08:00:00.000Z", doc.updatedAt)
+        assertEquals(4, first.folders.first { it.id == "domain_health" }.color)
+        assertNull(first.folders.first { it.id == "domain_work" }.color)
+
+        // Re-serialize and re-parse: deep equal, colour and documents intact, no nulls leaked.
+        val serialized = stateJson.encodeToString(AppState.serializer(), first)
+        assertEquals(first, stateJson.decodeFromString<AppState>(serialized))
+        assertTrue(serialized.contains("\"color\":4"))
+        assertFalse(serialized.contains("null"))
+    }
+
+    @Test
     fun `unknown keys from a newer web build are ignored`() {
         val withExtra = loadFixtureText().replaceFirst(
             "\"currentDate\"",

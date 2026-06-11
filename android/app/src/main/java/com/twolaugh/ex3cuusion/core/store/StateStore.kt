@@ -50,14 +50,24 @@ class StateStore(
     }
 }
 
+// T108: the well-known quick-capture inbox page. Every normalized state has it; dangling
+// documents reparent into it rather than disappearing.
+const val MAIN_FOLDER_ID = "folder_main"
+
+internal fun mainFolder(): Folder =
+    Folder(id = MAIN_FOLDER_ID, name = "Main", color = 0, status = FolderStatus.Active)
+
 // Port of normalizeState's NORMALIZATION layer (repository.ts). The legacy domains/projects/
 // routines forward-migration is intentionally NOT ported: the phone never sees pre-T088 data.
 // Missing-array defaulting (the `??=` lines) is handled structurally by the @Serializable
 // defaults on AppState/CaptureSession, so only the folder-tree repairs remain.
 fun normalizeState(state: AppState): AppState {
-    val folders = state.folders.ifEmpty {
+    val base = state.folders.ifEmpty {
         listOf(Folder(id = "folder_personal", name = "Personal", weight = 5, status = FolderStatus.Active))
     }
+    // T108: the Main page (quick-capture inbox) always exists — top-level, colour 0. An existing
+    // folder_main is left exactly as the user has it (renamed/recoloured is fine).
+    val folders = if (base.none { it.id == MAIN_FOLDER_ID }) base + mainFolder() else base
     val folderIds = folders.mapTo(HashSet()) { it.id }
 
     // parentFolderId pointing at a missing folder -> cleared (folder becomes top-level).
@@ -70,12 +80,19 @@ fun normalizeState(state: AppState): AppState {
         if (task.folderId != null && task.folderId !in folderIds) task.copy(folderId = null) else task
     }
 
+    // T108: a document can never dangle — notes whose folder vanished reparent to Main (unlike
+    // tasks, a note has no meaning without a page to live on).
+    val repairedDocuments = state.documents.map { doc ->
+        if (doc.folderId !in folderIds) doc.copy(folderId = MAIN_FOLDER_ID) else doc
+    }
+
     // Drop block selections whose folder no longer exists.
     val selections = state.folderBlockSelections.filter { it.folderId in folderIds }
 
     return state.copy(
         folders = repairedFolders,
         tasks = repairedTasks,
+        documents = repairedDocuments,
         folderBlockSelections = selections
     )
 }

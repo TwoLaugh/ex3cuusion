@@ -10,12 +10,15 @@ import com.twolaugh.ex3cuusion.core.ai.EnrichmentResult
 import com.twolaugh.ex3cuusion.core.domain.CloseoutView
 import com.twolaugh.ex3cuusion.core.domain.DayListView
 import com.twolaugh.ex3cuusion.core.domain.DomainEngine
+import com.twolaugh.ex3cuusion.core.domain.PagesView
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
+import com.twolaugh.ex3cuusion.core.domain.buildPagesView
 import com.twolaugh.ex3cuusion.core.domain.folderPath
 import com.twolaugh.ex3cuusion.core.model.ActiveTimer
 import com.twolaugh.ex3cuusion.core.model.AppState
 import com.twolaugh.ex3cuusion.core.model.DayListSource
 import com.twolaugh.ex3cuusion.core.model.FolderStatus
+import com.twolaugh.ex3cuusion.core.store.MAIN_FOLDER_ID
 import com.twolaugh.ex3cuusion.core.store.StateStore
 import com.twolaugh.ex3cuusion.core.store.UndoStack
 import com.twolaugh.ex3cuusion.core.store.normalizeState
@@ -269,6 +272,51 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         engine.undoChange()
         refresh()
         return undone.summary
+    }
+
+    // --- T108: Pages surface (additive — nothing above this section changed) ----------------------
+
+    private val _pagesView = MutableStateFlow(PagesView())
+    val pagesView: StateFlow<PagesView> = _pagesView.asStateFlow()
+
+    // The Pages screens re-pull on entry (LaunchedEffect) and after every pages mutation; the
+    // Today pipeline is untouched.
+    fun refreshPages() {
+        _pagesView.value = buildPagesView(engine.state)
+    }
+
+    // The grid's "jot to Main..." field: instant quick-capture note into the Main page.
+    fun jotToMain(body: String) {
+        val cleaned = body.trim()
+        if (cleaned.isEmpty()) return
+        engine.createDocument(MAIN_FOLDER_ID, cleaned)
+        refreshPages()
+        refresh() // keep canUndo/lastChangeSummary on the Today surface honest
+    }
+
+    fun createNote(folderId: String, body: String, title: String? = null): String {
+        val id = engine.createDocument(folderId, body, title)
+        refreshPages()
+        refresh()
+        return id
+    }
+
+    fun updateNote(noteId: String, title: String?, body: String?) {
+        engine.updateDocument(noteId, title = title, body = body)
+        refreshPages()
+        refresh()
+    }
+
+    fun deleteNote(noteId: String) {
+        engine.deleteDocument(noteId)
+        refreshPages()
+        refresh()
+    }
+
+    fun setFolderColor(folderId: String, index: Int) {
+        engine.setFolderColor(folderId, index)
+        refreshPages()
+        refresh()
     }
 
     fun closeDay() {

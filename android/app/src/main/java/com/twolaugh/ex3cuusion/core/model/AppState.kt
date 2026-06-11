@@ -16,6 +16,9 @@ data class AppState(
     val availableMinutes: Int,
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val folders: List<Folder> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val folderBlockSelections: List<FolderBlockSelection> = emptyList(),
+    // T108: folder notes (Keep-style pages). Same contract as the other collections: defaulted
+    // on parse so pre-T108 documents load, ALWAYS encoded so readers never see it missing.
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) val documents: List<Document> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val tasks: List<Task> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val deferrals: List<DeferralLog> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val completions: List<CompletionEvent> = emptyList(),

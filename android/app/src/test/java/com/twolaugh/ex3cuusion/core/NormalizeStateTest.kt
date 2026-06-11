@@ -1,6 +1,7 @@
 package com.twolaugh.ex3cuusion.core
 
 import com.twolaugh.ex3cuusion.core.model.AppState
+import com.twolaugh.ex3cuusion.core.model.Document
 import com.twolaugh.ex3cuusion.core.model.Folder
 import com.twolaugh.ex3cuusion.core.model.FolderBlockSelection
 import com.twolaugh.ex3cuusion.core.store.normalizeState
@@ -30,12 +31,16 @@ class NormalizeStateTest {
     }
 
     @Test
-    fun `empty folders get the personal fallback`() {
+    fun `empty folders get the personal fallback plus the Main page`() {
         val normalized = normalizeState(minimalState())
-        assertEquals(1, normalized.folders.size)
-        assertEquals("folder_personal", normalized.folders[0].id)
+        assertEquals(listOf("folder_personal", "folder_main"), normalized.folders.map { it.id })
         assertEquals("Personal", normalized.folders[0].name)
         assertEquals(5, normalized.folders[0].weight)
+        // T108: Main is the quick-capture inbox page — top-level, colour 0.
+        val main = normalized.folders[1]
+        assertEquals("Main", main.name)
+        assertNull(main.parentFolderId)
+        assertEquals(0, main.color)
     }
 
     @Test
@@ -76,8 +81,37 @@ class NormalizeStateTest {
     }
 
     @Test
-    fun `normalizing the seed fixture changes nothing`() {
+    fun `normalizing the seed fixture only adds the Main page`() {
         val fixture = stateJson.decodeFromString<AppState>(loadFixtureText())
-        assertEquals(fixture, normalizeState(fixture))
+        val normalized = normalizeState(fixture)
+        // T108: the web seed predates the Main page, so normalize appends exactly that folder
+        // and touches nothing else.
+        val main = normalized.folders.last()
+        assertEquals("folder_main", main.id)
+        assertEquals(fixture, normalized.copy(folders = normalized.folders.filterNot { it.id == "folder_main" }))
+        // A state that already has Main is a pure fixed point.
+        assertEquals(normalized, normalizeState(normalized))
+    }
+
+    @Test
+    fun `documents with a dangling folderId reparent to Main`() {
+        val state = minimalState().copy(
+            folders = listOf(Folder(id = "folder_a", name = "A")),
+            documents = listOf(
+                Document(
+                    id = "doc_0001", folderId = "folder_a", body = "stays put",
+                    createdAt = "2026-06-11T09:00:00.000Z", updatedAt = "2026-06-11T09:00:00.000Z"
+                ),
+                Document(
+                    id = "doc_0002", folderId = "folder_gone", body = "orphaned",
+                    createdAt = "2026-06-11T09:00:00.000Z", updatedAt = "2026-06-11T09:00:00.000Z"
+                )
+            )
+        )
+        val normalized = normalizeState(state)
+        assertEquals("folder_a", normalized.documents.first { it.id == "doc_0001" }.folderId)
+        // A note never dangles: it reparents to the Main page instead of clearing like a task.
+        assertEquals("folder_main", normalized.documents.first { it.id == "doc_0002" }.folderId)
+        assertTrue(normalized.folders.any { it.id == "folder_main" })
     }
 }
