@@ -381,15 +381,25 @@ internal fun BalanceBar(shares: List<DayListPillarShare>) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HabitStrip(habits: List<DayListHabitView>, onToggle: (String) -> Unit) {
+    // All habits visible at once (user feedback: side-scrolling means hunting). The space
+    // problem is solved by SHORT names + compact chips, not by hiding chips off-screen.
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         for (habit in habits) {
             HabitChip(habit = habit, onToggle = { onToggle(habit.taskId) })
         }
     }
+}
+
+// Compact display name: everything before the first long-form separator. "Seal technique —
+// moisturise within 30s post-shower" reads as "Seal technique" on a chip.
+private fun habitShortName(title: String): String {
+    var cut = title.split(" — ", " - ", " – ").first().trim()
+    if (cut.length > 24) cut = cut.split(" + ").first().trim()
+    return if (cut.length > 24) cut.take(23).trimEnd() + "…" else cut
 }
 
 // A short letterspaced section label — the at-a-glance separator between zones of the screen.
@@ -419,7 +429,8 @@ private fun HabitChip(habit: DayListHabitView, onToggle: () -> Unit) {
         color = if (ticked) Ex3Colors.inkMuted else Color.Transparent,
         border = if (ticked) null else androidx.compose.foundation.BorderStroke(1.dp, Ex3Colors.inkFaint),
         modifier = Modifier
-            .scale(settle.value)
+            // tactility: the chip squeezes as the hold ring fills, then settles on commit
+            .scale(settle.value * (1f - 0.05f * hold.progress.value))
             .holdToComplete(hold, durationMs = 450, onComplete = onToggle)
     ) {
         Row(
@@ -434,7 +445,7 @@ private fun HabitChip(habit: DayListHabitView, onToggle: () -> Unit) {
                         )
                     }
                 }
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 11.dp, vertical = 7.dp)
         ) {
             if (ticked) {
                 Icon(
@@ -445,8 +456,9 @@ private fun HabitChip(habit: DayListHabitView, onToggle: () -> Unit) {
                 )
             }
             Text(
-                text = "${habit.title} · ${habit.effortMinutes}m",
-                style = MaterialTheme.typography.bodyMedium,
+                text = habitShortName(habit.title),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
                 color = if (ticked) Ex3Colors.bg else Ex3Colors.ink
             )
             if (habit.streak >= 2) {

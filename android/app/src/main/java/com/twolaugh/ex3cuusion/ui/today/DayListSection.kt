@@ -5,7 +5,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,6 +63,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
@@ -104,15 +106,22 @@ internal fun DayListSection(
 
     var dragId by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
+    // Total finger travel since drag start: drives the dragged row's visual translation.
+    var dragTotal by remember { mutableFloatStateOf(0f) }
     var dragOrder by remember { mutableStateOf<List<String>?>(null) }
     val rowHeights = remember { mutableStateMapOf<String, Int>() }
 
     val byId = entries.associateBy { it.taskId }
-    val displayOrder = dragOrder?.filter { it in byId } ?: taskIds
+    // CRITICAL: rows always render in the COMMITTED order. Reordering the composition mid-drag
+    // recreates the dragged row's node and cancels its gesture coroutine (found via logcat,
+    // 2026-06-11) — the pending order is shown purely with translation offsets instead, and the
+    // real reorder commits on release.
+    val displayOrder = taskIds
 
     fun moveDraggedRow(amountY: Float) {
         val id = dragId ?: return
         dragOffset += amountY
+        dragTotal += amountY
         val order = dragOrder ?: return
         val index = order.indexOf(id)
         if (index < 0) return
@@ -143,6 +152,7 @@ internal fun DayListSection(
         val finalOrder = dragOrder
         dragId = null
         dragOffset = 0f
+        dragTotal = 0f
         dragOrder = null
         if (!cancelled && finalOrder != null && finalOrder != taskIds) onReorder(finalOrder)
     }
@@ -161,12 +171,21 @@ internal fun DayListSection(
             val entry = byId[id] ?: continue
             key(id) {
                 val isDragging = dragId == id
+                // Visual shift while a drag is live: the dragged row follows the finger; any row
+                // displaced in the pending order slides by the dragged row's height.
+                val pendingShift = if (!isDragging && dragOrder != null) {
+                    val from = taskIds.indexOf(id)
+                    val to = dragOrder!!.indexOf(id)
+                    if (from >= 0 && to >= 0 && from != to) {
+                        (if (to > from) 1 else -1) * (rowHeights[dragId] ?: 0).toFloat()
+                    } else 0f
+                } else 0f
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .onSizeChanged { rowHeights[id] = it.height }
                         .zIndex(if (isDragging) 1f else 0f)
-                        .graphicsLayer { translationY = if (isDragging) dragOffset else 0f }
+                        .graphicsLayer { translationY = if (isDragging) dragTotal else pendingShift }
                 ) {
                     DismissibleListRow(
                         entry = entry,
@@ -310,6 +329,11 @@ private fun ListRow(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .weight(1f)
+                    // tactility: the row warms as the hold ring fills
+                    .drawBehind {
+                        val p = hold.progress.value
+                        if (p > 0f) drawRect(Ex3Colors.accent.copy(alpha = 0.06f * p))
+                    }
                     .holdToComplete(hold, durationMs = 600, onComplete = onTick)
             ) {
                 Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
@@ -317,7 +341,7 @@ private fun ListRow(
                     Box(
                         modifier = Modifier
                             .size(24.dp)
-                            .scale(settleScale.value)
+                            .scale(settleScale.value * (1f + 0.15f * progress))
                             .clip(CircleShape)
                             .then(
                                 if (ticked) Modifier.background(Ex3Colors.inkMuted)
@@ -415,20 +439,40 @@ private fun ListRow(
                 modifier = Modifier.padding(start = 8.dp)
             )
 
-            // The reorder grip: drag starts immediately on touch, scoped to this handle only.
+            // The reorder grip. A handle inside a verticalScroll loses the vertical-gesture race
+            // unless it CLAIMS the pointer on finger-down: consume the down and every subsequent
+            // change so the scroll container (and swipe box) never see an unconsumed stream.
             Box(
                 modifier = Modifier
-                    .size(width = 40.dp, height = 48.dp)
+                    .size(width = 44.dp, height = 48.dp)
                     .pointerInput(entry.taskId) {
-                        detectDragGestures(
-                            onDragStart = { onDragStart() },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                onDragBy(amount.y)
-                            },
-                            onDragEnd = { onDragEnd() },
-                            onDragCancel = { onDragCancel() }
-                        )
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+                            onDragStart()
+                            var dragged = false
+                            try {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) {
+                                        change.consume()
+                                        break
+                                    }
+                                    val dy = change.positionChange().y
+                                    if (dy != 0f) {
+                                        dragged = true
+                                        onDragBy(dy)
+                                    }
+                                    change.consume()
+                                }
+                                onDragEnd()
+                            } catch (t: Throwable) {
+                                onDragCancel()
+                                throw t
+                            }
+                            if (!dragged) { /* a plain tap on the grip is a no-op reorder */ }
+                        }
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -449,7 +493,13 @@ private fun listRowMeta(entry: DayListEntryView): String {
         entry.pinnedTime
     } else {
         val folder = entry.folderPath?.substringAfterLast(" / ")
-        if (folder != null) "$folder · ${entry.effortMinutes}m" else "${entry.effortMinutes}m"
+        // Skip the folder when the title already says it ("Meditation - 2hr sit" next to a
+        // "Meditation" folder) - redundant meta is noise at a glance.
+        if (folder != null && !entry.title.startsWith(folder, ignoreCase = true)) {
+            "$folder · ${entry.effortMinutes}m"
+        } else {
+            "${entry.effortMinutes}m"
+        }
     }
     return carried + main
 }
