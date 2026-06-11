@@ -182,7 +182,11 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                 }
 
                 Spacer(Modifier.height(20.dp))
-                GaugesRow(gauges = view.gauges)
+                var showBalanceSheet by remember { mutableStateOf(false) }
+                GaugesRow(gauges = view.gauges, onBalanceTap = { showBalanceSheet = true })
+                if (showBalanceSheet) {
+                    BalanceSheet(gauges = view.gauges, onDismiss = { showBalanceSheet = false })
+                }
 
                 val median = view.gauges.medianDoneCount
                 val unticked = view.entries.count { !it.completedToday }
@@ -300,7 +304,7 @@ private fun TodayHeader(
 // --- gauges ----------------------------------------------------------------------------------------
 
 @Composable
-private fun GaugesRow(gauges: DayListGauges) {
+private fun GaugesRow(gauges: DayListGauges, onBalanceTap: () -> Unit = {}) {
     Row(horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.fillMaxWidth()) {
         val overfull = gauges.listMinutes > gauges.capacityMinutes
         val ratio = when {
@@ -342,8 +346,13 @@ private fun GaugesRow(gauges: DayListGauges) {
             }
         }
 
-        // Balance: stacked pillar shares in desaturated warm tones + amber missing-pillar nudge.
-        Column(Modifier.weight(1f)) {
+        // Balance: stacked pillar shares + amber missing-pillar nudge. Tap for the breakdown sheet.
+        Column(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onBalanceTap)
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "balance",
@@ -362,6 +371,64 @@ private fun GaugesRow(gauges: DayListGauges) {
             }
             Spacer(Modifier.height(6.dp))
             BalanceBar(shares = gauges.balance)
+        }
+    }
+}
+
+// Tap the balance gauge for the full story: per-pillar minutes + share, and what's missing.
+@Composable
+internal fun BalanceSheet(gauges: DayListGauges, onDismiss: () -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Ex3Colors.surface
+    ) {
+        Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+            Text(
+                text = "Today's balance",
+                style = MaterialTheme.typography.titleMedium,
+                color = Ex3Colors.ink
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "${formatDuration(gauges.listMinutes)} planned of ${formatDuration(gauges.capacityMinutes)} capacity",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Ex3Colors.inkMuted
+            )
+            Spacer(Modifier.height(16.dp))
+            for (pillar in gauges.balance.sortedByDescending { it.minutes }) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)
+                ) {
+                    Box(
+                        Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(pillarTone(pillar.folderId))
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = pillar.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Ex3Colors.ink,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "${formatDuration(pillar.minutes)} · ${(pillar.share * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Ex3Colors.inkMuted
+                    )
+                }
+            }
+            if (gauges.missingPillars.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "Nothing today from: ${gauges.missingPillars.joinToString(", ")}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Ex3Colors.missed
+                )
+            }
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -408,22 +475,30 @@ private fun HabitStrip(
     val chipBounds = remember { mutableStateMapOf<String, androidx.compose.ui.geometry.Rect>() }
     var dragChipId by remember { mutableStateOf<String?>(null) }
     var dragDelta by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    var pending by remember { mutableStateOf<List<String>?>(null) }
 
-    fun pendingOrder(): List<String>? {
-        val id = dragChipId ?: return null
-        val from = chipBounds[id] ?: return null
+    // Live pending order, recomputed on every move: the dragged chip's center picks its slot
+    // (slots = the chips' laid-out positions in committed order), everyone else slides to the
+    // slot they'd occupy. The SAME order commits on release — what you see is what lands.
+    fun recomputePending() {
+        val id = dragChipId ?: return
+        val from = chipBounds[id] ?: return
         val center = from.center + dragDelta
-        val target = order
-            .filter { it in chipBounds }
+        val slots = order.filter { it in chipBounds }
+        val targetSlot = slots
             .minByOrNull { (chipBounds.getValue(it).center - center).getDistanceSquared() }
-            ?: return null
-        if (target == id) return null
+            ?.let { slots.indexOf(it) } ?: return
         val mutable = order.toMutableList()
         mutable.remove(id)
-        mutable.add(order.indexOf(target).coerceAtMost(mutable.size), id)
-        return mutable
+        mutable.add(targetSlot.coerceAtMost(mutable.size), id)
+        pending = if (mutable == order) null else mutable
     }
 
+    // Re-key the whole strip on the committed order: after a reorder commits, every chip's
+    // animation/bounds state is rebuilt from scratch — leftover drag translations from the old
+    // layout can otherwise visually park chips in their previous slots (stale-strip bug,
+    // 2026-06-11: data committed correctly while the screen kept the old arrangement).
+    androidx.compose.runtime.key(order) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -432,6 +507,21 @@ private fun HabitStrip(
         for (habit in habits) {
             androidx.compose.runtime.key(habit.taskId) {
                 val dragging = dragChipId == habit.taskId
+                // Where this chip should sit right now: its slot in the pending order, expressed
+                // as a translation from its committed slot (slot geometry = committed layout).
+                val slotShift = if (!dragging && pending != null) {
+                    val fromIdx = order.indexOf(habit.taskId)
+                    val toIdx = pending!!.indexOf(habit.taskId)
+                    val fromRect = chipBounds[order.getOrNull(fromIdx) ?: ""]
+                    val toRect = chipBounds[order.getOrNull(toIdx) ?: ""]
+                    if (fromRect != null && toRect != null) toRect.topLeft - fromRect.topLeft
+                    else androidx.compose.ui.geometry.Offset.Zero
+                } else androidx.compose.ui.geometry.Offset.Zero
+                val animatedShift by androidx.compose.animation.core.animateOffsetAsState(
+                    targetValue = slotShift,
+                    animationSpec = tween(140),
+                    label = "chipShift"
+                )
                 Box(
                     Modifier
                         .zIndex(if (dragging) 1f else 0f)
@@ -440,9 +530,14 @@ private fun HabitStrip(
                                 translationX = dragDelta.x
                                 translationY = dragDelta.y
                                 alpha = 0.85f
+                            } else {
+                                translationX = animatedShift.x
+                                translationY = animatedShift.y
                             }
                         }
-                        .onGloballyPositioned { chipBounds[habit.taskId] = it.boundsInParent() }
+                        .onGloballyPositioned {
+                            if (dragChipId == null) chipBounds[habit.taskId] = it.boundsInParent()
+                        }
                 ) {
                     HabitChip(
                         habit = habit,
@@ -450,18 +545,25 @@ private fun HabitStrip(
                         onDragStart = {
                             dragChipId = habit.taskId
                             dragDelta = androidx.compose.ui.geometry.Offset.Zero
+                            pending = null
                         },
-                        onDragBy = { dragDelta += it },
+                        onDragBy = {
+                            dragDelta += it
+                            recomputePending()
+                        },
                         onDragEnd = { cancelled ->
-                            val next = if (cancelled) null else pendingOrder()
+                            val next = if (cancelled) null else pending
                             dragChipId = null
                             dragDelta = androidx.compose.ui.geometry.Offset.Zero
+                            pending = null
+                            chipBounds.clear()
                             if (next != null) onReorder(next)
                         }
                     )
                 }
             }
         }
+    }
     }
 }
 
