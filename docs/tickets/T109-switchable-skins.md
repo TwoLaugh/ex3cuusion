@@ -1,18 +1,36 @@
-# T109 — Switchable skins (six dogfood-testable themes)
+# T109 — Switchable LAYOUT VARIANTS (six dogfood-testable Todays)
 
-User decision (2026-06-11): build ALL six mockup directions as token
-skins, switchable from Settings, and pick by dogfooding. Maintenance
-tradeoff understood. Structural ideas (D3 capacity dial, D6 proportional
-stack, shape-coded pillars, D4 stamp habits) stay OUT of this ticket —
-cherry-picked later once a favourite emerges.
+User decision (2026-06-11, revised): token-only skins are NOT enough —
+build the six mockup directions as real LAYOUT variants (their actual
+structures: D1 numbered agenda + observances grid, D3 dial + duration
+blocks, D6 proportional stack + shape pillars, D4 stamps, etc.),
+switchable from Settings, picked by dogfooding. Losers get deleted
+after the bake-off.
 
 ## Architecture
-Convert the static Ex3Colors object + Type.kt into an Ex3Theme
-(palette + typography + shape tokens) provided via CompositionLocal,
-selected by a persisted Settings preference ("Skin"). All ui/* reads
-stay source-compatible (Ex3Colors.x becomes a val backed by the
-current theme) so the refactor is mechanical. Light skins set proper
-status-bar/content contrast.
+1. Theme tokens (palette/typography/shape) via CompositionLocal as
+   before — each variant carries its token set.
+2. A TodayVariant setting selects an alternative Today BODY composable.
+   Contract: every variant consumes the SAME UiState/DayListView and
+   the SAME AppViewModel callbacks. The variant owns the scrollable
+   Today content + its balance presentation.
+3. SHARED INTERACTION PRIMITIVES (non-negotiable): hold-to-complete,
+   the position-based list drag, chip rearrange, inline capture — all
+   extracted into reusable helpers (rememberDayListDragState etc.) that
+   variants restyle but never reimplement. Gesture logic took three
+   debugging rounds; nobody re-breaks it per variant.
+4. Common chrome stays single: timer bar, close-out card, AI drawer,
+   snackbars, bottom nav, Settings. Light variants set proper status
+   bar contrast.
+
+## Build order
+Pass 1: theme infra + variant host + Settings picker + FLIGHTDECK
+end-to-end (most structural ideas: capacity dial, habit pips,
+duration-block rows, segmented balance) as the template.
+Pass 2: broadsheet + bauhaus (the two light editorial/geometric ones;
+observances grid / proportional stack + shape pillars).
+Pass 3: phosphor + fieldnotes + afterburner.
+Each pass: gradle green + adb screenshot review before install.
 
 Token set per skin: bg, surface, raised, ink, inkMuted, inkFaint,
 hairline, accent, accentSoft, missed, done-treatment, pillar palette
