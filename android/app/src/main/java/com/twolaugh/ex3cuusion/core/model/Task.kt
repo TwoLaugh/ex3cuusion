@@ -116,5 +116,7 @@ data class Task(
     val completedAt: String? = null,
     val lastCompletedAt: String? = null,
     val source: String? = null,
-    val habit: Boolean? = null
+    val habit: Boolean? = null,
+    // T095: conscious release — archived guilt-free via "let go", distinct from a plain archive.
+    val released: Boolean? = null
 )

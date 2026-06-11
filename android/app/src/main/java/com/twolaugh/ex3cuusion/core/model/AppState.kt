@@ -27,5 +27,16 @@ data class AppState(
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val dayLists: List<DayList> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.ALWAYS) val traySignals: List<TraySignal> = emptyList(),
     val lastAutoOrganizeDate: String? = null,
-    val autoOrganizeEnabled: Boolean? = null
+    val autoOrganizeEnabled: Boolean? = null,
+    // T096: the single running task timer; persisted so it survives an app restart.
+    val activeTimer: ActiveTimer? = null
+)
+
+// T096: start/pause/resume/stop timer state. startedAt is the ISO timestamp of the current
+// running segment (null while paused); accumulatedMinutes is the total of finished segments.
+@Serializable
+data class ActiveTimer(
+    val taskId: String,
+    val startedAt: String? = null,
+    val accumulatedMinutes: Int = 0
 )

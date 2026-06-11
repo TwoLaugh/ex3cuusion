@@ -7,7 +7,10 @@ data class DayListEntry(
     val taskId: String,
     val order: Int,
     val pinnedTime: String? = null,
-    val source: DayListSource
+    val source: DayListSource,
+    // T095 carry honesty: how many mornings in a row this entry has carried forward unfinished.
+    // Absent for entries that were not carried.
+    val carriedCount: Int? = null
 )
 
 // T092: the user's hand-authored list for one day — the day's commitment (list-first Today).
