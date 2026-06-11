@@ -149,6 +149,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
+    fun reorderHabits(orderedTaskIds: List<String>) {
+        engine.reorderHabitTasks(orderedTaskIds)
+        refresh()
+    }
+
     fun addFromTray(taskId: String) {
         engine.addTaskToDayList(taskId, DayListSource.Tray)
         refresh()

@@ -50,6 +50,16 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -84,9 +94,11 @@ internal fun formatDuration(minutes: Int): String {
 
 // T092 balance gauge palette: stable desaturated warm tones hashed from the folder id, ported
 // 1:1 from the web (page.tsx pillarTone) so both runtimes color a pillar identically.
+// Distinct-but-calm hues: at gauge size the old near-identical browns read as one murky line
+// (adb zoom review, 2026-06-11). Hue separation does the work now; saturation stays low.
 private val pillarTones = listOf(
-    Color(0xFF8A7D66), Color(0xFF6E6353), Color(0xFF9C8872),
-    Color(0xFF5D564A), Color(0xFF7D6F5E), Color(0xFFA89B85)
+    Color(0xFFB07A45), Color(0xFF7F8B5E), Color(0xFF8B6F8F),
+    Color(0xFF5E8B8B), Color(0xFFB5A36B), Color(0xFF9C5F55)
 )
 
 internal fun pillarTone(folderId: String): Color {
@@ -187,7 +199,7 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                     Spacer(Modifier.height(20.dp))
                     SectionLabel("HABITS")
                     Spacer(Modifier.height(8.dp))
-                    HabitStrip(habits = view.habits, onToggle = viewModel::tick)
+                    HabitStrip(habits = view.habits, onToggle = viewModel::tick, onReorder = viewModel::reorderHabits)
                 }
 
                 Spacer(Modifier.height(24.dp))
@@ -356,20 +368,23 @@ private fun GaugesRow(gauges: DayListGauges) {
 
 @Composable
 internal fun BalanceBar(shares: List<DayListPillarShare>) {
+    // 2dp gaps + 5dp height + a minimum visual share: six segments must be countable at a glance.
     Row(
         Modifier
             .fillMaxWidth()
-            .height(3.dp)
-            .clip(RoundedCornerShape(2.dp))
-            .background(Ex3Colors.raised)
+            .height(5.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(Ex3Colors.raised),
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         for (pillar in shares) {
-            val share = pillar.share.toFloat()
-            if (share <= 0f) continue
+            val share = pillar.share.toFloat().coerceAtLeast(0.04f)
+            if (pillar.share <= 0.0) continue
             Box(
                 Modifier
                     .weight(share)
-                    .height(3.dp)
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(2.dp))
                     .background(pillarTone(pillar.folderId))
             )
         }
@@ -380,16 +395,72 @@ internal fun BalanceBar(shares: List<DayListPillarShare>) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun HabitStrip(habits: List<DayListHabitView>, onToggle: (String) -> Unit) {
-    // All habits visible at once (user feedback: side-scrolling means hunting). The space
-    // problem is solved by SHORT names + compact chips, not by hiding chips off-screen.
+private fun HabitStrip(
+    habits: List<DayListHabitView>,
+    onToggle: (String) -> Unit,
+    onReorder: (List<String>) -> Unit
+) {
+    // All habits visible at once; chips support BOTH gestures: hold still to complete, hold and
+    // MOVE to rearrange. Chips render in committed order during a drag (reordering composition
+    // mid-gesture kills the gesture coroutine, same trap as the list rows); the dragged chip
+    // floats via translation and the new order commits on release.
+    val order = habits.map { it.taskId }
+    val chipBounds = remember { mutableStateMapOf<String, androidx.compose.ui.geometry.Rect>() }
+    var dragChipId by remember { mutableStateOf<String?>(null) }
+    var dragDelta by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+
+    fun pendingOrder(): List<String>? {
+        val id = dragChipId ?: return null
+        val from = chipBounds[id] ?: return null
+        val center = from.center + dragDelta
+        val target = order
+            .filter { it in chipBounds }
+            .minByOrNull { (chipBounds.getValue(it).center - center).getDistanceSquared() }
+            ?: return null
+        if (target == id) return null
+        val mutable = order.toMutableList()
+        mutable.remove(id)
+        mutable.add(order.indexOf(target).coerceAtMost(mutable.size), id)
+        return mutable
+    }
+
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         for (habit in habits) {
-            HabitChip(habit = habit, onToggle = { onToggle(habit.taskId) })
+            androidx.compose.runtime.key(habit.taskId) {
+                val dragging = dragChipId == habit.taskId
+                Box(
+                    Modifier
+                        .zIndex(if (dragging) 1f else 0f)
+                        .graphicsLayer {
+                            if (dragging) {
+                                translationX = dragDelta.x
+                                translationY = dragDelta.y
+                                alpha = 0.85f
+                            }
+                        }
+                        .onGloballyPositioned { chipBounds[habit.taskId] = it.boundsInParent() }
+                ) {
+                    HabitChip(
+                        habit = habit,
+                        onToggle = { onToggle(habit.taskId) },
+                        onDragStart = {
+                            dragChipId = habit.taskId
+                            dragDelta = androidx.compose.ui.geometry.Offset.Zero
+                        },
+                        onDragBy = { dragDelta += it },
+                        onDragEnd = { cancelled ->
+                            val next = if (cancelled) null else pendingOrder()
+                            dragChipId = null
+                            dragDelta = androidx.compose.ui.geometry.Offset.Zero
+                            if (next != null) onReorder(next)
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -413,11 +484,19 @@ internal fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun HabitChip(habit: DayListHabitView, onToggle: () -> Unit) {
+private fun HabitChip(
+    habit: DayListHabitView,
+    onToggle: () -> Unit,
+    onDragStart: () -> Unit = {},
+    onDragBy: (androidx.compose.ui.geometry.Offset) -> Unit = {},
+    onDragEnd: (Boolean) -> Unit = {}
+) {
     val ticked = habit.completedToday
-    // Hold-to-complete with a left-to-right fill sweep; a quick settle pulse when the tick lands.
+    // One gesture, two outcomes: hold STILL and the fill commits the tick; MOVE past slop and the
+    // hold cancels into a rearrange drag.
     val hold = rememberHoldToComplete()
     val settle = remember { Animatable(1f) }
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     LaunchedEffect(ticked) {
         if (ticked) {
             settle.snapTo(1.08f)
@@ -429,9 +508,54 @@ private fun HabitChip(habit: DayListHabitView, onToggle: () -> Unit) {
         color = if (ticked) Ex3Colors.inkMuted else Color.Transparent,
         border = if (ticked) null else androidx.compose.foundation.BorderStroke(1.dp, Ex3Colors.inkFaint),
         modifier = Modifier
-            // tactility: the chip squeezes as the hold ring fills, then settles on commit
+            // tactility: the chip squeezes as the hold fill grows, then settles on commit
             .scale(settle.value * (1f - 0.05f * hold.progress.value))
-            .holdToComplete(hold, durationMs = 450, onComplete = onToggle)
+            .pointerInput(habit.taskId) {
+                val slop = 12.dp.toPx()
+                kotlinx.coroutines.coroutineScope {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        var total = androidx.compose.ui.geometry.Offset.Zero
+                        var draggingChip = false
+                        val fill = launch {
+                            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            hold.progress.animateTo(1f, tween(450))
+                            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            onToggle()
+                            hold.progress.snapTo(0f)
+                        }
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null) break
+                            if (!change.pressed) {
+                                change.consume()
+                                break
+                            }
+                            val delta = change.positionChange()
+                            total += delta
+                            if (!draggingChip && (kotlin.math.abs(total.x) > slop || kotlin.math.abs(total.y) > slop)) {
+                                draggingChip = true
+                                fill.cancel()
+                                launch { hold.progress.animateTo(0f, tween(100)) }
+                                haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                onDragStart()
+                                onDragBy(total)
+                            } else if (draggingChip) {
+                                onDragBy(delta)
+                            }
+                            change.consume()
+                        }
+                        if (draggingChip) {
+                            onDragEnd(false)
+                        } else if (hold.progress.value < 1f) {
+                            fill.cancel()
+                            launch { hold.progress.animateTo(0f, tween(140)) }
+                        }
+                    }
+                }
+            }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

@@ -396,6 +396,22 @@ class DomainEngine(
         return next
     }
 
+    // Reorder habit chips (user drag). Habit display order = their relative order in state.tasks;
+    // reposition the habit tasks into the array slots habit tasks already occupy, everything else
+    // untouched. Undoable.
+    fun reorderHabitTasks(orderedTaskIds: List<String>) {
+        val habitIds = state.tasks.filter { it.habit == true }.map { it.id }
+        val sanitized = orderedTaskIds.filter { it in habitIds.toSet() } + habitIds.filter { it !in orderedTaskIds.toSet() }
+        if (sanitized == habitIds) return
+        recordChange("manual_edit", "Reordered habits")
+        val byId = state.tasks.associateBy { it.id }
+        var next = 0
+        state = state.copy(tasks = state.tasks.map { task ->
+            if (task.habit == true) byId.getValue(sanitized[next++]) else task
+        })
+        persist()
+    }
+
     // state.ts uniqueFolderId: folder_0001-style, scanning existing ids for the next free number.
     private fun uniqueFolderId(): String {
         val ids = state.folders.mapTo(HashSet()) { it.id }

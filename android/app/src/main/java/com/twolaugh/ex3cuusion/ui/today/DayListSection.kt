@@ -105,7 +105,6 @@ internal fun DayListSection(
     val firstUntickedId = entries.firstOrNull { !it.completedToday }?.taskId
 
     var dragId by remember { mutableStateOf<String?>(null) }
-    var dragOffset by remember { mutableFloatStateOf(0f) }
     // Total finger travel since drag start: drives the dragged row's visual translation.
     var dragTotal by remember { mutableFloatStateOf(0f) }
     var dragOrder by remember { mutableStateOf<List<String>?>(null) }
@@ -118,40 +117,33 @@ internal fun DayListSection(
     // real reorder commits on release.
     val displayOrder = taskIds
 
+    // Position-based pending order: ONE calculation drives both the visual shifts and the final
+    // commit, so what you see mid-drag is exactly what lands (the old incremental swap math could
+    // disagree with its own preview around variable-height rows).
     fun moveDraggedRow(amountY: Float) {
         val id = dragId ?: return
-        dragOffset += amountY
         dragTotal += amountY
-        val order = dragOrder ?: return
-        val index = order.indexOf(id)
-        if (index < 0) return
-        if (dragOffset > 0f && index < order.lastIndex) {
-            val belowId = order[index + 1]
-            val belowHeight = rowHeights[belowId] ?: 0
-            if (belowHeight > 0 && dragOffset > belowHeight * 0.6f) {
-                dragOrder = order.toMutableList().apply {
-                    removeAt(index)
-                    add(index + 1, id)
-                }
-                dragOffset -= belowHeight
+        val base = taskIds.indexOf(id)
+        if (base < 0) return
+        val heights = taskIds.map { (rowHeights[it] ?: 0).toFloat() }
+        val draggedCenter = heights.take(base).sum() + heights[base] / 2f + dragTotal
+        val without = taskIds.filter { it != id }
+        var cursor = 0f
+        var insertPos = without.size
+        for ((i, rowId) in without.withIndex()) {
+            val h = (rowHeights[rowId] ?: 0).toFloat()
+            if (draggedCenter < cursor + h / 2f) {
+                insertPos = i
+                break
             }
-        } else if (dragOffset < 0f && index > 0) {
-            val aboveId = order[index - 1]
-            val aboveHeight = rowHeights[aboveId] ?: 0
-            if (aboveHeight > 0 && -dragOffset > aboveHeight * 0.6f) {
-                dragOrder = order.toMutableList().apply {
-                    removeAt(index)
-                    add(index - 1, id)
-                }
-                dragOffset += aboveHeight
-            }
+            cursor += h
         }
+        dragOrder = without.toMutableList().apply { add(insertPos, id) }
     }
 
     fun endDrag(cancelled: Boolean) {
         val finalOrder = dragOrder
         dragId = null
-        dragOffset = 0f
         dragTotal = 0f
         dragOrder = null
         if (!cancelled && finalOrder != null && finalOrder != taskIds) onReorder(finalOrder)
@@ -201,7 +193,7 @@ internal fun DayListSection(
                         onLetGo = { onLetGo(entry.taskId) },
                         onDragStart = {
                             dragId = id
-                            dragOffset = 0f
+                            dragTotal = 0f
                             dragOrder = taskIds
                         },
                         onDragBy = { moveDraggedRow(it) },
@@ -329,10 +321,22 @@ private fun ListRow(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .weight(1f)
-                    // tactility: the row warms as the hold ring fills
+                    // Hold feedback the thumb can't hide: a left-to-right warm sweep across the
+                    // whole row plus a progress line along its bottom edge (user feedback: the
+                    // checkbox ring sat exactly under the finger).
                     .drawBehind {
                         val p = hold.progress.value
-                        if (p > 0f) drawRect(Ex3Colors.accent.copy(alpha = 0.06f * p))
+                        if (p > 0f) {
+                            drawRect(
+                                color = Ex3Colors.accent.copy(alpha = 0.10f * p),
+                                size = size.copy(width = size.width * p)
+                            )
+                            drawRect(
+                                color = Ex3Colors.accent.copy(alpha = 0.85f),
+                                topLeft = Offset(0f, size.height - 2.dp.toPx()),
+                                size = androidx.compose.ui.geometry.Size(size.width * p, 2.dp.toPx())
+                            )
+                        }
                     }
                     .holdToComplete(hold, durationMs = 600, onComplete = onTick)
             ) {
