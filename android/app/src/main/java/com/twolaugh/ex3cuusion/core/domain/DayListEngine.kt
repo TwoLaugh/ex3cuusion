@@ -174,11 +174,57 @@ internal fun blankTraySignal(taskId: String): TraySignal =
 
 // Silent first-access build for a date (state.ts ensureDayList): returns the existing list or a
 // freshly built morning list plus the state now containing it. No history is recorded here.
+// T110: building for a FUTURE date is allowed (plan-ahead); and the first access of TODAY's list
+// when it was authored on an earlier date (planned ahead — committedAt before the date) runs the
+// one-shot midnight reconcile instead of returning the stored list as-is.
 fun ensureDayList(state: AppState, date: String): Pair<DayList, AppState> {
     val existing = findDayList(state, date)
-    if (existing != null) return existing to state
+    if (existing != null) {
+        if (date == state.currentDate && existing.committedAt.take(10) < date) {
+            val reconciled = reconcileDayList(state, existing)
+            return reconciled to state.copy(
+                dayLists = state.dayLists.map { if (it.date == date) reconciled else it }
+            )
+        }
+        return existing to state
+    }
     val built = buildMorningList(state, date)
     return built to state.copy(dayLists = state.dayLists + built)
+}
+
+// T110 midnight reconcile (RECONCILE, not rebuild): align a planned-ahead list with what actually
+// happened between planning and the date beginning, keeping the user's authored order.
+//   - drop entries whose task is gone, archived, or completed (exhaust-once status, or — for
+//     user-intent carried-source entries — ticked between the planning evening and this date;
+//     recurring entries are NOT dropped for an earlier-day tick, exactly like a morning build,
+//     which re-adds a daily task regardless of yesterday's completion);
+//   - append, at the end, anything a fresh morning build would now include that the plan lacks:
+//     newly unfinished carryovers from the previous list (source carried, carriedCount chained)
+//     and newly-due recurring/dated tasks (source recurring/manual);
+//   - bump committedAt to now, so the pass runs exactly once (afterwards it is a normal list).
+internal fun reconcileDayList(state: AppState, list: DayList): DayList {
+    val taskById = state.tasks.associateBy { it.id }
+    // The late-completion window: planning evening .. the day before this date (bounded for
+    // pathological committedAt values; the plan-tomorrow flow makes this a single day).
+    val windowStart = maxOf(list.committedAt.take(10), addDays(list.date, -31))
+    val kept = list.entries.sortedBy { it.order }.filter { entry ->
+        val task = taskById[entry.taskId] ?: return@filter false
+        if (task.status == TaskStatus.Archived || task.status == TaskStatus.Completed) return@filter false
+        if (entry.source in CARRIED_SOURCES) {
+            var cursor = windowStart
+            while (cursor < list.date) {
+                if (taskCompletedOnDate(state, task, cursor)) return@filter false
+                cursor = addDays(cursor, 1)
+            }
+        }
+        true
+    }
+    val keptIds = kept.mapTo(HashSet()) { it.taskId }
+    val appended = buildMorningList(state, list.date).entries.filter { it.taskId !in keptIds }
+    return list.copy(
+        committedAt = stateTimestamp(state),
+        entries = (kept + appended).mapIndexed { index, entry -> entry.copy(order = index) }
+    )
 }
 
 // --- Morning build -------------------------------------------------------------------------------
@@ -245,9 +291,20 @@ fun stateTimestamp(state: AppState): String = "${state.currentDate}T${state.curr
 // metadata, not a sort key), the habit strip with streaks, the tray (due / balance / backlog),
 // and the capacity + pillar-balance gauges. Surfacing telemetry is recorded into the returned
 // state (idempotent per date), mirroring the web's persist-on-read pattern.
-fun renderDayList(state: AppState, list: DayList): RenderedDayList {
+//
+// T110 future dates (plan-ahead rendering, date > currentDate), kept deliberately simple:
+//   - gauges use the FULL-day capacity baseline (no current-clock subtraction);
+//   - the day has not started, so every pin is "upcoming": the gap runs from midnight to the
+//     first pin (else end of evening) — at that size effectively everything fits the gap;
+//   - the time-of-day energy damping is skipped (tonight's hour says nothing about tomorrow);
+//     avoidance/backlog ranking stay as-is — they are date-relative, not clock-relative;
+//   - recordTelemetry=false suppresses the surfacing write entirely: rendering tomorrow's tray
+//     while planning must not teach the acceptance model (the engine passes the flag; the view
+//     rows then read the unstamped signals, which only affects same-day display niceties).
+fun renderDayList(state: AppState, list: DayList, recordTelemetry: Boolean = true): RenderedDayList {
     val date = list.date
-    val nowMinutes = timeToMinutes(state.currentTime)
+    val isFutureDate = date > state.currentDate
+    val nowMinutes = if (isFutureDate) 0 else timeToMinutes(state.currentTime)
     val taskById = state.tasks.associateBy { it.id }
 
     val entries = list.entries.sortedBy { it.order }.mapNotNull { entry ->
@@ -338,7 +395,7 @@ fun renderDayList(state: AppState, list: DayList): RenderedDayList {
     val rankContext = BacklogRankContext(
         gapMinutes = gapMinutes,
         avoidanceActive = avoidancePatternActive(state, date, trayCandidates),
-        highEnergyLowYield = isLowYieldHourForHighEnergy(state)
+        highEnergyLowYield = !isFutureDate && isLowYieldHourForHighEnergy(state)
     )
     val backlogPool = buildList {
         for (task in trayCandidates) {
@@ -378,11 +435,16 @@ fun renderDayList(state: AppState, list: DayList): RenderedDayList {
     // T093 telemetry: every task the tray shows today is recorded as surfaced (idempotent per
     // date). The TS mutates state on read; here the stamped signals land in the returned state,
     // and the tray row views below read the POST-stamp signals exactly like the TS does.
-    val stampedState = recordTraySurfacing(
-        state,
-        date,
-        due.map { it.id } + balanceTray.map { it.first.id } + backlogRows.map { it.task.id }
-    )
+    // T110: suppressed for plan-ahead renders — surfacing tomorrow's tray is not an offer today.
+    val stampedState = if (recordTelemetry) {
+        recordTraySurfacing(
+            state,
+            date,
+            due.map { it.id } + balanceTray.map { it.first.id } + backlogRows.map { it.task.id }
+        )
+    } else {
+        state
+    }
 
     // T093 calibrated capacity: per-folder actual/estimate ratios re-price the remaining list.
     val calibration = buildTrayCalibration(state)
@@ -414,7 +476,7 @@ fun renderDayList(state: AppState, list: DayList): RenderedDayList {
                 gapMinutes = gapMinutes
             ),
             gauges = DayListGauges(
-                capacityMinutes = calculateCapacity(state),
+                capacityMinutes = calculateCapacity(state, fullDay = isFutureDate),
                 listMinutes = listMinutes,
                 calibratedListMinutes = calibratedListMinutes,
                 balance = minutesByPillar,

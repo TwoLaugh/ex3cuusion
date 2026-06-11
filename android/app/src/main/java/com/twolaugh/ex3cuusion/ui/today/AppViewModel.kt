@@ -12,6 +12,7 @@ import com.twolaugh.ex3cuusion.core.domain.DayListView
 import com.twolaugh.ex3cuusion.core.domain.DomainEngine
 import com.twolaugh.ex3cuusion.core.domain.PagesView
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
+import com.twolaugh.ex3cuusion.core.domain.addDays
 import com.twolaugh.ex3cuusion.core.domain.buildPagesView
 import com.twolaugh.ex3cuusion.core.domain.folderPath
 import com.twolaugh.ex3cuusion.core.model.ActiveTimer
@@ -40,7 +41,11 @@ import java.time.format.DateTimeFormatter
 // T104: everything the Today screen needs in one immutable snapshot, re-derived after every
 // mutation (the StateFlow equivalent of the web's payload refetch).
 data class UiState(
+    // T110: `view` is the view for (planningDate ?: today) — while planning, every variant body
+    // renders tomorrow through the same contract without knowing.
     val view: DayListView? = null,
+    // T110 planning mode: the future date being planned, or null for the normal Today surface.
+    val planningDate: String? = null,
     val activeTimer: ActiveTimer? = null,
     val activeTimerTitle: String? = null,
     val canUndo: Boolean = false,
@@ -70,6 +75,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // T105: captures whose enrichment call is in flight.
     private val enrichingTaskIds = mutableSetOf<String>()
+
+    // T110 planning mode: the future date the Today surface is pointed at (null = today). All
+    // day-list mutations route their date through activeDate(), so the variant bodies and the
+    // warm-dark composition work unchanged while planning.
+    private var planningDate: String? = null
+
+    private fun activeDate(): String = planningDate ?: engine.state.currentDate
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -118,13 +130,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun refresh() {
-        val view = engine.dayListView()
+        // T110: when the planned date arrives (the clock ticked past midnight), planning mode is
+        // over — the surface snaps back to "today", which now IS the planned list (reconciled by
+        // ensureDayList on first view).
+        if (planningDate != null && planningDate!! <= engine.state.currentDate) planningDate = null
+        val planning = planningDate
+        val view = engine.dayListView(planning ?: engine.state.currentDate)
         val date = view.date
         val allTicked = view.entries.isNotEmpty() && view.entries.all { it.completedToday }
-        val closeoutVisible = (allTicked || date in manuallyClosedDates) && date !in dismissedCloseoutDates
+        // Close-out is a today ritual: never shown over the planning surface.
+        val closeoutVisible = planning == null &&
+            (allTicked || date in manuallyClosedDates) && date !in dismissedCloseoutDates
         val timer = engine.state.activeTimer
         _uiState.value = UiState(
             view = view,
+            planningDate = planning,
             activeTimer = timer,
             activeTimerTitle = timer?.let { active -> engine.state.tasks.find { it.id == active.taskId }?.title },
             canUndo = undoStack.size > 0,
@@ -135,6 +155,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    // --- T110 plan tomorrow -------------------------------------------------------------------------
+
+    // Point the Today surface at tomorrow. Entering pre-seeds tomorrow's list (due recurring +
+    // a live carryover preview of today's unfinished) via the engine's ensureDayList.
+    fun enterPlanning() {
+        planningDate = addDays(engine.state.currentDate, 1)
+        refresh()
+    }
+
+    fun exitPlanning() {
+        planningDate = null
+        refresh()
+    }
+
     // --- mutations (each: engine call -> persist inside the engine -> re-render) ------------------
 
     fun tick(taskId: String) {
@@ -143,12 +177,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun removeFromList(taskId: String) {
-        engine.removeTaskFromDayList(taskId)
+        engine.removeTaskFromDayList(taskId, activeDate())
         refresh()
     }
 
     fun reorder(orderedTaskIds: List<String>) {
-        engine.reorderDayList(orderedTaskIds)
+        engine.reorderDayList(orderedTaskIds, activeDate())
         refresh()
     }
 
@@ -158,12 +192,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addFromTray(taskId: String) {
-        engine.addTaskToDayList(taskId, DayListSource.Tray)
+        engine.addTaskToDayList(taskId, DayListSource.Tray, activeDate())
         refresh()
     }
 
     fun instantCapture(title: String) {
-        val taskId = engine.instantCaptureToDayList(title)
+        val taskId = engine.instantCaptureToDayList(title, activeDate())
         refresh()
         if (taskId != null) enrichCapture(taskId)
     }
@@ -233,10 +267,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
-    // Carry-nudge "someday": off today's list AND demoted to the spaced someday schedule. Two
+    // Carry-nudge "someday": off the active list AND demoted to the spaced someday schedule. Two
     // engine mutations, so undo rewinds them one at a time (both fully covered).
     fun carriedToSomeday(taskId: String) {
-        engine.removeTaskFromDayList(taskId)
+        engine.removeTaskFromDayList(taskId, activeDate())
         engine.resolveStaleTask(taskId, StaleResolution.Someday)
         refresh()
     }
@@ -247,6 +281,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startTimer(taskId: String) {
+        if (planningDate != null) return // T110: timers are a today act; the bar is hidden anyway
         engine.startTaskTimer(taskId)
         refresh()
     }
@@ -320,6 +355,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeDay() {
+        if (planningDate != null) return // T110: close-out is today-only (hidden while planning)
         manuallyClosedDates.add(engine.state.currentDate)
         refresh()
     }

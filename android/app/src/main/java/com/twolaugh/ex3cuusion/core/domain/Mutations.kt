@@ -93,11 +93,19 @@ class DomainEngine(
         state = state.copy(tasks = state.tasks.map { if (it.id == taskId) transform(it) else it })
     }
 
-    private fun todayList(): DayList = findDayList(state, state.currentDate)!!
+    // T110: the day-list mutations are date-addressed (default today) so planning tomorrow rides
+    // the exact same code paths. Callers always ensureDayList(date) first, so the !! is safe.
+    private fun dayListFor(date: String): DayList = findDayList(state, date)!!
 
-    private fun replaceTodayList(transform: (DayList) -> DayList) {
-        val date = state.currentDate
+    private fun replaceDayList(date: String, transform: (DayList) -> DayList) {
         state = state.copy(dayLists = state.dayLists.map { if (it.date == date) transform(it) else it })
+    }
+
+    // Human handle for change summaries: "today's list" / "tomorrow's list" / "the <date> list".
+    private fun listLabel(date: String): String = when (date) {
+        state.currentDate -> "today's list"
+        addDays(state.currentDate, 1) -> "tomorrow's list"
+        else -> "the $date list"
     }
 
     private fun normalizedEntries(entries: List<DayListEntry>): List<DayListEntry> =
@@ -146,18 +154,21 @@ class DomainEngine(
 
     // --- day list reads ---------------------------------------------------------------------------
 
-    // THE single read-path gate: builds + stores today's list on first access. Silent (no history).
-    fun ensureDayList(): DayList {
-        val (list, next) = ensureDayList(state, state.currentDate)
+    // THE single read-path gate: builds + stores the date's list on first access (default today;
+    // a FUTURE date pre-seeds the plan-ahead list, T110). Silent (no history). For today it also
+    // runs the one-shot midnight reconcile when the stored list was planned ahead.
+    fun ensureDayList(date: String = state.currentDate): DayList {
+        val (list, next) = ensureDayList(state, date)
         state = next
         return list
     }
 
     // The read model for the Today surface. Tray surfacing telemetry lands in state (persist-on-
-    // read, like the web repository).
-    fun dayListView(): DayListView {
-        val list = ensureDayList()
-        val rendered = renderDayList(state, list)
+    // read, like the web repository) — but ONLY for today: rendering a future date's tray while
+    // planning must not move the acceptance signals (T110).
+    fun dayListView(date: String = state.currentDate): DayListView {
+        val list = ensureDayList(date)
+        val rendered = renderDayList(state, list, recordTelemetry = date == state.currentDate)
         state = rendered.state
         persist()
         return rendered.view
@@ -168,32 +179,38 @@ class DomainEngine(
 
     // --- day list mutations -----------------------------------------------------------------------
 
-    // Append a task to today's list. Idempotent: re-adding an existing entry is a silent no-op.
-    fun addTaskToDayList(taskId: String, source: DayListSource = DayListSource.Tray) {
-        ensureDayList()
+    // Append a task to the date's list (default today). Idempotent: re-adding an existing entry
+    // is a silent no-op.
+    fun addTaskToDayList(taskId: String, source: DayListSource = DayListSource.Tray, date: String = state.currentDate) {
+        ensureDayList(date)
         val task = state.tasks.find { it.id == taskId && it.status != TaskStatus.Archived } ?: return
-        if (todayList().entries.any { it.taskId == taskId }) return
-        recordChange("day_list", "Added \"${truncateTitle(task.title)}\" to today's list")
-        val pinnedTime = if (task.scheduledDate == state.currentDate && validTime(task.scheduledTime)) task.scheduledTime else null
-        replaceTodayList { list ->
+        if (dayListFor(date).entries.any { it.taskId == taskId }) return
+        recordChange("day_list", "Added \"${truncateTitle(task.title)}\" to ${listLabel(date)}")
+        val pinnedTime = if (task.scheduledDate == date && validTime(task.scheduledTime)) task.scheduledTime else null
+        replaceDayList(date) { list ->
             list.copy(entries = normalizedEntries(list.entries + DayListEntry(taskId = taskId, order = list.entries.size, pinnedTime = pinnedTime, source = source)))
         }
         // T093 acceptance telemetry: a tray add is a positive outcome and clears the ignore streak.
-        if (source == DayListSource.Tray) {
+        // T110: TODAY's adds only — accepting a suggestion for tomorrow while planning is not the
+        // same act the signal models, and must not distort acceptance learning.
+        if (source == DayListSource.Tray && date == state.currentDate) {
             upsertTraySignal(taskId) { it.copy(addedCount = it.addedCount + 1, ignoredStreak = 0, lastOutcome = TrayOutcome.Added) }
         }
         persist()
     }
 
-    // Remove an entry from today's list (back to the tray). The task itself is untouched.
-    fun removeTaskFromDayList(taskId: String) {
-        ensureDayList()
-        if (todayList().entries.none { it.taskId == taskId }) return
+    // Remove an entry from the date's list (back to the tray). The task itself is untouched.
+    fun removeTaskFromDayList(taskId: String, date: String = state.currentDate) {
+        ensureDayList(date)
+        if (dayListFor(date).entries.none { it.taskId == taskId }) return
         val task = findTask(taskId)
-        recordChange("day_list", "Removed \"${truncateTitle(task?.title ?: taskId)}\" from today's list")
-        replaceTodayList { list -> list.copy(entries = normalizedEntries(list.entries.filter { it.taskId != taskId })) }
+        recordChange("day_list", "Removed \"${truncateTitle(task?.title ?: taskId)}\" from ${listLabel(date)}")
+        replaceDayList(date) { list -> list.copy(entries = normalizedEntries(list.entries.filter { it.taskId != taskId })) }
         // T093: eject is information, not ignoring — record it and clear the ignore streak.
-        upsertTraySignal(taskId) { it.copy(lastOutcome = TrayOutcome.Ejected, ignoredStreak = 0) }
+        // T110: today only, same reasoning as the add signal above.
+        if (date == state.currentDate) {
+            upsertTraySignal(taskId) { it.copy(lastOutcome = TrayOutcome.Ejected, ignoredStreak = 0) }
+        }
         persist()
     }
 
@@ -226,32 +243,33 @@ class DomainEngine(
         persist()
     }
 
-    // Full replacement order for today's list. Unknown/duplicate ids are ignored; entries missing
-    // from the request keep their previous relative order at the end. A no-op records nothing.
-    fun reorderDayList(orderedTaskIds: List<String>) {
-        ensureDayList()
-        val list = todayList()
+    // Full replacement order for the date's list (default today). Unknown/duplicate ids are
+    // ignored; entries missing from the request keep their previous relative order at the end.
+    // A no-op records nothing.
+    fun reorderDayList(orderedTaskIds: List<String>, date: String = state.currentDate) {
+        ensureDayList(date)
+        val list = dayListFor(date)
         val byTaskId = list.entries.associateBy { it.taskId }
         val requested = orderedTaskIds.distinct().filter { it in byTaskId }
         val requestedSet = requested.toHashSet()
         val current = list.entries.sortedBy { it.order }
         val next = requested.map { byTaskId.getValue(it) } + current.filter { it.taskId !in requestedSet }
         if (next.map { it.taskId } == current.map { it.taskId }) return
-        recordChange("day_list", "Reordered today's list")
-        replaceTodayList { it.copy(entries = normalizedEntries(next)) }
+        recordChange("day_list", "Reordered ${listLabel(date)}")
+        replaceDayList(date) { it.copy(entries = normalizedEntries(next)) }
         persist()
     }
 
     // Pin (or clear, with null) a display time on a list entry. Pins are sort/display only — the
     // capacity gauge owns the "does the day fit" question. Invalid times are rejected silently.
-    fun setDayListPin(taskId: String, pinnedTime: String?) {
-        ensureDayList()
-        val entry = todayList().entries.find { it.taskId == taskId } ?: return
+    fun setDayListPin(taskId: String, pinnedTime: String?, date: String = state.currentDate) {
+        ensureDayList(date)
+        val entry = dayListFor(date).entries.find { it.taskId == taskId } ?: return
         if (pinnedTime != null && !validTime(pinnedTime)) return
         if (entry.pinnedTime == pinnedTime) return
         val title = truncateTitle(findTask(taskId)?.title ?: taskId)
         recordChange("day_list", if (pinnedTime != null) "Pinned \"$title\" at $pinnedTime" else "Unpinned \"$title\"")
-        replaceTodayList { list ->
+        replaceDayList(date) { list ->
             list.copy(entries = list.entries.map { if (it.taskId == taskId) it.copy(pinnedTime = pinnedTime) else it })
         }
         persist()
@@ -354,13 +372,14 @@ class DomainEngine(
 
     // --- instant capture ---------------------------------------------------------------------------
 
-    // Inline instant add: create a minimal task and put it on today's list as ONE undoable change.
+    // Inline instant add: create a minimal task and put it on the date's list (default today) as
+    // ONE undoable change. Capture during planning lands on TOMORROW's list (T110).
     // AI enrichment is a SEPARATE follow-up step (T105); nothing here calls a model.
-    fun instantCaptureToDayList(title: String): String? {
+    fun instantCaptureToDayList(title: String, date: String = state.currentDate): String? {
         val cleaned = title.trim()
         if (cleaned.isEmpty()) return null
-        ensureDayList() // materialize the morning list BEFORE the snapshot so undo keeps it
-        recordChange("capture", "Captured \"${truncateTitle(cleaned)}\" to today's list")
+        ensureDayList(date) // materialize the list BEFORE the snapshot so undo keeps it
+        recordChange("capture", "Captured \"${truncateTitle(cleaned)}\" to ${listLabel(date)}")
         val task = Task(
             id = uniqueStateId(),
             title = cleaned,
@@ -379,7 +398,7 @@ class DomainEngine(
             source = "manual"
         )
         state = state.copy(tasks = state.tasks + task)
-        replaceTodayList { list ->
+        replaceDayList(date) { list ->
             list.copy(entries = normalizedEntries(list.entries + DayListEntry(taskId = task.id, order = list.entries.size, source = DayListSource.Manual)))
         }
         persist()
@@ -701,7 +720,7 @@ class DomainEngine(
 
         // Keep the list pin in sync when enrichment scheduled the task for today at a clock time
         // (enrichCapturedTask in state.ts).
-        val entry = todayList().entries.find { it.taskId == taskId }
+        val entry = dayListFor(state.currentDate).entries.find { it.taskId == taskId }
         val pinTime = next.scheduledTime?.takeIf { next.scheduledDate == state.currentDate && validTime(it) }
         val pinChanged = entry != null && pinTime != null && entry.pinnedTime != pinTime
 
@@ -710,7 +729,7 @@ class DomainEngine(
         recordChange("enrich", "AI filed: ${truncateTitle(task.title)}")
         updateTaskIn(taskId) { next }
         if (pinChanged) {
-            replaceTodayList { list ->
+            replaceDayList(state.currentDate) { list ->
                 list.copy(entries = list.entries.map { if (it.taskId == taskId) it.copy(pinnedTime = pinTime) else it })
             }
         }
@@ -820,7 +839,8 @@ class DomainEngine(
         ensureDayList() // materialize before the snapshot so undo keeps it (instantCapture pattern)
         recordChange("day_list", "Let go: \"${truncateTitle(task.title)}\"")
         updateTaskIn(taskId) { it.copy(status = TaskStatus.Archived, released = true) }
-        replaceTodayList { list -> list.copy(entries = normalizedEntries(list.entries.filter { it.taskId != taskId })) }
+        // Archiving hides the task from EVERY date's render; only today's entry needs removing.
+        replaceDayList(state.currentDate) { list -> list.copy(entries = normalizedEntries(list.entries.filter { it.taskId != taskId })) }
         persist()
     }
 

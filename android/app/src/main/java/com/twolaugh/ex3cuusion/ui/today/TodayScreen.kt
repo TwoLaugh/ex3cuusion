@@ -177,6 +177,10 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         val view = ui.view ?: return@Scaffold
+        // T110 planning mode: the surface is pointed at tomorrow (ui.view already is tomorrow's
+        // view; mutations route there in the ViewModel). Today-only chrome — timer bar and the
+        // close-out card — hides while planning.
+        val planning = ui.planningDate
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -186,7 +190,7 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
             // Slim sticky timer bar: pinned above the scrollable column so it never scrolls away.
             // Chrome stays single (ticket): variants get the same warm-dark bar.
             val timer = ui.activeTimer
-            if (timer != null) {
+            if (timer != null && planning == null) {
                 TimerBar(
                     timer = timer,
                     title = ui.activeTimerTitle ?: timer.taskId,
@@ -211,18 +215,32 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                 if (variant == null) {
                     Spacer(Modifier.height(16.dp))
 
-                    TodayHeader(
-                        date = view.date,
-                        doneCount = view.entries.count { it.completedToday },
-                        undoEnabled = ui.canUndo,
-                        onUndo = onUndoWithSnackbar,
-                        onCloseDay = viewModel::closeDay,
-                        onOpenSettings = onOpenSettings
-                    )
+                    if (planning != null) {
+                        PlanningHeader(
+                            date = planning,
+                            undoEnabled = ui.canUndo,
+                            onUndo = onUndoWithSnackbar,
+                            onBackToToday = viewModel::exitPlanning
+                        )
+                    } else {
+                        TodayHeader(
+                            date = view.date,
+                            doneCount = view.entries.count { it.completedToday },
+                            undoEnabled = ui.canUndo,
+                            onUndo = onUndoWithSnackbar,
+                            onCloseDay = viewModel::closeDay,
+                            onPlanTomorrow = viewModel::enterPlanning,
+                            onOpenSettings = onOpenSettings
+                        )
+                    }
 
-                    if (ui.closeoutVisible && ui.closeout != null) {
+                    if (planning == null && ui.closeoutVisible && ui.closeout != null) {
                         Spacer(Modifier.height(16.dp))
-                        CloseoutCard(closeout = ui.closeout!!, onDismiss = viewModel::dismissCloseout)
+                        CloseoutCard(
+                            closeout = ui.closeout!!,
+                            onDismiss = viewModel::dismissCloseout,
+                            onPlanTomorrow = viewModel::enterPlanning
+                        )
                     }
 
                     Spacer(Modifier.height(20.dp))
@@ -278,16 +296,24 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                 } else {
                     // Variant bodies carry their own headers but no undo/settings affordances
                     // (VariantActions deliberately excludes app chrome) — a slim host utility row
-                    // keeps undo, close-day and the way back to Settings reachable in every skin.
+                    // keeps undo, close-day, plan-tomorrow and the way back to Settings reachable
+                    // in every skin. While planning it also carries the back-to-today pill.
                     VariantUtilityRow(
+                        planningDate = planning,
                         undoEnabled = ui.canUndo,
                         onUndo = onUndoWithSnackbar,
                         onCloseDay = viewModel::closeDay,
+                        onPlanTomorrow = viewModel::enterPlanning,
+                        onBackToToday = viewModel::exitPlanning,
                         onOpenSettings = onOpenSettings
                     )
-                    if (ui.closeoutVisible && ui.closeout != null) {
+                    if (planning == null && ui.closeoutVisible && ui.closeout != null) {
                         Box(Modifier.padding(start = 18.dp, end = 18.dp, bottom = 10.dp)) {
-                            CloseoutCard(closeout = ui.closeout!!, onDismiss = viewModel::dismissCloseout)
+                            CloseoutCard(
+                                closeout = ui.closeout!!,
+                                onDismiss = viewModel::dismissCloseout,
+                                onPlanTomorrow = viewModel::enterPlanning
+                            )
                         }
                     }
                     VariantTodayBody(variant = variant, ui = ui, actions = actions)
@@ -313,21 +339,34 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
     }
 }
 
-// T109: minimal host chrome over a variant body — undo + the overflow (close day / Settings),
-// tinted from the skin so it stays legible on the light papers.
+// T109: minimal host chrome over a variant body — undo + the overflow (close day / plan tomorrow
+// / Settings), tinted from the skin so it stays legible on the light papers. T110: while planning
+// the row leads with the back-to-today pill and the today-only menu items hide.
 @Composable
 private fun VariantUtilityRow(
+    planningDate: String?,
     undoEnabled: Boolean,
     onUndo: () -> Unit,
     onCloseDay: () -> Unit,
+    onPlanTomorrow: () -> Unit,
+    onBackToToday: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val skin = LocalSkin.current
     Row(
-        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp)
     ) {
+        if (planningDate != null) {
+            Box(Modifier.padding(start = 8.dp)) {
+                BackToTodayPill(
+                    onClick = onBackToToday,
+                    container = skin.palette.accent,
+                    content = skin.palette.onAccent
+                )
+            }
+        }
+        Spacer(Modifier.weight(1f))
         IconButton(onClick = onUndo, enabled = undoEnabled, modifier = Modifier.size(38.dp)) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.Undo,
@@ -347,13 +386,22 @@ private fun VariantUtilityRow(
                 )
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(
-                    text = { Text("Close the day", style = MaterialTheme.typography.bodyMedium) },
-                    onClick = {
-                        menuOpen = false
-                        onCloseDay()
-                    }
-                )
+                if (planningDate == null) {
+                    DropdownMenuItem(
+                        text = { Text("Plan tomorrow", style = MaterialTheme.typography.bodyMedium) },
+                        onClick = {
+                            menuOpen = false
+                            onPlanTomorrow()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Close the day", style = MaterialTheme.typography.bodyMedium) },
+                        onClick = {
+                            menuOpen = false
+                            onCloseDay()
+                        }
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Settings", style = MaterialTheme.typography.bodyMedium) },
                     onClick = {
@@ -366,7 +414,63 @@ private fun VariantUtilityRow(
     }
 }
 
+// T110: the one obvious way out of planning mode — an accent pill, shared by the warm-dark
+// planning header and the variant utility row (colors injected so each surface stays on-palette).
+@Composable
+private fun BackToTodayPill(onClick: () -> Unit, container: Color, content: Color) {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = container,
+        modifier = Modifier.clip(RoundedCornerShape(999.dp)).clickable(onClick = onClick)
+    ) {
+        Text(
+            text = "← back to today",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Medium,
+            color = content,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+        )
+    }
+}
+
 // --- header ----------------------------------------------------------------------------------------
+
+// T110: the warm-dark planning header — "Planning <weekday d month>" with the accent back pill
+// front and center. Undo stays (planning edits are undoable); the today-only chrome does not.
+@Composable
+private fun PlanningHeader(
+    date: String,
+    undoEnabled: Boolean,
+    onUndo: () -> Unit,
+    onBackToToday: () -> Unit
+) {
+    Column {
+        Row(verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "Planning " + runCatching { LocalDate.parse(date).format(HEADER_DATE_FORMAT) }.getOrDefault(date),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Ex3Colors.ink
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "tomorrow's list — nothing here ticks today",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Ex3Colors.inkMuted
+                )
+            }
+            IconButton(onClick = onUndo, enabled = undoEnabled) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Undo,
+                    contentDescription = "Undo last change",
+                    tint = if (undoEnabled) Ex3Colors.inkMuted else Ex3Colors.inkFaint.copy(alpha = 0.5f)
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        BackToTodayPill(onClick = onBackToToday, container = Ex3Colors.accent, content = Ex3Colors.bg)
+    }
+}
 
 @Composable
 private fun TodayHeader(
@@ -375,6 +479,7 @@ private fun TodayHeader(
     undoEnabled: Boolean,
     onUndo: () -> Unit,
     onCloseDay: () -> Unit,
+    onPlanTomorrow: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Row(verticalAlignment = Alignment.Top) {
@@ -408,6 +513,13 @@ private fun TodayHeader(
                 )
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Plan tomorrow", style = MaterialTheme.typography.bodyMedium) },
+                    onClick = {
+                        menuOpen = false
+                        onPlanTomorrow()
+                    }
+                )
                 DropdownMenuItem(
                     text = { Text("Close the day", style = MaterialTheme.typography.bodyMedium) },
                     onClick = {
@@ -833,7 +945,7 @@ private fun HabitChip(
 // --- close-out card --------------------------------------------------------------------------------
 
 @Composable
-private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit) {
+private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTomorrow: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = Ex3Colors.surface,
@@ -915,6 +1027,27 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit) {
                     text = "carried to tomorrow: ${closeout.carriedForward}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Ex3Colors.inkMuted
+                )
+            }
+
+            // T110: the evening ritual continues — a calm bordered pill into planning mode.
+            Spacer(Modifier.height(14.dp))
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = Color.Transparent,
+                border = androidx.compose.foundation.BorderStroke(1.dp, Ex3Colors.accent.copy(alpha = 0.65f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onPlanTomorrow)
+            ) {
+                Text(
+                    text = "Plan tomorrow →",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = Ex3Colors.accent,
+                    modifier = Modifier.padding(vertical = 10.dp).fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
             }
         }

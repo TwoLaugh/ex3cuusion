@@ -124,10 +124,13 @@ fun taskScore(state: AppState, task: Task, date: String): Double {
         highEnergyPenalty
 }
 
-fun calculateCapacity(state: AppState): Int {
+// T110: `fullDay` skips the current-clock subtraction — the baseline for a date that has not
+// started yet (planning tomorrow tonight must not inherit tonight's nearly-spent clock). The
+// deferral/review adjustments still apply: they describe the user, not the time of day.
+fun calculateCapacity(state: AppState, fullDay: Boolean = false): Int {
     val dayEndMinutes = 22 * 60
     val remainingToday = max(45, dayEndMinutes - timeToMinutes(state.currentTime))
-    val clockAwareAvailable = min(state.availableMinutes, remainingToday)
+    val clockAwareAvailable = if (fullDay) state.availableMinutes else min(state.availableMinutes, remainingToday)
     val recentDeferrals = state.deferrals.takeLast(5)
     val overloadReasons = setOf(DeferralReason.NoTime, DeferralReason.Overplanned, DeferralReason.LowEnergy)
     val overloadSignals = recentDeferrals.count { it.reason in overloadReasons }
