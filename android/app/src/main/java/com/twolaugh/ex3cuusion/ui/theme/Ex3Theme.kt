@@ -2,16 +2,59 @@ package com.twolaugh.ex3cuusion.ui.theme
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.twolaugh.ex3cuusion.R
 
 // T109 PASS 1 — skin token sets for the layout-variant bake-off. Each variant body reads
 // LocalSkin and styles itself entirely from these tokens; the variant host (wired later)
 // provides the right skin per TodayVariant setting. Values come straight from the T109 ticket
 // (which in turn came from the planner-mockups/directions/*.jsx palettes).
+
+// ── bundled font families (res/font, all OFL) ──────────────────────────────────────────────────
+// Weight requests between the declared weights resolve to the closest available face (Compose
+// font matching), so e.g. SemiBold on JetBrains Mono picks the 700 cut.
+private val InstrumentSerif = FontFamily(
+    Font(R.font.instrument_serif_400, FontWeight.Normal)
+)
+private val ArchivoNarrow = FontFamily(
+    Font(R.font.archivo_narrow_400, FontWeight.Normal),
+    Font(R.font.archivo_narrow_600, FontWeight.SemiBold)
+)
+private val Archivo = FontFamily(
+    Font(R.font.archivo_400, FontWeight.Normal),
+    Font(R.font.archivo_600, FontWeight.SemiBold),
+    Font(R.font.archivo_900, FontWeight.Black)
+)
+private val JetBrainsMono = FontFamily(
+    Font(R.font.jetbrains_mono_400, FontWeight.Normal),
+    Font(R.font.jetbrains_mono_700, FontWeight.Bold)
+)
+private val SpaceGrotesk = FontFamily(
+    Font(R.font.space_grotesk_400, FontWeight.Normal),
+    Font(R.font.space_grotesk_500, FontWeight.Medium),
+    Font(R.font.space_grotesk_700, FontWeight.Bold)
+)
+private val IbmPlexMono = FontFamily(
+    Font(R.font.ibm_plex_mono_400, FontWeight.Normal),
+    Font(R.font.ibm_plex_mono_600, FontWeight.SemiBold)
+)
+private val SpecialElite = FontFamily(
+    Font(R.font.special_elite_400, FontWeight.Normal)
+)
+private val Caveat = FontFamily(
+    Font(R.font.caveat_400, FontWeight.Normal),
+    Font(R.font.caveat_600, FontWeight.SemiBold)
+)
+private val Rajdhani = FontFamily(
+    Font(R.font.rajdhani_500, FontWeight.Medium),
+    Font(R.font.rajdhani_700, FontWeight.Bold)
+)
 
 data class Ex3Palette(
     val bg: Color,
@@ -107,9 +150,9 @@ val BroadsheetSkin = Ex3Skin(
         isLight = true
     ),
     type = Ex3Type(
-        body = FontFamily.Serif,             // TODO res/font/instrument_serif
-        display = FontFamily.Serif,          // TODO res/font/instrument_serif
-        meta = FontFamily.SansSerif,         // TODO res/font/archivo_narrow (smallcaps labels)
+        body = InstrumentSerif,
+        display = InstrumentSerif,
+        meta = ArchivoNarrow,                // smallcaps-style labels
         labelLetterSpacing = 1.4.sp          // ≈0.14em at label sizes
     ),
     shape = Ex3Shape(radiusSmall = 0.dp, radiusLarge = 0.dp, borderWidth = 1.dp, hairlineStyle = false)
@@ -137,9 +180,9 @@ val PhosphorSkin = Ex3Skin(
         isLight = false
     ),
     type = Ex3Type(
-        body = FontFamily.Monospace,         // TODO res/font/jetbrains_mono
-        display = FontFamily.Monospace,      // TODO res/font/jetbrains_mono
-        meta = FontFamily.Monospace,         // TODO res/font/jetbrains_mono
+        body = JetBrainsMono,
+        display = JetBrainsMono,
+        meta = JetBrainsMono,
         labelLetterSpacing = 1.6.sp
     ),
     shape = Ex3Shape(radiusSmall = 0.dp, radiusLarge = 0.dp, borderWidth = 1.dp, hairlineStyle = true)
@@ -167,9 +210,9 @@ val FlightdeckSkin = Ex3Skin(
         isLight = false
     ),
     type = Ex3Type(
-        body = FontFamily.Default,           // TODO res/font/space_grotesk
-        display = FontFamily.Default,        // TODO res/font/space_grotesk
-        meta = FontFamily.Monospace,         // TODO res/font/ibm_plex_mono (all numerals)
+        body = SpaceGrotesk,
+        display = SpaceGrotesk,
+        meta = IbmPlexMono,                  // all numerals
         labelLetterSpacing = 1.8.sp          // ≈0.18em at the 9.5-10sp label sizes
     ),
     shape = Ex3Shape(radiusSmall = 4.dp, radiusLarge = 6.dp, borderWidth = 1.dp, hairlineStyle = true)
@@ -197,9 +240,9 @@ val FieldnotesSkin = Ex3Skin(
         isLight = true
     ),
     type = Ex3Type(
-        body = FontFamily.Monospace,         // TODO res/font/special_elite (typewriter)
-        display = FontFamily.Cursive,        // TODO res/font/caveat (handwritten accents)
-        meta = FontFamily.Monospace,         // TODO res/font/special_elite
+        body = SpecialElite,                 // typewriter
+        display = Caveat,                    // handwritten accents
+        meta = SpecialElite,
         labelLetterSpacing = 1.2.sp
     ),
     shape = Ex3Shape(radiusSmall = 2.dp, radiusLarge = 6.dp, borderWidth = 1.dp, hairlineStyle = false)
@@ -227,9 +270,9 @@ val AfterburnerSkin = Ex3Skin(
         isLight = false
     ),
     type = Ex3Type(
-        body = FontFamily.Default,           // TODO res/font/archivo (or system sans)
-        display = FontFamily.Default,        // TODO res/font/rajdhani
-        meta = FontFamily.Monospace,         // TODO res/font/rajdhani (numerals)
+        body = Archivo,
+        display = Rajdhani,
+        meta = Rajdhani,                     // numerals
         labelLetterSpacing = 1.6.sp
     ),
     shape = Ex3Shape(radiusSmall = 6.dp, radiusLarge = 10.dp, borderWidth = 1.dp, hairlineStyle = true)
@@ -257,18 +300,23 @@ val BauhausSkin = Ex3Skin(
         isLight = true
     ),
     type = Ex3Type(
-        body = FontFamily.Default,           // TODO res/font/archivo (400/600)
-        display = FontFamily.Default,        // TODO res/font/archivo (weight 900)
-        meta = FontFamily.Default,           // TODO res/font/archivo
+        body = Archivo,                      // 400/600
+        display = Archivo,                   // used at weight 900 (Black)
+        meta = Archivo,
         labelLetterSpacing = 1.4.sp
     ),
     shape = Ex3Shape(radiusSmall = 0.dp, radiusLarge = 0.dp, borderWidth = 2.dp, hairlineStyle = false)
 )
 
-// All seven, in ticket order — the Settings picker (wired later) iterates this list.
+// All seven, in ticket order — the Settings picker iterates this list.
 val AllSkins: List<Ex3Skin> = listOf(
     WarmDarkSkin, BroadsheetSkin, PhosphorSkin, FlightdeckSkin,
     FieldnotesSkin, AfterburnerSkin, BauhausSkin
 )
+
+// The persisted settings key for a skin ("warm-dark" -> "warm_dark").
+val Ex3Skin.key: String get() = name.replace('-', '_')
+
+fun skinForKey(key: String): Ex3Skin = AllSkins.firstOrNull { it.key == key } ?: WarmDarkSkin
 
 val LocalSkin = staticCompositionLocalOf { WarmDarkSkin }

@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 // T105 settings persistence. The OpenAI key is sensitive, so the backing file is
 // EncryptedSharedPreferences (androidx.security-crypto, AES256-GCM under an Android Keystore
@@ -49,10 +52,25 @@ class SettingsStore(context: Context) {
     val enrichmentActive: Boolean
         get() = enrichmentEnabled && apiKey.isNotBlank()
 
+    // T109: the selected layout/skin variant key (Ex3Skin.key, e.g. "warm_dark", "phosphor").
+    // Mirrored into a StateFlow so the app root and the Settings picker re-compose live on change
+    // (plain SharedPreferences has no compose-observable read).
+    var skin: String
+        get() = prefs.getString(KEY_SKIN, DEFAULT_SKIN)?.takeIf { it.isNotBlank() } ?: DEFAULT_SKIN
+        set(value) {
+            prefs.edit().putString(KEY_SKIN, value).apply()
+            _skinFlow.value = value
+        }
+
+    private val _skinFlow = MutableStateFlow(skin)
+    val skinFlow: StateFlow<String> = _skinFlow.asStateFlow()
+
     companion object {
         const val DEFAULT_MODEL = "gpt-5.4-mini"
+        const val DEFAULT_SKIN = "warm_dark"
         private const val KEY_API_KEY = "openai_api_key"
         private const val KEY_MODEL = "openai_model"
         private const val KEY_ENRICHMENT_ENABLED = "ai_enrichment_enabled"
+        private const val KEY_SKIN = "today_skin"
     }
 }

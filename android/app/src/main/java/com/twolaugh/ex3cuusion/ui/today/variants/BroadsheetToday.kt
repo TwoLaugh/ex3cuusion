@@ -122,7 +122,8 @@ fun BroadsheetTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
     val doneCount = view.entries.count { it.completedToday }
     val parsedDate = runCatching { LocalDate.parse(view.date) }.getOrNull()
 
-    Column(modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
+    // Horizontal gutter comes in via `modifier` from VariantTodayBody (TodayVariant.bodyGutter).
+    Column(modifier.fillMaxWidth()) {
         Spacer(Modifier.height(6.dp))
 
         // masthead

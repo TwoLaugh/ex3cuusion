@@ -74,7 +74,14 @@ import com.twolaugh.ex3cuusion.core.domain.CloseoutView
 import com.twolaugh.ex3cuusion.core.domain.DayListGauges
 import com.twolaugh.ex3cuusion.core.domain.DayListHabitView
 import com.twolaugh.ex3cuusion.core.domain.DayListPillarShare
+import com.twolaugh.ex3cuusion.core.domain.StaleResolution
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
+import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
+import com.twolaugh.ex3cuusion.ui.theme.key
+import com.twolaugh.ex3cuusion.ui.today.variants.TodayVariant
+import com.twolaugh.ex3cuusion.ui.today.variants.VariantActions
+import com.twolaugh.ex3cuusion.ui.today.variants.VariantBalance
+import com.twolaugh.ex3cuusion.ui.today.variants.VariantTodayBody
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -117,6 +124,13 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    // T109 host switch: the provided skin picks the Today layout. warm-dark (variant == null)
+    // renders the existing composition untouched; every other skin renders its variant body
+    // inside the SAME chrome — Scaffold, snackbars, sticky timer bar, close-out card, and the
+    // scroll column with the focus-clearing empty-space tap.
+    val skin = LocalSkin.current
+    val variant = remember(skin) { TodayVariant.entries.firstOrNull { it.skin.key == skin.key } }
+
     LifecycleResumeEffect(Unit) {
         viewModel.syncClock()
         onPauseOrDispose { }
@@ -127,8 +141,39 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
         viewModel.messages.collect { snackbarHostState.showSnackbar(it) }
     }
 
+    // Balance-sheet visibility is host state for BOTH paths: warm-dark's gauge tap and a
+    // variant's actions.openBalance() raise the same flag; the sheet itself differs per path.
+    val showBalanceSheet = remember { mutableStateOf(false) }
+
+    // The ONE wiring of a layout variant to the app: method references into the AppViewModel
+    // (so instantCapture rides the same T105 enrichment pipeline), plus the host-owned balance
+    // sheet. Remembered against the ViewModel so variant rows see a stable callback object.
+    val actions = remember(viewModel) {
+        object : VariantActions {
+            override fun tick(taskId: String) = viewModel.tick(taskId)
+            override fun removeFromList(taskId: String) = viewModel.removeFromList(taskId)
+            override fun reorder(orderedTaskIds: List<String>) = viewModel.reorder(orderedTaskIds)
+            override fun reorderHabits(orderedTaskIds: List<String>) = viewModel.reorderHabits(orderedTaskIds)
+            override fun startTimer(taskId: String) = viewModel.startTimer(taskId)
+            override fun instantCapture(title: String) = viewModel.instantCapture(title)
+            override fun addFromTray(taskId: String) = viewModel.addFromTray(taskId)
+            override fun resolveStale(taskId: String, resolution: StaleResolution) = viewModel.resolveStale(taskId, resolution)
+            override fun carriedToSomeday(taskId: String) = viewModel.carriedToSomeday(taskId)
+            override fun letGo(taskId: String) = viewModel.letGo(taskId)
+            override fun openBalance() { showBalanceSheet.value = true }
+        }
+    }
+
+    val onUndoWithSnackbar = {
+        val summary = viewModel.undo()
+        if (summary != null) {
+            scope.launch { snackbarHostState.showSnackbar("Undid: $summary") }
+        }
+        Unit
+    }
+
     Scaffold(
-        containerColor = Ex3Colors.bg,
+        containerColor = if (variant == null) Ex3Colors.bg else skin.palette.bg,
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         val view = ui.view ?: return@Scaffold
@@ -139,6 +184,7 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                 .imePadding()
         ) {
             // Slim sticky timer bar: pinned above the scrollable column so it never scrolls away.
+            // Chrome stays single (ticket): variants get the same warm-dark bar.
             val timer = ui.activeTimer
             if (timer != null) {
                 TimerBar(
@@ -158,83 +204,163 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                     // Taps on empty space release the inline-add cursor (user feedback: the
                     // typing marker used to stick around after an abandoned add).
                     .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }
-                    .padding(horizontal = 20.dp)
+                    // Variant bodies own their horizontal padding (Bauhaus runs full-bleed bars);
+                    // the warm-dark composition keeps its padding here, exactly as before.
+                    .then(if (variant == null) Modifier.padding(horizontal = 20.dp) else Modifier)
             ) {
-                Spacer(Modifier.height(16.dp))
-
-                TodayHeader(
-                    date = view.date,
-                    doneCount = view.entries.count { it.completedToday },
-                    undoEnabled = ui.canUndo,
-                    onUndo = {
-                        val summary = viewModel.undo()
-                        if (summary != null) {
-                            scope.launch { snackbarHostState.showSnackbar("Undid: $summary") }
-                        }
-                    },
-                    onCloseDay = viewModel::closeDay,
-                    onOpenSettings = onOpenSettings
-                )
-
-                if (ui.closeoutVisible && ui.closeout != null) {
+                if (variant == null) {
                     Spacer(Modifier.height(16.dp))
-                    CloseoutCard(closeout = ui.closeout!!, onDismiss = viewModel::dismissCloseout)
-                }
 
-                Spacer(Modifier.height(20.dp))
-                var showBalanceSheet by remember { mutableStateOf(false) }
-                GaugesRow(gauges = view.gauges, onBalanceTap = { showBalanceSheet = true })
-                if (showBalanceSheet) {
-                    BalanceSheet(gauges = view.gauges, onDismiss = { showBalanceSheet = false })
-                }
-
-                val median = view.gauges.medianDoneCount
-                val unticked = view.entries.count { !it.completedToday }
-                if (median != null && unticked > median + 3) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "$unticked unticked — your usual day finishes around $median",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Ex3Colors.missed
+                    TodayHeader(
+                        date = view.date,
+                        doneCount = view.entries.count { it.completedToday },
+                        undoEnabled = ui.canUndo,
+                        onUndo = onUndoWithSnackbar,
+                        onCloseDay = viewModel::closeDay,
+                        onOpenSettings = onOpenSettings
                     )
-                }
 
-                if (view.habits.isNotEmpty()) {
+                    if (ui.closeoutVisible && ui.closeout != null) {
+                        Spacer(Modifier.height(16.dp))
+                        CloseoutCard(closeout = ui.closeout!!, onDismiss = viewModel::dismissCloseout)
+                    }
+
                     Spacer(Modifier.height(20.dp))
-                    SectionLabel("HABITS")
-                    Spacer(Modifier.height(8.dp))
-                    HabitStrip(habits = view.habits, onToggle = viewModel::tick, onReorder = viewModel::reorderHabits)
-                }
+                    GaugesRow(gauges = view.gauges, onBalanceTap = { showBalanceSheet.value = true })
 
-                Spacer(Modifier.height(24.dp))
-                SectionLabel("LIST")
-                Spacer(Modifier.height(2.dp))
-                DayListSection(
-                    entries = view.entries,
-                    enrichingTaskIds = ui.enrichingTaskIds,
-                    timerRunning = ui.activeTimer != null,
-                    onTick = viewModel::tick,
-                    onRemove = viewModel::removeFromList,
-                    onReorder = viewModel::reorder,
-                    onStartTimer = viewModel::startTimer,
-                    onSomeday = viewModel::carriedToSomeday,
-                    onLetGo = viewModel::letGo,
-                    onCapture = viewModel::instantCapture
-                )
+                    val median = view.gauges.medianDoneCount
+                    val unticked = view.entries.count { !it.completedToday }
+                    if (median != null && unticked > median + 3) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "$unticked unticked — your usual day finishes around $median",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Ex3Colors.missed
+                        )
+                    }
 
-                val tray = view.tray
-                val suggestionCount = tray.due.size + tray.balance.size + tray.backlog.size
-                if (suggestionCount > 0) {
+                    if (view.habits.isNotEmpty()) {
+                        Spacer(Modifier.height(20.dp))
+                        SectionLabel("HABITS")
+                        Spacer(Modifier.height(8.dp))
+                        HabitStrip(habits = view.habits, onToggle = viewModel::tick, onReorder = viewModel::reorderHabits)
+                    }
+
                     Spacer(Modifier.height(24.dp))
-                    TrayCard(
-                        tray = tray,
-                        untickedCount = unticked,
-                        onAdd = viewModel::addFromTray,
-                        onResolveStale = viewModel::resolveStale
+                    SectionLabel("LIST")
+                    Spacer(Modifier.height(2.dp))
+                    DayListSection(
+                        entries = view.entries,
+                        enrichingTaskIds = ui.enrichingTaskIds,
+                        timerRunning = ui.activeTimer != null,
+                        onTick = viewModel::tick,
+                        onRemove = viewModel::removeFromList,
+                        onReorder = viewModel::reorder,
+                        onStartTimer = viewModel::startTimer,
+                        onSomeday = viewModel::carriedToSomeday,
+                        onLetGo = viewModel::letGo,
+                        onCapture = viewModel::instantCapture
                     )
-                }
 
-                Spacer(Modifier.height(40.dp))
+                    val tray = view.tray
+                    val suggestionCount = tray.due.size + tray.balance.size + tray.backlog.size
+                    if (suggestionCount > 0) {
+                        Spacer(Modifier.height(24.dp))
+                        TrayCard(
+                            tray = tray,
+                            untickedCount = unticked,
+                            onAdd = viewModel::addFromTray,
+                            onResolveStale = viewModel::resolveStale
+                        )
+                    }
+
+                    Spacer(Modifier.height(40.dp))
+                } else {
+                    // Variant bodies carry their own headers but no undo/settings affordances
+                    // (VariantActions deliberately excludes app chrome) — a slim host utility row
+                    // keeps undo, close-day and the way back to Settings reachable in every skin.
+                    VariantUtilityRow(
+                        undoEnabled = ui.canUndo,
+                        onUndo = onUndoWithSnackbar,
+                        onCloseDay = viewModel::closeDay,
+                        onOpenSettings = onOpenSettings
+                    )
+                    if (ui.closeoutVisible && ui.closeout != null) {
+                        Box(Modifier.padding(start = 18.dp, end = 18.dp, bottom = 10.dp)) {
+                            CloseoutCard(closeout = ui.closeout!!, onDismiss = viewModel::dismissCloseout)
+                        }
+                    }
+                    VariantTodayBody(variant = variant, ui = ui, actions = actions)
+                }
+            }
+        }
+
+        if (showBalanceSheet.value) {
+            if (variant == null) {
+                BalanceSheet(gauges = view.gauges, onDismiss = { showBalanceSheet.value = false })
+            } else {
+                // Same container as warm-dark's sheet; the variant's balance composable renders
+                // full-bleed inside it and brings its own padding/typography.
+                androidx.compose.material3.ModalBottomSheet(
+                    onDismissRequest = { showBalanceSheet.value = false },
+                    containerColor = skin.palette.surface
+                ) {
+                    VariantBalance(variant = variant, ui = ui)
+                    Spacer(Modifier.height(24.dp))
+                }
+            }
+        }
+    }
+}
+
+// T109: minimal host chrome over a variant body — undo + the overflow (close day / Settings),
+// tinted from the skin so it stays legible on the light papers.
+@Composable
+private fun VariantUtilityRow(
+    undoEnabled: Boolean,
+    onUndo: () -> Unit,
+    onCloseDay: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    val skin = LocalSkin.current
+    Row(
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp)
+    ) {
+        IconButton(onClick = onUndo, enabled = undoEnabled, modifier = Modifier.size(38.dp)) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.Undo,
+                contentDescription = "Undo last change",
+                tint = if (undoEnabled) skin.palette.inkMuted else skin.palette.inkFaint.copy(alpha = 0.5f),
+                modifier = Modifier.size(17.dp)
+            )
+        }
+        var menuOpen by remember { mutableStateOf(false) }
+        Box {
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    imageVector = Icons.Filled.MoreVert,
+                    contentDescription = "More actions",
+                    tint = skin.palette.inkMuted,
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Close the day", style = MaterialTheme.typography.bodyMedium) },
+                    onClick = {
+                        menuOpen = false
+                        onCloseDay()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Settings", style = MaterialTheme.typography.bodyMedium) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenSettings()
+                    }
+                )
             }
         }
     }

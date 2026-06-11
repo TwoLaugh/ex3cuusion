@@ -96,7 +96,8 @@ fun FlightdeckTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
     val view = ui.view ?: return
     val doneCount = view.entries.count { it.completedToday }
 
-    Column(modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
+    // Horizontal gutter comes in via `modifier` from VariantTodayBody (TodayVariant.bodyGutter).
+    Column(modifier.fillMaxWidth()) {
         Spacer(Modifier.height(8.dp))
 
         // header strip: TODAY / THU 11 JUN + sub-label, warn chip when a pillar is missing
