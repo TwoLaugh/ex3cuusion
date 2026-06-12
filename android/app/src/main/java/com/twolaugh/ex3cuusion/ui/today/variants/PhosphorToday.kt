@@ -416,6 +416,7 @@ private fun PhListRow(
             onEdit = { actions.openTask(entry.taskId) },
             onLogProgress = { actions.openTask(entry.taskId) },
             onArchive = { actions.archiveTask(entry.taskId) },
+            onDelete = { actions.deleteTask(entry.taskId) },
             modifier = Modifier.width(34.dp).fillMaxHeight().heightIn(min = 36.dp)
         ) {
             Text("≡", style = phMono(skin, 13.sp), color = skin.palette.inkFaint)
@@ -462,7 +463,7 @@ private fun PhInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
             decorationBox = { innerTextField ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (draft.isEmpty()) {
-                        Text("type to add", style = phMono(skin, 12.5.sp), color = skin.palette.inkMuted)
+                        Text("type to add · 6pm pins", style = phMono(skin, 12.5.sp), color = skin.palette.inkMuted)
                         // the block cursor, parked at the end of the prompt
                         Box(
                             Modifier

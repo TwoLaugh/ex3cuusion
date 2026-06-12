@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.PathEffect
@@ -408,6 +409,7 @@ private fun FnListRow(
             onEdit = { actions.openTask(entry.taskId) },
             onLogProgress = { actions.openTask(entry.taskId) },
             onArchive = { actions.archiveTask(entry.taskId) },
+            onDelete = { actions.deleteTask(entry.taskId) },
             modifier = Modifier.size(width = 32.dp, height = 44.dp)
         ) {
             Text("⁞", style = fnType(skin, 16.sp), color = skin.palette.inkMuted)
@@ -425,9 +427,14 @@ private fun fnRowMeta(entry: DayListEntryView, isEnriching: Boolean): String? {
     return parts.joinToString(" · ").ifEmpty { null }
 }
 
+// FOCUSED state (light-skin fix, 2026-06-12): the plain focused row over the IME read as a big
+// blank cream box on paper. Focus now draws the TYPEWRITER LINE — a solid ink rule the next
+// strike lands on — under the field, with the red cursor (accent cursorBrush) blinking on it.
+// Same heightIn/padding in both states, so the focused row stays compact above the IME.
 @Composable
 private fun FnInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
+    var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp)) {
         Text("+", style = fnType(skin, 13.sp), color = skin.palette.inkMuted, modifier = Modifier.width(23.dp))
@@ -444,14 +451,32 @@ private fun FnInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
                 if (text.isNotEmpty()) onCapture(text) else focusManager.clearFocus()
             }),
             decorationBox = { innerTextField ->
-                Box {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .drawBehind {
+                            if (focused) {
+                                // the typewriter line the next strike lands on
+                                val y = size.height + 3.dp.toPx()
+                                drawLine(
+                                    skin.palette.ink.copy(alpha = 0.7f),
+                                    start = Offset(0f, y),
+                                    end = Offset(size.width, y),
+                                    strokeWidth = 1.2.dp.toPx()
+                                )
+                            }
+                        }
+                ) {
                     if (draft.isEmpty()) {
-                        Text("type to add…", style = fnType(skin, 13.sp), color = skin.palette.inkMuted)
+                        Text("type to add… '6pm' pins it", style = fnType(skin, 13.sp), color = skin.palette.inkMuted)
                     }
                     innerTextField()
                 }
             },
-            modifier = Modifier.weight(1f).padding(vertical = 9.dp)
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 9.dp)
+                .onFocusChanged { focused = it.isFocused }
         )
     }
 }

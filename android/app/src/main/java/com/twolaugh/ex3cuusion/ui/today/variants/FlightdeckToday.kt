@@ -546,6 +546,7 @@ private fun FdPlanRow(
             onEdit = { actions.openTask(entry.taskId) },
             onLogProgress = { actions.openTask(entry.taskId) },
             onArchive = { actions.archiveTask(entry.taskId) },
+            onDelete = { actions.deleteTask(entry.taskId) },
             modifier = Modifier.width(36.dp).fillMaxHeight()
         ) {
             Text("≡", style = fdMono(skin, 14.sp, FontWeight.Normal), color = skin.palette.inkFaint)
@@ -605,7 +606,7 @@ internal fun FdInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
             decorationBox = { innerTextField ->
                 Box {
                     if (draft.isEmpty()) {
-                        Text("TYPE TO ADD", style = fdLabel(skin), color = skin.palette.inkFaint)
+                        Text("TYPE TO ADD — 6PM PINS", style = fdLabel(skin), color = skin.palette.inkFaint)
                     }
                     innerTextField()
                 }

@@ -171,6 +171,7 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
             override fun openBalance() { showBalanceSheet.value = true }
             override fun openTask(taskId: String) { sheetTaskId.value = taskId }
             override fun archiveTask(taskId: String) = viewModel.archive(taskId)
+            override fun deleteTask(taskId: String) = viewModel.deleteTask(taskId)
         }
     }
 
@@ -294,7 +295,8 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                         onLetGo = viewModel::letGo,
                         onCapture = viewModel::instantCapture,
                         onOpenTask = { sheetTaskId.value = it },
-                        onArchive = viewModel::archive
+                        onArchive = viewModel::archive,
+                        onDelete = viewModel::deleteTask
                     )
 
                     val tray = view.tray
@@ -371,6 +373,10 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                     },
                     onLetGo = {
                         viewModel.letGo(openTaskId)
+                        sheetTaskId.value = null
+                    },
+                    onDelete = {
+                        viewModel.deleteTask(openTaskId)
                         sheetTaskId.value = null
                     },
                     onDismiss = { sheetTaskId.value = null }

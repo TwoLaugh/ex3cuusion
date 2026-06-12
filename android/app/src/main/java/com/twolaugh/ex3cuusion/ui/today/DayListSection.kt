@@ -104,7 +104,8 @@ internal fun DayListSection(
     onLetGo: (String) -> Unit,
     onCapture: (String) -> Unit,
     onOpenTask: (String) -> Unit = {},
-    onArchive: (String) -> Unit = {}
+    onArchive: (String) -> Unit = {},
+    onDelete: (String) -> Unit = {}
 ) {
     val taskIds = entries.map { it.taskId }
     val firstUntickedId = entries.firstOrNull { !it.completedToday }?.taskId
@@ -198,6 +199,7 @@ internal fun DayListSection(
                         onLetGo = { onLetGo(entry.taskId) },
                         onOpenTask = { onOpenTask(entry.taskId) },
                         onArchive = { onArchive(entry.taskId) },
+                        onDelete = { onDelete(entry.taskId) },
                         onDragStart = {
                             dragId = id
                             dragTotal = 0f
@@ -233,6 +235,7 @@ private fun DismissibleListRow(
     onLetGo: () -> Unit,
     onOpenTask: () -> Unit,
     onArchive: () -> Unit,
+    onDelete: () -> Unit,
     onDragStart: () -> Unit,
     onDragBy: (Float) -> Unit,
     onDragEnd: () -> Unit,
@@ -279,6 +282,7 @@ private fun DismissibleListRow(
             onLetGo = onLetGo,
             onOpenTask = onOpenTask,
             onArchive = onArchive,
+            onDelete = onDelete,
             onDragStart = onDragStart,
             onDragBy = onDragBy,
             onDragEnd = onDragEnd,
@@ -300,6 +304,7 @@ private fun ListRow(
     onLetGo: () -> Unit,
     onOpenTask: () -> Unit,
     onArchive: () -> Unit,
+    onDelete: () -> Unit,
     onDragStart: () -> Unit,
     onDragBy: (Float) -> Unit,
     onDragEnd: () -> Unit,
@@ -513,7 +518,8 @@ private fun ListRow(
                     onDismiss = { menuOpen = false },
                     onEdit = onOpenTask,
                     onLogProgress = onOpenTask, // v1: "Log progress" opens the sheet (progress row is right there)
-                    onArchive = onArchive
+                    onArchive = onArchive,
+                    onDelete = onDelete
                 )
             }
         }
@@ -580,7 +586,7 @@ private fun InlineAddRow(onCapture: (String) -> Unit) {
                 Box {
                     if (draft.isEmpty()) {
                         Text(
-                            text = "type to add",
+                            text = "type to add — '6pm' pins",
                             style = MaterialTheme.typography.bodyLarge,
                             color = Ex3Colors.inkFaint
                         )

@@ -117,6 +117,33 @@ class ApplyEnrichmentTest {
     }
 
     @Test
+    fun `enrichment never overrides a capture-set pin`() {
+        // "Dentist 6pm" — the deterministic capture parser already pinned 18:00. The model's
+        // date/time opinions must change nothing about that pin; other refinements still apply.
+        val engine = testEngine()
+        val taskId = engine.instantCaptureToDayList("Dentist 6pm")!!
+        val applied = engine.applyEnrichment(
+            taskId,
+            fakeRevision(
+                dateIntent = RevisionDateIntent.Tomorrow,
+                scheduledTime = "17:00",
+                folderName = "Health Repair",
+                effortMinutes = 45
+            )
+        )
+        assertNotNull(applied) // folder + estimate still applied...
+        val task = engine.state.tasks.first { it.id == taskId }
+        assertEquals("domain_health", task.folderId)
+        assertEquals(45, task.effortMinutes)
+        // ...but the capture's pin stands untouched, on the task and on the entry
+        assertEquals("18:00", task.scheduledTime)
+        assertEquals(engine.state.currentDate, task.scheduledDate)
+        val entry = findDayList(engine.state, engine.state.currentDate)!!.entries.first { it.taskId == taskId }
+        assertEquals("18:00", entry.pinnedTime)
+        assertTrue(applied!!.changes.none { it.startsWith("scheduled") || it.startsWith("moved to") })
+    }
+
+    @Test
     fun `deadline intent sets dueDate and clears schedule`() {
         val (engine, taskId) = engineWithCapture()
         engine.applyEnrichment(

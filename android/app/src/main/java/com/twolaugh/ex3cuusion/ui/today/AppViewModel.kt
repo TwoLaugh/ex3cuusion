@@ -303,6 +303,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
+    // Hard delete (grip-press menu / TaskSheet, behind a confirm) — engine removes the task and
+    // every live reference (entries, signals, block selections, running timer). Undoable.
+    fun deleteTask(taskId: String) {
+        engine.deleteTask(taskId)
+        refresh()
+    }
+
     // Sheet save: ONE undoable change covering the changed fields, with the day-list pin for the
     // active (or planning) date kept in sync with the patched pinned time.
     fun saveTask(taskId: String, patch: TaskPatch) {

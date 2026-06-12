@@ -29,4 +29,6 @@ interface VariantActions {
     fun openTask(taskId: String)
     // Archive from the grip-press menu (the menu confirms inline before calling this).
     fun archiveTask(taskId: String)
+    // Hard delete from the grip-press menu / TaskSheet (both confirm via dialog before calling).
+    fun deleteTask(taskId: String)
 }

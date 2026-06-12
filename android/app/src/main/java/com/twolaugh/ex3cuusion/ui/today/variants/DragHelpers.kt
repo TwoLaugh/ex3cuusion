@@ -190,6 +190,7 @@ fun VariantGripHandle(
     onEdit: () -> Unit,
     onLogProgress: () -> Unit,
     onArchive: () -> Unit,
+    onDelete: () -> Unit,
     modifier: Modifier = Modifier,
     glyph: @Composable () -> Unit
 ) {
@@ -204,7 +205,8 @@ fun VariantGripHandle(
             onDismiss = { menuOpen = false },
             onEdit = onEdit,
             onLogProgress = onLogProgress,
-            onArchive = onArchive
+            onArchive = onArchive,
+            onDelete = onDelete
         )
     }
 }

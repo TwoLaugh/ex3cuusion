@@ -389,25 +389,36 @@ class DomainEngine(
     // --- instant capture ---------------------------------------------------------------------------
 
     // Inline instant add: create a minimal task and put it on the date's list (default today) as
-    // ONE undoable change. Capture during planning lands on TOMORROW's list (T110).
-    // AI enrichment is a SEPARATE follow-up step (T105); nothing here calls a model.
+    // ONE undoable change. Capture during planning lands on TOMORROW's list (T110) — the time
+    // grammar rides the same date parameter, so "Pack bag 7am" while planning pins tomorrow.
+    // AI enrichment is a SEPARATE follow-up step (T105); nothing here calls a model. A trailing
+    // time token (parseCaptureTime — the capture field IS the time picker) pins the task
+    // deterministically FIRST: scheduledDate/scheduledTime on the task + pinnedTime on the
+    // entry, inside the same single undoable change.
     fun instantCaptureToDayList(title: String, date: String = state.currentDate): String? {
         val cleaned = title.trim()
         if (cleaned.isEmpty()) return null
+        val parsed = parseCaptureTime(cleaned, state.currentTime)
         ensureDayList(date) // materialize the list BEFORE the snapshot so undo keeps it
-        recordChange("capture", "Captured \"${truncateTitle(cleaned)}\" to ${listLabel(date)}")
+        recordChange("capture", "Captured \"${truncateTitle(parsed.title)}\" to ${listLabel(date)}")
         val task = Task(
             id = uniqueStateId(),
-            title = cleaned,
+            title = parsed.title,
             type = TaskType.Atomic,
             status = TaskStatus.Active,
             repeatPolicy = RepeatPolicy.None,
             completionBehavior = CompletionBehavior.ExhaustOnce,
             completionMode = CompletionMode.SimpleDone,
-            plannerFields = PlannerFields(intentType = IntentType.Obligation, pressureLevel = PressureLevel.Soft),
+            plannerFields = PlannerFields(
+                intentType = IntentType.Obligation,
+                // a clock-pinned task is Scheduled, the same invariant applyRevisionTime keeps
+                pressureLevel = if (parsed.time != null) PressureLevel.Scheduled else PressureLevel.Soft
+            ),
             priority = 5,
             importance = 3,
             urgency = 3,
+            scheduledDate = if (parsed.time != null) date else null,
+            scheduledTime = parsed.time,
             effortMinutes = 30,
             energy = Energy.Medium,
             strictness = Strictness.Normal,
@@ -415,7 +426,7 @@ class DomainEngine(
         )
         state = state.copy(tasks = state.tasks + task)
         replaceDayList(date) { list ->
-            list.copy(entries = normalizedEntries(list.entries + DayListEntry(taskId = task.id, order = list.entries.size, source = DayListSource.Manual)))
+            list.copy(entries = normalizedEntries(list.entries + DayListEntry(taskId = task.id, order = list.entries.size, pinnedTime = parsed.time, source = DayListSource.Manual)))
         }
         persist()
         return task.id
@@ -738,8 +749,16 @@ class DomainEngine(
             changes += "moved under ${folder.name}"
         }
 
-        applyRevisionDate(next, revision)?.let { (dated, label) -> next = dated; changes += label }
-        applyRevisionTime(next, revision)?.let { (timed, label) -> next = timed; changes += label }
+        // Capture-set times take precedence: a valid scheduledTime already on the task means the
+        // DETERMINISTIC capture parser pinned it from the user's own words ("dentist 6pm") — an
+        // explicit choice the model must never move, clear, or override. Every revision date
+        // branch clears or rewrites scheduledTime, so date AND time application are skipped
+        // wholesale; folder/effort/priority/done-state/notes still refine the capture.
+        val capturePinned = validTime(task.scheduledTime)
+        if (!capturePinned) {
+            applyRevisionDate(next, revision)?.let { (dated, label) -> next = dated; changes += label }
+            applyRevisionTime(next, revision)?.let { (timed, label) -> next = timed; changes += label }
+        }
 
         // Web: `if (revision.effortMinutes && revision.effortMinutes !== task.effortMinutes)`.
         // The schema promises 5..480; clamp anyway since nothing else validates it on this side.
@@ -1093,6 +1112,31 @@ class DomainEngine(
         val task = findTask(taskId) ?: return
         recordChange("manual_edit", "Archived task \"${truncateTitle(task.title)}\"")
         updateTaskIn(taskId) { it.copy(status = TaskStatus.Archived) }
+        persist()
+    }
+
+    // HARD delete — the third, strongest exit, distinct from archive (kept, findable) and
+    // releaseTask (kept, guilt-free): the task and every live reference to it leave the state —
+    // its entries on ALL day lists (today, tomorrow, any planned date), its tray signal, its id
+    // inside folderBlockSelections, and the running timer if it points here. Completion/
+    // execution history is deliberately KEPT (past days already happened; the close-out and
+    // calibration must not rewrite). One undoable change.
+    fun deleteTask(taskId: String) {
+        val task = findTask(taskId) ?: return
+        recordChange("manual_edit", "Deleted \"${truncateTitle(task.title)}\"")
+        state = state.copy(
+            tasks = state.tasks.filter { it.id != taskId },
+            dayLists = state.dayLists.map { list ->
+                if (list.entries.none { it.taskId == taskId }) list
+                else list.copy(entries = normalizedEntries(list.entries.filter { it.taskId != taskId }))
+            },
+            traySignals = state.traySignals.filter { it.taskId != taskId },
+            folderBlockSelections = state.folderBlockSelections.map { selection ->
+                if (taskId !in selection.selectedTaskIds) selection
+                else selection.copy(selectedTaskIds = selection.selectedTaskIds.filter { it != taskId })
+            },
+            activeTimer = state.activeTimer?.takeIf { it.taskId != taskId }
+        )
         persist()
     }
 

@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -447,6 +448,7 @@ private fun BhListRow(
             onEdit = { actions.openTask(entry.taskId) },
             onLogProgress = { actions.openTask(entry.taskId) },
             onArchive = { actions.archiveTask(entry.taskId) },
+            onDelete = { actions.deleteTask(entry.taskId) },
             modifier = Modifier.size(width = 32.dp, height = 44.dp)
         ) {
             Text("≡", style = bhDisplay(skin, 13.sp), color = skin.palette.inkMuted)
@@ -472,9 +474,14 @@ private fun bhRowMeta(entry: DayListEntryView, isTimerActive: Boolean, isEnrichi
     return parts.joinToString(" · ")
 }
 
+// FOCUSED state (light-skin fix, 2026-06-12): the plain focused row over the IME read as a big
+// blank box on the white ground. Focus now sets a BOLD UNDERLINE RULE — the bauhaus stroke —
+// under the field, so the writing area reads as a deliberate element. Same heightIn/padding in
+// both states; the focused row stays compact above the IME.
 @Composable
 private fun BhInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
+    var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp)) {
         Text("＋", style = bhSans(skin, 12.sp), color = skin.palette.inkMuted)
@@ -492,14 +499,30 @@ private fun BhInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
                 if (text.isNotEmpty()) onCapture(text) else focusManager.clearFocus()
             }),
             decorationBox = { innerTextField ->
-                Box {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .drawBehind {
+                            if (focused) {
+                                // the bold rule the entry is set on
+                                drawRect(
+                                    skin.palette.ink,
+                                    topLeft = Offset(0f, size.height + 2.dp.toPx()),
+                                    size = Size(size.width, 3.dp.toPx())
+                                )
+                            }
+                        }
+                ) {
                     if (draft.isEmpty()) {
-                        Text("type to add", style = bhSans(skin, 12.sp), color = skin.palette.inkMuted)
+                        Text("type to add — 6pm pins", style = bhSans(skin, 12.sp), color = skin.palette.inkMuted)
                     }
                     innerTextField()
                 }
             },
-            modifier = Modifier.weight(1f).padding(vertical = 8.dp)
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 8.dp)
+                .onFocusChanged { focused = it.isFocused }
         )
     }
 }

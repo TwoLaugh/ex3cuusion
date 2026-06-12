@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -443,6 +444,7 @@ private fun BsAgendaRow(
             onEdit = { actions.openTask(entry.taskId) },
             onLogProgress = { actions.openTask(entry.taskId) },
             onArchive = { actions.archiveTask(entry.taskId) },
+            onDelete = { actions.deleteTask(entry.taskId) },
             modifier = Modifier.size(width = 34.dp, height = 44.dp)
         ) {
             Text("⁞", style = bsSerif(skin, 18.sp), color = skin.palette.inkMuted)
@@ -463,9 +465,16 @@ private fun bsRowAnnotation(entry: DayListEntryView, isEnriching: Boolean): Stri
     return parts.joinToString(" — ").ifEmpty { null }
 }
 
+// FOCUSED state (light-skin fix, 2026-06-12): with the IME up, the plain focused row read as a
+// big blank framed cream region between the agenda's hairline rules (invisible on dark skins,
+// glaring on paper). Focus now draws a DOTTED LEDGER WRITING LINE under the entry being set —
+// ruling on paper — with the italic hint floating above it, so the open writing area reads
+// intentional. The row's height does not change between states (same heightIn/padding), so the
+// focused field sits compactly just above the IME.
 @Composable
 private fun BsInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
+    var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)) {
         Text("＋", style = bsSerif(skin, 15.sp, italic = true), color = skin.palette.inkMuted, modifier = Modifier.width(20.dp))
@@ -482,14 +491,37 @@ private fun BsInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
                 if (text.isNotEmpty()) onCapture(text) else focusManager.clearFocus()
             }),
             decorationBox = { innerTextField ->
-                Box {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .drawBehind {
+                            if (focused) {
+                                // the ledger line the new entry is being written on
+                                val y = size.height + 4.dp.toPx()
+                                drawLine(
+                                    skin.palette.inkMuted,
+                                    start = Offset(0f, y),
+                                    end = Offset(size.width, y),
+                                    strokeWidth = 1.dp.toPx(),
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(1.5.dp.toPx(), 3.dp.toPx()))
+                                )
+                            }
+                        }
+                ) {
                     if (draft.isEmpty()) {
-                        Text("type to add an entry…", style = bsSerif(skin, 15.sp, italic = true), color = skin.palette.inkMuted)
+                        Text(
+                            "type to add an entry — 'at 6' sets its hour",
+                            style = bsSerif(skin, if (focused) 13.sp else 15.sp, italic = true),
+                            color = skin.palette.inkMuted
+                        )
                     }
                     innerTextField()
                 }
             },
-            modifier = Modifier.weight(1f).padding(vertical = 10.dp)
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 10.dp)
+                .onFocusChanged { focused = it.isFocused }
         )
     }
 }

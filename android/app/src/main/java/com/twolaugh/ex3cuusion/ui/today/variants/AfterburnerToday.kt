@@ -536,6 +536,7 @@ private fun AbListRow(
             onEdit = { actions.openTask(entry.taskId) },
             onLogProgress = { actions.openTask(entry.taskId) },
             onArchive = { actions.archiveTask(entry.taskId) },
+            onDelete = { actions.deleteTask(entry.taskId) },
             modifier = Modifier.width(32.dp).heightIn(min = 48.dp)
         ) {
             Text("≡", style = abNum(skin, 14.sp, FontWeight.Medium), color = skin.palette.inkFaint)
@@ -586,7 +587,7 @@ private fun AbInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
             decorationBox = { innerTextField ->
                 Box {
                     if (draft.isEmpty()) {
-                        Text("TYPE TO ADD", style = abLabel(skin), color = skin.palette.inkFaint)
+                        Text("TYPE TO ADD — 6PM PINS", style = abLabel(skin), color = skin.palette.inkFaint)
                     }
                     innerTextField()
                 }

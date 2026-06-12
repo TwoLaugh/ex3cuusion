@@ -97,17 +97,21 @@ fun repeatSummaryText(policy: RepeatPolicy): String = when (policy) {
 
 // The DropdownMenu behind every grip press (warm-dark rows AND the six variants — "a plain
 // skin-toned DropdownMenu is acceptable in all skins for v1"). Archive confirms INLINE: the
-// first tap arms the item, the second commits; closing the menu disarms.
+// first tap arms the item, the second commits; closing the menu disarms. Delete (the hard
+// remove, below Archive) confirms via a real dialog — it is the one destructive act undo is
+// the only way back from per-reference, so it gets the full stop.
 @Composable
 fun TaskRowMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onLogProgress: () -> Unit,
-    onArchive: () -> Unit
+    onArchive: () -> Unit,
+    onDelete: () -> Unit
 ) {
     val skin = LocalSkin.current
     var confirmArchive by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     LaunchedEffect(expanded) { if (!expanded) confirmArchive = false }
     DropdownMenu(
         expanded = expanded,
@@ -139,7 +143,44 @@ fun TaskRowMenu(
                 }
             }
         )
+        DropdownMenuItem(
+            text = { Text("Delete", style = MaterialTheme.typography.bodyMedium, color = skin.palette.missed) },
+            onClick = {
+                onDismiss()
+                confirmDelete = true
+            }
+        )
     }
+    if (confirmDelete) {
+        DeleteConfirmDialog(
+            skin = skin,
+            onConfirm = { confirmDelete = false; onDelete() },
+            onCancel = { confirmDelete = false }
+        )
+    }
+}
+
+// The shared Delete confirm (grip-press menu AND the TaskSheet actions row use the same words).
+@Composable
+internal fun DeleteConfirmDialog(skin: Ex3Skin, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = skin.palette.surface,
+        title = { Text("Delete permanently?", style = MaterialTheme.typography.titleMedium, color = skin.palette.ink) },
+        text = {
+            Text(
+                "Archive keeps it findable.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = skin.palette.inkMuted
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Delete", color = skin.palette.missed) }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("Cancel", color = skin.palette.inkMuted) }
+        }
+    )
 }
 
 // --- the sheet ----------------------------------------------------------------------------------------
@@ -152,6 +193,7 @@ fun TaskSheet(
     onLogProgress: (Int) -> Unit,
     onArchive: () -> Unit,
     onLetGo: () -> Unit,
+    onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val skin = LocalSkin.current
@@ -391,6 +433,16 @@ fun TaskSheet(
                         .clickable { confirm = SheetConfirm.LetGo }
                         .padding(vertical = 8.dp, horizontal = 4.dp)
                 )
+                Spacer(Modifier.width(18.dp))
+                Text(
+                    "Delete",
+                    style = sheetBody(skin),
+                    color = skin.palette.missed,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(skin.shape.radiusSmall))
+                        .clickable { confirm = SheetConfirm.Delete }
+                        .padding(vertical = 8.dp, horizontal = 4.dp)
+                )
                 Spacer(Modifier.weight(1f))
                 Surface(
                     shape = RoundedCornerShape(999.dp),
@@ -430,11 +482,17 @@ fun TaskSheet(
             onConfirm = { confirm = null; onLetGo() },
             onCancel = { confirm = null }
         )
+        // The hard remove shares the grip-press menu's exact confirm (one set of words app-wide).
+        SheetConfirm.Delete -> DeleteConfirmDialog(
+            skin = skin,
+            onConfirm = { confirm = null; onDelete() },
+            onCancel = { confirm = null }
+        )
         null -> {}
     }
 }
 
-private enum class SheetConfirm { Archive, LetGo }
+private enum class SheetConfirm { Archive, LetGo, Delete }
 
 @Composable
 private fun SheetConfirmDialog(
