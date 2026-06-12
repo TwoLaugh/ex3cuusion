@@ -274,6 +274,22 @@ fun pillarIndexFor(folderPath: String?, balance: List<DayListPillarShare>): Int 
 
 fun pillarNameFor(folderPath: String?): String? = folderPath?.substringBefore(" / ")
 
+// Day-shape: stable tone index for a pillar FOLDER ID. Pillars with actual minutes keep the
+// position they already hold in gauges.balance (so an intent mark and its actual fill share a
+// tone); pillars that only exist as intent today get the slots after the balance ones, in
+// deviation order — every pillar gets a distinct, render-stable tone either way.
+fun dayShapeToneIndex(
+    folderId: String,
+    deviations: List<com.twolaugh.ex3cuusion.core.domain.DayShapeDeviation>,
+    balance: List<DayListPillarShare>
+): Int {
+    val inBalance = balance.indexOfFirst { it.folderId == folderId }
+    if (inBalance >= 0) return inBalance
+    val intentOnly = deviations.filter { d -> balance.none { it.folderId == d.folderId } }
+    val slot = intentOnly.indexOfFirst { it.folderId == folderId }
+    return if (slot >= 0) balance.size + slot else -1
+}
+
 // The folder leaf used as a row tag ("Meditation", "Kickboxing"...).
 fun folderLeaf(folderPath: String?): String? = folderPath?.substringAfterLast(" / ")
 

@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.twolaugh.ex3cuusion.core.domain.DayListEntryView
 import com.twolaugh.ex3cuusion.core.domain.DayListHabitView
+import com.twolaugh.ex3cuusion.core.domain.DayShapeIntent
+import com.twolaugh.ex3cuusion.core.domain.DayShapeSeverity
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Skin
 import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
@@ -135,7 +137,12 @@ fun FieldnotesTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
                     style = fnHand(skin, 19.sp), color = skin.palette.ink
                 )
             }
-            FnCapacityBar(skin = skin, listMinutes = gauges.listMinutes, capacityMinutes = gauges.capacityMinutes)
+            FnCapacityBar(
+                skin = skin,
+                listMinutes = gauges.listMinutes,
+                capacityMinutes = gauges.capacityMinutes,
+                intents = gauges.intentShares
+            )
             val openMinutes = gauges.capacityMinutes - gauges.listMinutes
             Text(
                 if (openMinutes >= 0) "↑ leave room to breathe (${formatDuration(openMinutes)})"
@@ -223,9 +230,15 @@ fun FieldnotesTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
 }
 
 // Hand-drawn capacity bar: ink outline, red hatch strokes to the planned fraction, a dashed
-// ink day-mark at the fill edge.
+// ink day-mark at the fill edge. Day-shape: small red intent MARKS — short pen ticks proud of
+// the top edge at the cumulative pillar-share boundaries (where the day meant to change gears).
 @Composable
-private fun FnCapacityBar(skin: Ex3Skin, listMinutes: Int, capacityMinutes: Int) {
+private fun FnCapacityBar(
+    skin: Ex3Skin,
+    listMinutes: Int,
+    capacityMinutes: Int,
+    intents: List<DayShapeIntent> = emptyList()
+) {
     val frac = when {
         capacityMinutes > 0 -> (listMinutes.toFloat() / capacityMinutes).coerceIn(0f, 1f)
         listMinutes > 0 -> 1f
@@ -233,6 +246,19 @@ private fun FnCapacityBar(skin: Ex3Skin, listMinutes: Int, capacityMinutes: Int)
     }
     Canvas(Modifier.fillMaxWidth().height(26.dp).padding(vertical = 2.dp)) {
         val inset = 1.dp.toPx()
+        // the red intent marks (last boundary = the bar end; the outline already marks it)
+        var cumulative = 0.0
+        for (intent in intents.dropLast(1)) {
+            cumulative += intent.share
+            val tx = inset + (size.width - 2 * inset) * cumulative.toFloat()
+            drawLine(
+                skin.palette.accent,
+                start = Offset(tx + 1.dp.toPx(), -1.dp.toPx()),
+                end = Offset(tx - 1.dp.toPx(), 6.dp.toPx()),
+                strokeWidth = 2.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        }
         // the box, drawn slightly heavy like a pen pass
         drawRect(
             skin.palette.ink,
@@ -604,7 +630,9 @@ fun FieldnotesBalance(ui: UiState, modifier: Modifier = Modifier) {
         }
 
         Spacer(Modifier.height(14.dp))
+        val deviationById = gauges.deviations.associateBy { it.folderId }
         gauges.balance.forEach { pillar ->
+            val deviation = deviationById[pillar.folderId]
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -625,6 +653,15 @@ fun FieldnotesBalance(ui: UiState, modifier: Modifier = Modifier) {
                         style = fnType(skin, 15.sp), color = skin.palette.ink, modifier = Modifier.weight(1f)
                     )
                     Text(formatDuration(pillar.minutes) + " ", style = fnHand(skin, 19.sp), color = skin.palette.ink)
+                    // day-shape: what the day MEANT for this pillar, in the margin hand — red
+                    // only when the loose tolerance is actually broken
+                    if (deviation != null) {
+                        Text(
+                            "(meant ~${formatDuration(deviation.intentMinutes)}) ",
+                            style = fnHand(skin, 16.sp),
+                            color = if (deviation.severity != DayShapeSeverity.None) red else skin.palette.inkMuted
+                        )
+                    }
                     Text("(${(pillar.share * 100).toInt()}%)", style = fnHand(skin, 16.sp), color = skin.palette.inkMuted)
                 }
                 Spacer(Modifier.height(4.dp))

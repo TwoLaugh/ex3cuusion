@@ -47,7 +47,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.twolaugh.ex3cuusion.core.domain.DayListEntryView
 import com.twolaugh.ex3cuusion.core.domain.DayListHabitView
+import com.twolaugh.ex3cuusion.core.domain.DayShapeIntent
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
+import com.twolaugh.ex3cuusion.core.domain.dayShapeNudge
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Skin
 import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 import com.twolaugh.ex3cuusion.ui.today.UiState
@@ -162,15 +164,26 @@ fun BroadsheetTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
             )
         }
         Spacer(Modifier.height(5.dp))
-        BsCapacityBar(skin = skin, listMinutes = view.gauges.listMinutes, capacityMinutes = view.gauges.capacityMinutes)
+        BsCapacityBar(
+            skin = skin,
+            listMinutes = view.gauges.listMinutes,
+            capacityMinutes = view.gauges.capacityMinutes,
+            intents = view.gauges.intentShares
+        )
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
             Text("BALANCE", style = bsCaps(skin, 9.sp), color = skin.palette.ink, modifier = Modifier.weight(1f))
-            val missing = view.gauges.missingPillars.firstOrNull()
+            // The red annotation is THE single day-shape nudge (largest under-deviation past the
+            // loose tolerance) — never a per-pillar nag.
+            val nudge = dayShapeNudge(view.gauges)
             Text(
-                if (missing != null) "nothing yet from ${missing} →" else "every area attended ❧",
+                if (nudge != null) {
+                    "${nudge.name.lowercase(Locale.UK)}: ${formatDuration(nudge.actualMinutes)} of ~${formatDuration(nudge.intentMinutes)} intended →"
+                } else {
+                    "the day holds its shape ❧"
+                },
                 style = bsSerif(skin, 13.sp, italic = true),
-                color = if (missing != null) skin.palette.accent else skin.palette.inkMuted,
+                color = if (nudge != null) skin.palette.accent else skin.palette.inkMuted,
                 modifier = Modifier.clickable(onClick = actions::openBalance)
             )
         }
@@ -251,8 +264,15 @@ fun BroadsheetTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
 }
 
 // Hatched fill to the planned fraction, red day-mark at the fill edge (the mockup's 84% line).
+// Day-shape: fine ink tick RULES mark the intent boundaries — cumulative pillar shares of the
+// capacity — so the hatch is read against where the day MEANT to apportion itself.
 @Composable
-private fun BsCapacityBar(skin: Ex3Skin, listMinutes: Int, capacityMinutes: Int) {
+private fun BsCapacityBar(
+    skin: Ex3Skin,
+    listMinutes: Int,
+    capacityMinutes: Int,
+    intents: List<DayShapeIntent> = emptyList()
+) {
     val frac = when {
         capacityMinutes > 0 -> (listMinutes.toFloat() / capacityMinutes).coerceIn(0f, 1f)
         listMinutes > 0 -> 1f
@@ -279,6 +299,19 @@ private fun BsCapacityBar(skin: Ex3Skin, listMinutes: Int, capacityMinutes: Int)
                         )
                         x += step
                     }
+                }
+                // intent tick rules at the cumulative share boundaries (the last lands on the
+                // bar's end and is skipped — the border already rules it)
+                var cumulative = 0.0
+                for (intent in intents.dropLast(1)) {
+                    cumulative += intent.share
+                    val tx = inset + (size.width - 2 * inset) * cumulative.toFloat()
+                    drawLine(
+                        skin.palette.ink.copy(alpha = 0.55f),
+                        start = Offset(tx, 0f),
+                        end = Offset(tx, size.height),
+                        strokeWidth = 1.dp.toPx()
+                    )
                 }
                 // the red mark, slightly proud of the bar
                 drawRect(
@@ -674,8 +707,9 @@ fun BroadsheetBalance(ui: UiState, modifier: Modifier = Modifier) {
             Text("OPEN — ${formatDuration(openMinutes).uppercase(Locale.UK)}", style = bsCaps(skin, 8.sp), color = skin.palette.inkMuted)
         }
 
-        // ledger table: hatch swatch, name, dotted leader, time, percent
+        // ledger table: hatch swatch, name, dotted leader, time + "of ~Xh intended", percent
         Spacer(Modifier.height(12.dp))
+        val deviationById = gauges.deviations.associateBy { it.folderId }
         gauges.balance.forEachIndexed { i, pillar ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -714,7 +748,16 @@ fun BroadsheetBalance(ui: UiState, modifier: Modifier = Modifier) {
                             )
                         }
                 )
-                Text(formatDuration(pillar.minutes), style = bsSerif(skin, 18.sp), color = skin.palette.ink)
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(formatDuration(pillar.minutes), style = bsSerif(skin, 18.sp), color = skin.palette.ink)
+                    val intentMinutes = deviationById[pillar.folderId]?.intentMinutes
+                    if (intentMinutes != null) {
+                        Text(
+                            "of ~${formatDuration(intentMinutes)} intended",
+                            style = bsSerif(skin, 12.sp, italic = true), color = skin.palette.inkMuted
+                        )
+                    }
+                }
                 Text(
                     "${(pillar.share * 100).toInt()}%",
                     style = bsCaps(skin, 11.sp), color = skin.palette.inkMuted,
@@ -723,10 +766,12 @@ fun BroadsheetBalance(ui: UiState, modifier: Modifier = Modifier) {
             }
         }
 
-        if (gauges.missingPillars.isNotEmpty()) {
+        // the one red notice = THE day-shape nudge (largest under-deviation, loose tolerance)
+        val nudge = dayShapeNudge(gauges)
+        if (nudge != null) {
             Spacer(Modifier.height(14.dp))
             Text(
-                "Notice — nothing today from: ${gauges.missingPillars.joinToString(", ")}.",
+                "Notice — ${nudge.name}: ${formatDuration(nudge.actualMinutes)} of ~${formatDuration(nudge.intentMinutes)} intended.",
                 style = bsSerif(skin, 17.sp, italic = true), color = skin.palette.accent,
                 textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()
             )

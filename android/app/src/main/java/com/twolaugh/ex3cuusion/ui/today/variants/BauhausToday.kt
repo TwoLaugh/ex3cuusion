@@ -625,6 +625,35 @@ fun BauhausBalance(ui: UiState, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(12.dp))
 
             Row(Modifier.fillMaxWidth()) {
+                // Day-shape: the INTENT column — dashed outline blocks (the same dashed voice as
+                // OPEN) sized share × capacity, in the same pillar order as the built stack, so
+                // meant-vs-built reads side by side.
+                val orderedDeviations = gauges.balance.mapNotNull { p -> gauges.deviations.find { it.folderId == p.folderId } } +
+                    gauges.deviations.filter { d -> gauges.balance.none { it.folderId == d.folderId } }
+                if (orderedDeviations.isNotEmpty()) {
+                    Column(Modifier.width(34.dp)) {
+                        orderedDeviations.forEachIndexed { i, deviation ->
+                            if (i > 0) Spacer(Modifier.height(2.dp))
+                            val toneIdx = dayShapeToneIndex(deviation.folderId, gauges.deviations, gauges.balance)
+                            val tone = if (toneIdx >= 0) skin.palette.pillarTones[toneIdx % skin.palette.pillarTones.size] else skin.palette.inkMuted
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(max(10f, deviation.intentMinutes * scale - 2f).dp)
+                                    .drawBehind {
+                                        drawRect(
+                                            tone,
+                                            style = Stroke(
+                                                2.dp.toPx(),
+                                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()))
+                                            )
+                                        )
+                                    }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                }
                 // 100%-of-capacity stacked bar
                 Column(Modifier.width(92.dp)) {
                     if (openMinutes > 0) {

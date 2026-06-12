@@ -227,16 +227,28 @@ private fun FdGaugeCluster(gauges: DayListGauges, skin: Ex3Skin, onTap: () -> Un
             Column {
                 Text("AREAS", style = fdLabel(skin), color = skin.palette.inkMuted)
                 Spacer(Modifier.height(3.dp))
-                val maxShare = gauges.balance.maxOfOrNull { it.share }?.takeIf { it > 0 } ?: 1.0
-                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.height(26.dp)) {
-                    gauges.balance.forEachIndexed { i, share ->
-                        val frac = max(0.14, share.share / maxShare).toFloat()
-                        Box(
-                            Modifier
-                                .width(9.dp)
-                                .height((26 * frac).dp)
-                                .background(skin.palette.pillarTones[i % skin.palette.pillarTones.size])
-                        )
+                // Day-shape paired ticks: per pillar, the faint INTENT tick beside the solid
+                // ACTUAL tick (one shared minute scale, so pairs compare across pillars).
+                val deviations = gauges.deviations
+                val maxRef = max(1, deviations.maxOfOrNull { max(it.actualMinutes, it.intentMinutes) } ?: 1)
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.height(26.dp)) {
+                    for (deviation in deviations) {
+                        val toneIdx = dayShapeToneIndex(deviation.folderId, deviations, gauges.balance)
+                        val tone = if (toneIdx >= 0) skin.palette.pillarTones[toneIdx % skin.palette.pillarTones.size] else skin.palette.inkMuted
+                        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Box(
+                                Modifier
+                                    .width(4.dp)
+                                    .height((26 * max(0.1f, deviation.intentMinutes.toFloat() / maxRef)).dp)
+                                    .background(tone.copy(alpha = 0.3f))
+                            )
+                            Box(
+                                Modifier
+                                    .width(4.dp)
+                                    .height((26 * max(0.1f, deviation.actualMinutes.toFloat() / maxRef)).dp)
+                                    .background(tone)
+                            )
+                        }
                     }
                 }
             }
@@ -706,7 +718,6 @@ fun FlightdeckBalance(ui: UiState, modifier: Modifier = Modifier) {
     val skin = LocalSkin.current
     val view = ui.view ?: return
     val gauges = view.gauges
-    val maxShare = gauges.balance.maxOfOrNull { it.share }?.takeIf { it > 0 } ?: 1.0
     val openMinutes = max(0, gauges.capacityMinutes - gauges.listMinutes)
 
     Column(modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
@@ -733,13 +744,25 @@ fun FlightdeckBalance(ui: UiState, modifier: Modifier = Modifier) {
         ) {
             Text("FUEL BY AREA", style = fdLabel(skin), color = skin.palette.ink)
             Spacer(Modifier.height(10.dp))
+            // Day-shape: one shared minute scale for fills AND intent carets, so a caret past
+            // its fill reads as "this tank wants more" at a glance.
+            val deviationById = gauges.deviations.associateBy { it.folderId }
+            val fuelMaxRef = max(
+                1,
+                max(
+                    gauges.balance.maxOfOrNull { it.minutes } ?: 0,
+                    gauges.deviations.maxOfOrNull { it.intentMinutes } ?: 0
+                )
+            )
             gauges.balance.forEachIndexed { i, pillar ->
                 val tone = skin.palette.pillarTones[i % skin.palette.pillarTones.size]
+                val intentMinutes = deviationById[pillar.folderId]?.intentMinutes
                 Column(Modifier.padding(bottom = 11.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                         Text(pillar.name, style = fdSans(skin, 12.5.sp), color = skin.palette.ink, modifier = Modifier.weight(1f))
                         Text(
-                            "${formatDuration(pillar.minutes)} · ${(pillar.share * 100).toInt()}%",
+                            "${formatDuration(pillar.minutes)} · ${(pillar.share * 100).toInt()}%" +
+                                (intentMinutes?.let { " · INT ${formatDuration(it).uppercase(Locale.UK)}" } ?: ""),
                             style = fdMono(skin, 11.sp, FontWeight.Normal), color = skin.palette.inkMuted
                         )
                     }
@@ -750,8 +773,8 @@ fun FlightdeckBalance(ui: UiState, modifier: Modifier = Modifier) {
                             .height(10.dp)
                             .border(skin.shape.borderWidth, skin.palette.hairline, RoundedCornerShape(2.dp))
                             .drawBehind {
-                                // segmented dash fill: 6px on / 2px off, width ∝ share of the max
-                                val fillW = size.width * (pillar.share / maxShare).toFloat()
+                                // segmented dash fill: 6px on / 2px off, width ∝ minutes on the shared scale
+                                val fillW = size.width * (pillar.minutes.toFloat() / fuelMaxRef)
                                 val seg = 6.dp.toPx()
                                 val gap = 2.dp.toPx()
                                 var x = 1.dp.toPx()
@@ -762,6 +785,18 @@ fun FlightdeckBalance(ui: UiState, modifier: Modifier = Modifier) {
                                         size = Size(min(seg, fillW - x), size.height - 2.dp.toPx())
                                     )
                                     x += seg + gap
+                                }
+                                // the INTENT caret: a small notch rising from the bar floor at
+                                // share × capacity, in the pillar's own tone
+                                if (intentMinutes != null && intentMinutes > 0) {
+                                    val cx = (size.width * (intentMinutes.toFloat() / fuelMaxRef)).coerceIn(0f, size.width - 1.dp.toPx())
+                                    val path = androidx.compose.ui.graphics.Path().apply {
+                                        moveTo(cx - 3.dp.toPx(), size.height)
+                                        lineTo(cx + 3.dp.toPx(), size.height)
+                                        lineTo(cx, size.height - 5.dp.toPx())
+                                        close()
+                                    }
+                                    drawPath(path, tone)
                                 }
                             }
                     )

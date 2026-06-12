@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.twolaugh.ex3cuusion.core.domain.DayListEntryView
 import com.twolaugh.ex3cuusion.core.domain.DayListHabitView
+import com.twolaugh.ex3cuusion.core.domain.DayShapeSeverity
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Skin
 import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
@@ -280,28 +281,36 @@ private fun AbPowerHero(ui: UiState, skin: Ex3Skin, onTap: () -> Unit) {
         Spacer(Modifier.height(10.dp))
         AbPowerCells(skin = skin, frac = frac)
 
-        // per-pillar mini strip: lit segments by minutes, the open remainder as a dim track
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            gauges.balance.forEachIndexed { i, pillar ->
-                if (pillar.minutes <= 0) return@forEachIndexed
-                Box(
-                    Modifier
-                        .weight(pillar.minutes.toFloat())
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(skin.palette.pillarTones[i % skin.palette.pillarTones.size])
-                )
-            }
-            val open = max(0, gauges.capacityMinutes - gauges.listMinutes)
-            if (open > 0) {
-                Box(
-                    Modifier
-                        .weight(open.toFloat())
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(Color.White.copy(alpha = 0.08f))
-                )
+        // per-pillar PAIRED cells (day-shape): per pillar, the lit ACTUAL cell over the dim
+        // INTENT cell — both on the pillar's own scale, the pair's width on the shared one.
+        val pairs = gauges.deviations.filter { it.actualMinutes > 0 || it.intentMinutes > 0 }
+        if (pairs.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                for (deviation in pairs) {
+                    val groupMax = max(1, max(deviation.actualMinutes, deviation.intentMinutes))
+                    val toneIdx = dayShapeToneIndex(deviation.folderId, gauges.deviations, gauges.balance)
+                    val tone = if (toneIdx >= 0) skin.palette.pillarTones[toneIdx % skin.palette.pillarTones.size] else skin.palette.inkMuted
+                    Column(
+                        Modifier.weight(groupMax.toFloat()),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth((deviation.actualMinutes.toFloat() / groupMax).coerceIn(0f, 1f))
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(tone)
+                        )
+                        Box(
+                            Modifier
+                                .fillMaxWidth((deviation.intentMinutes.toFloat() / groupMax).coerceIn(0f, 1f))
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(tone.copy(alpha = 0.28f))
+                        )
+                    }
+                }
             }
         }
     }
@@ -686,7 +695,15 @@ fun AfterburnerBalance(ui: UiState, modifier: Modifier = Modifier) {
     val view = ui.view ?: return
     val gauges = view.gauges
     val parsedDate = runCatching { LocalDate.parse(view.date) }.getOrNull()
-    val maxShare = gauges.balance.maxOfOrNull { it.share }?.takeIf { it > 0 } ?: 1.0
+    val deviationById = gauges.deviations.associateBy { it.folderId }
+    // shared minute scale: fills and intent watermarks compare truthfully across cards
+    val maxRef = max(
+        1,
+        max(
+            gauges.balance.maxOfOrNull { it.minutes } ?: 0,
+            gauges.deviations.maxOfOrNull { it.intentMinutes } ?: 0
+        )
+    )
     val pink = skin.palette.accentSoft
 
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -707,6 +724,7 @@ fun AfterburnerBalance(ui: UiState, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(14.dp))
         gauges.balance.forEachIndexed { i, pillar ->
             val tone = skin.palette.pillarTones[i % skin.palette.pillarTones.size]
+            val deviation = deviationById[pillar.folderId]
             val shape = RoundedCornerShape(skin.shape.radiusLarge - 1.dp)
             Column(
                 Modifier
@@ -722,6 +740,13 @@ fun AfterburnerBalance(ui: UiState, modifier: Modifier = Modifier) {
                         style = abSans(skin, 12.5.sp, FontWeight.Bold).copy(letterSpacing = 0.8.sp),
                         color = skin.palette.ink, modifier = Modifier.weight(1f)
                     )
+                    // the intent watermark figure, dim, before the lit actual
+                    if (deviation != null) {
+                        Text(
+                            "INT ${formatDuration(deviation.intentMinutes).uppercase(Locale.UK)} · ",
+                            style = abNum(skin, 12.sp), color = skin.palette.inkFaint
+                        )
+                    }
                     Text(formatDuration(pillar.minutes) + " ", style = abNum(skin, 18.sp), color = tone)
                     Text("· ${(pillar.share * 100).toInt()}%", style = abNum(skin, 13.sp), color = skin.palette.inkMuted)
                 }
@@ -732,10 +757,19 @@ fun AfterburnerBalance(ui: UiState, modifier: Modifier = Modifier) {
                         .height(7.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color.White.copy(alpha = 0.06f))
+                        .drawBehind {
+                            // intent watermark: a dim band to share × capacity, behind the fill
+                            if (deviation != null && deviation.intentMinutes > 0) {
+                                drawRect(
+                                    Color.White.copy(alpha = 0.10f),
+                                    size = Size(size.width * (deviation.intentMinutes.toFloat() / maxRef).coerceIn(0f, 1f), size.height)
+                                )
+                            }
+                        }
                 ) {
                     Box(
                         Modifier
-                            .fillMaxWidth((pillar.share / maxShare).toFloat().coerceIn(0f, 1f))
+                            .fillMaxWidth((pillar.minutes.toFloat() / maxRef).coerceIn(0f, 1f))
                             .height(7.dp)
                             .clip(RoundedCornerShape(4.dp))
                             .background(Brush.horizontalGradient(listOf(tone, tone.copy(alpha = 0.55f))))
@@ -745,8 +779,9 @@ fun AfterburnerBalance(ui: UiState, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(10.dp))
         }
 
-        // outlined zero-minutes alert for missing pillars
-        for (missing in gauges.missingPillars) {
+        // outlined alert ONLY when the deviation rule fires (loose tolerance, under-deviation);
+        // a quiet pillar inside tolerance is no longer an alarm
+        for (deviation in gauges.deviations.filter { it.severity == DayShapeSeverity.Under }) {
             val shape = RoundedCornerShape(skin.shape.radiusLarge - 1.dp)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -757,11 +792,14 @@ fun AfterburnerBalance(ui: UiState, modifier: Modifier = Modifier) {
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 Text(
-                    "${missing.uppercase(Locale.UK)} — OFFLINE",
+                    "${deviation.name.uppercase(Locale.UK)} — ${if (deviation.actualMinutes == 0) "OFFLINE" else "UNDER POWER"}",
                     style = abSans(skin, 12.5.sp, FontWeight.Bold).copy(letterSpacing = 0.8.sp),
                     color = pink, modifier = Modifier.weight(1f)
                 )
-                Text("0 MIN", style = abNum(skin, 16.sp), color = pink)
+                Text(
+                    "${deviation.actualMinutes} OF ~${deviation.intentMinutes} MIN",
+                    style = abNum(skin, 16.sp), color = pink
+                )
             }
             Spacer(Modifier.height(10.dp))
         }

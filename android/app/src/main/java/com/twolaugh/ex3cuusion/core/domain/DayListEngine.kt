@@ -8,11 +8,13 @@ import com.twolaugh.ex3cuusion.core.model.DayListEntry
 import com.twolaugh.ex3cuusion.core.model.DayListSource
 import com.twolaugh.ex3cuusion.core.model.Energy
 import com.twolaugh.ex3cuusion.core.model.ExecutionEventType
+import com.twolaugh.ex3cuusion.core.model.Folder
 import com.twolaugh.ex3cuusion.core.model.Task
 import com.twolaugh.ex3cuusion.core.model.TaskStatus
 import com.twolaugh.ex3cuusion.core.model.TaskType
 import com.twolaugh.ex3cuusion.core.model.TrayOutcome
 import com.twolaugh.ex3cuusion.core.model.TraySignal
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -106,6 +108,30 @@ data class DayListPillarShare(
     val share: Double
 )
 
+// --- day shape (product-definition: "CAPACITY AND BALANCE ARE ONE IDEA") -------------------------
+
+// The day's INTENT: top-level pillar folder weights normalized into shares (weight ?: 5,
+// share = weight / sumWeights). Zero new config — the weights already exist. Order = the
+// folders' order in state, which is also the order the day-shape bar groups segments in.
+data class DayShapeIntent(
+    val folderId: String,
+    val name: String,
+    val share: Double
+)
+
+enum class DayShapeSeverity { None, Under, Over }
+
+// Actual-vs-intent for one pillar. intentMinutes = share × capacity (today's window remainder,
+// or the full window on planning dates). Severity stays None inside the LOOSE tolerance
+// (|actual − intent| <= max(45m, 50% of intent)) — a workday is legitimately work-heavy.
+data class DayShapeDeviation(
+    val folderId: String,
+    val name: String,
+    val actualMinutes: Int,
+    val intentMinutes: Int,
+    val severity: DayShapeSeverity
+)
+
 data class DayListGauges(
     val capacityMinutes: Int,
     val listMinutes: Int,
@@ -116,7 +142,11 @@ data class DayListGauges(
     val missingPillars: List<String>,
     // T095 WIP gentleness: median completed-day size over past days (null until >= 5 days of
     // completion history exist). The UI nudges, descriptively, when the list exceeds it.
-    val medianDoneCount: Int? = null
+    val medianDoneCount: Int? = null,
+    // Day-shape model (additive; `balance` above doubles as actual-minutes-by-pillar). The
+    // deviations replace missingPillars as the NUDGE driver — missingPillars stays for compat.
+    val intentShares: List<DayShapeIntent> = emptyList(),
+    val deviations: List<DayShapeDeviation> = emptyList()
 )
 
 data class DayListTray(
@@ -468,6 +498,13 @@ fun renderDayList(
         .roundToInt()
     val minutesByPillar = pillarMinutes(state, mixTasks)
 
+    // Day shape: pillar weights normalized into intent shares, then actual-vs-intent deviations
+    // against THIS render's capacity (today = window remainder; planning dates = full window, so
+    // the intent minutes scale with the window exactly like the capacity gauge).
+    val capacityMinutes = calculateCapacity(state, fullDay = isFutureDate, window = dayWindow)
+    val intentShares = dayShapeIntents(pillars)
+    val deviations = dayShapeDeviations(intentShares, minutesByPillar, capacityMinutes)
+
     return RenderedDayList(
         view = DayListView(
             date = date,
@@ -489,12 +526,14 @@ fun renderDayList(
                 gapMinutes = gapMinutes
             ),
             gauges = DayListGauges(
-                capacityMinutes = calculateCapacity(state, fullDay = isFutureDate, window = dayWindow),
+                capacityMinutes = capacityMinutes,
                 listMinutes = listMinutes,
                 calibratedListMinutes = calibratedListMinutes,
                 balance = minutesByPillar,
                 missingPillars = missingPillarFolders.map { it.name },
-                medianDoneCount = medianDoneCount(state, date)
+                medianDoneCount = medianDoneCount(state, date),
+                intentShares = intentShares,
+                deviations = deviations
             )
         ),
         state = stampedState
@@ -521,6 +560,62 @@ private fun pillarMinutes(state: AppState, tasks: List<Task>): List<DayListPilla
         )
     }.sortedByDescending { it.minutes }
 }
+
+// --- day-shape math (shared by today renders, planning renders, and the UI nudge pick) -----------
+
+private const val DEFAULT_PILLAR_WEIGHT = 5
+private const val DAY_SHAPE_TOLERANCE_FLOOR_MINUTES = 45
+private const val DAY_SHAPE_TOLERANCE_SHARE_OF_INTENT = 0.5
+private const val DAY_SHAPE_NUDGE_MIN_INTENT_MINUTES = 30
+
+// Pillar folder weights normalized: weight ?: 5, share = weight / sumWeights. A first-run
+// Personal-only state therefore yields the single share 1.0.
+fun dayShapeIntents(pillars: List<Folder>): List<DayShapeIntent> {
+    val weights = pillars.map { it.weight ?: DEFAULT_PILLAR_WEIGHT }
+    val sum = weights.sum()
+    if (sum <= 0) return emptyList()
+    return pillars.mapIndexed { index, folder ->
+        DayShapeIntent(folderId = folder.id, name = folder.name, share = weights[index].toDouble() / sum)
+    }
+}
+
+// Loose-tolerance deviations: severity None unless |actual − intent| > max(45m, 50% of intent).
+// Proportionate, never binary — the tolerance scales with how much of the day a pillar wants.
+fun dayShapeDeviations(
+    intents: List<DayShapeIntent>,
+    actualByPillar: List<DayListPillarShare>,
+    capacityMinutes: Int
+): List<DayShapeDeviation> {
+    val actualMinutesById = actualByPillar.associate { it.folderId to it.minutes }
+    return intents.map { intent ->
+        val intentMinutes = (intent.share * capacityMinutes).roundToInt()
+        val actualMinutes = actualMinutesById[intent.folderId] ?: 0
+        val tolerance = max(
+            DAY_SHAPE_TOLERANCE_FLOOR_MINUTES.toDouble(),
+            DAY_SHAPE_TOLERANCE_SHARE_OF_INTENT * intentMinutes
+        )
+        val severity = when {
+            abs(actualMinutes - intentMinutes) <= tolerance -> DayShapeSeverity.None
+            actualMinutes < intentMinutes -> DayShapeSeverity.Under
+            else -> DayShapeSeverity.Over
+        }
+        DayShapeDeviation(
+            folderId = intent.folderId,
+            name = intent.name,
+            actualMinutes = actualMinutes,
+            intentMinutes = intentMinutes,
+            severity = severity
+        )
+    }
+}
+
+// The single proportionate nudge (replaces missingPillars as the nudge DRIVER): the largest
+// under-deviation among pillars that wanted at least 30 minutes; null when the day is in shape.
+// At most ONE — the day-shape principle nudges, it never nags.
+fun dayShapeNudge(gauges: DayListGauges): DayShapeDeviation? =
+    gauges.deviations
+        .filter { it.severity == DayShapeSeverity.Under && it.intentMinutes >= DAY_SHAPE_NUDGE_MIN_INTENT_MINUTES }
+        .maxByOrNull { it.intentMinutes - it.actualMinutes }
 
 // Completion semantics shared by the list, habit strip, and tray: a task counts as done on a date
 // when a completion/execution event for that date includes it, or its completedAt/lastCompletedAt

@@ -52,7 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.twolaugh.ex3cuusion.core.domain.DayListEntryView
 import com.twolaugh.ex3cuusion.core.domain.DayListHabitView
+import com.twolaugh.ex3cuusion.core.domain.DayShapeIntent
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
+import com.twolaugh.ex3cuusion.core.domain.dayShapeNudge
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Skin
 import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 import com.twolaugh.ex3cuusion.ui.today.UiState
@@ -99,6 +101,24 @@ private fun phBar(skin: Ex3Skin, frac: Float, width: Int = 16) = buildAnnotatedS
     val filled = (frac.coerceIn(0f, 1f) * width).roundToInt()
     withStyle(SpanStyle(color = skin.palette.ink)) { append("▓".repeat(filled)) }
     withStyle(SpanStyle(color = skin.palette.inkFaint)) { append("░".repeat(width - filled)) }
+}
+
+// Day-shape INTENT segment line: one run of cells per pillar, widths ∝ normalized weight, the
+// glyph alternating ▒/▓ so segment boundaries read in plain text. Dim throughout — intent is the
+// ghost register here, never as bright as CAP.
+private fun phIntentBar(skin: Ex3Skin, intents: List<DayShapeIntent>, width: Int = 16) = buildAnnotatedString {
+    var used = 0
+    intents.forEachIndexed { i, intent ->
+        val cells = if (i == intents.size - 1) {
+            (width - used).coerceAtLeast(1)
+        } else {
+            (intent.share * width).roundToInt().coerceAtLeast(1)
+        }
+        used += cells
+        withStyle(SpanStyle(color = if (i % 2 == 0) skin.palette.inkMuted else skin.palette.inkFaint)) {
+            append((if (i % 2 == 0) "▒" else "▓").repeat(cells))
+        }
+    }
 }
 
 @Composable
@@ -153,19 +173,31 @@ fun PhosphorTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier =
                 Text(phBar(skin, frac), style = phMono(skin, 13.sp))
                 Text(" ${(frac * 100).roundToInt()}%", style = phMono(skin), color = amber)
             }
+            // day-shape intent composition, dim, directly under CAP
+            if (gauges.intentShares.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("INT ", style = phMono(skin), color = dim)
+                    Text(phIntentBar(skin, gauges.intentShares), style = phMono(skin, 13.sp))
+                }
+            }
             Text(
                 "    ${gauges.listMinutes}m planned / ${gauges.capacityMinutes}m available",
                 style = phMono(skin), color = dim
             )
         }
-        val missing = gauges.missingPillars.firstOrNull()
-        if (missing != null) {
+        // the warning line is THE single day-shape nudge (largest under-deviation outside the
+        // loose tolerance) — not a per-missing-pillar nag
+        val nudge = dayShapeNudge(gauges)
+        if (nudge != null) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                Text("${missing.take(3).uppercase(Locale.UK)} ", style = phMono(skin), color = amber)
+                Text("${nudge.name.take(3).uppercase(Locale.UK)} ", style = phMono(skin), color = amber)
                 Box(Modifier.background(amber).padding(horizontal = 5.dp)) {
                     Text("!", style = phMono(skin, 12.5.sp, FontWeight.Bold), color = skin.palette.bg)
                 }
-                Text(" no ${missing.lowercase(Locale.UK)} planned", style = phMono(skin), color = amber)
+                Text(
+                    " ${nudge.name.lowercase(Locale.UK)} ${nudge.actualMinutes}m of ~${nudge.intentMinutes}m intent",
+                    style = phMono(skin), color = amber
+                )
             }
         }
 

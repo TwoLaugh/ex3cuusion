@@ -77,6 +77,7 @@ import com.twolaugh.ex3cuusion.core.domain.DayListGauges
 import com.twolaugh.ex3cuusion.core.domain.DayListHabitView
 import com.twolaugh.ex3cuusion.core.domain.DayListPillarShare
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
+import com.twolaugh.ex3cuusion.core.domain.dayShapeNudge
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
 import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 import com.twolaugh.ex3cuusion.ui.theme.key
@@ -581,88 +582,137 @@ private fun TodayHeader(
 
 // --- gauges ----------------------------------------------------------------------------------------
 
+// THE day-shape gauge (product-definition: capacity and balance are ONE idea). One bar: the
+// track is the day window, the faint segments behind are the INTENT ghost (pillar weights
+// normalized), the solid fill in front is the ACTUAL pillar mix. The whole gauge taps into the
+// day-shape sheet; the single loose-tolerance nudge renders below when a deviation exists.
 @Composable
 private fun GaugesRow(gauges: DayListGauges, onBalanceTap: () -> Unit = {}) {
-    Row(horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.fillMaxWidth()) {
-        val overfull = gauges.listMinutes > gauges.capacityMinutes
-        val ratio = when {
-            gauges.capacityMinutes > 0 -> (gauges.listMinutes.toFloat() / gauges.capacityMinutes).coerceAtMost(1f)
-            gauges.listMinutes > 0 -> 1f
-            else -> 0f
+    val overfull = gauges.listMinutes > gauges.capacityMinutes
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onBalanceTap)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "day shape",
+                style = MaterialTheme.typography.labelMedium,
+                color = Ex3Colors.inkFaint,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "${formatDuration(gauges.listMinutes)} of ${formatDuration(gauges.capacityMinutes)}",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (overfull) Ex3Colors.missed else Ex3Colors.inkMuted
+            )
         }
-
-        // Capacity: accent fill on a raised track; overfull -> full bar + amber numbers.
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "capacity",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Ex3Colors.inkFaint,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "${formatDuration(gauges.listMinutes)} of ${formatDuration(gauges.capacityMinutes)}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (overfull) Ex3Colors.missed else Ex3Colors.inkMuted
-                )
-            }
+        Spacer(Modifier.height(6.dp))
+        DayShapeBar(gauges = gauges)
+        val nudge = dayShapeNudge(gauges)
+        if (nudge != null) {
             Spacer(Modifier.height(6.dp))
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Ex3Colors.raised)
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxWidth(ratio)
-                        .height(3.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(Ex3Colors.accent)
-                )
-            }
-        }
-
-        // Balance: stacked pillar shares + amber missing-pillar nudge. Tap for the breakdown sheet.
-        Column(
-            Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(onClick = onBalanceTap)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "balance",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Ex3Colors.inkFaint,
-                    modifier = Modifier.weight(1f)
-                )
-                val missing = gauges.missingPillars.firstOrNull()
-                if (missing != null) {
-                    Text(
-                        text = "no $missing yet",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Ex3Colors.missed
-                    )
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            BalanceBar(shares = gauges.balance)
+            Text(
+                text = "${nudge.name}: ${formatDuration(nudge.actualMinutes)} of ~${formatDuration(nudge.intentMinutes)} intent",
+                style = MaterialTheme.typography.labelMedium,
+                color = Ex3Colors.missed
+            )
         }
     }
 }
 
-// Tap the balance gauge for the full story: per-pillar minutes + share, and what's missing.
+// The day-shape bar itself. Construction, back to front:
+//   1. track (raised) = the day window;
+//   2. INTENT GHOST: pillar tones at low alpha, widths ∝ normalized weights across the FULL
+//      track, hairline (bg-coloured) separators at the boundaries;
+//   3. ACTUAL FILL: solid pillar tones, widths ∝ minutes/capacity, anchored left and grouped in
+//      the same pillar order as the ghost (non-pillar buckets like "unfiled" append after);
+//   4. overfull: the fill clamps at the track end and the overflow wraps as a thin amber stripe
+//      along the top, capped at the full width.
+@Composable
+internal fun DayShapeBar(gauges: DayListGauges, modifier: Modifier = Modifier) {
+    val intents = gauges.intentShares
+    val actualById = gauges.balance.associateBy { it.folderId }
+    // Actual segments in ghost order, then any actual-only buckets (e.g. unfiled).
+    val orderedActual = intents.mapNotNull { actualById[it.folderId] } +
+        gauges.balance.filter { share -> intents.none { it.folderId == share.folderId } }
+    val totalActual = orderedActual.sumOf { it.minutes }
+    androidx.compose.foundation.Canvas(
+        modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .clip(RoundedCornerShape(5.dp))
+    ) {
+        val w = size.width
+        val h = size.height
+        drawRect(Ex3Colors.raised)
+        // intent ghost
+        var gx = 0f
+        for (intent in intents) {
+            val segW = (intent.share * w).toFloat()
+            drawRect(
+                color = pillarTone(intent.folderId).copy(alpha = 0.22f),
+                topLeft = Offset(gx, 0f),
+                size = androidx.compose.ui.geometry.Size(segW, h)
+            )
+            gx += segW
+            if (gx < w - 0.5f) {
+                drawLine(Ex3Colors.bg, Offset(gx, 0f), Offset(gx, h), strokeWidth = 1.dp.toPx())
+            }
+        }
+        // actual fill (after the day window closes, capacity is 0 — scale to the actual total so
+        // the committed mix still reads instead of dividing by zero)
+        val denom = if (gauges.capacityMinutes > 0) gauges.capacityMinutes else totalActual
+        if (denom > 0) {
+            var fx = 0f
+            for (pillar in orderedActual) {
+                if (pillar.minutes <= 0) continue
+                val segW = pillar.minutes.toFloat() / denom * w
+                val drawW = kotlin.math.min(segW, w - fx)
+                if (drawW <= 0f) break
+                drawRect(
+                    color = pillarTone(pillar.folderId),
+                    topLeft = Offset(fx, 0f),
+                    size = androidx.compose.ui.geometry.Size(drawW, h)
+                )
+                fx += segW
+            }
+            // overflow stripe: the minutes past capacity wrap as a thin amber band on top
+            if (gauges.capacityMinutes in 1 until totalActual) {
+                val overflowW = ((totalActual - gauges.capacityMinutes).toFloat() / denom * w).coerceAtMost(w)
+                drawRect(
+                    color = Ex3Colors.missed,
+                    topLeft = Offset(0f, 0f),
+                    size = androidx.compose.ui.geometry.Size(overflowW, 3.dp.toPx())
+                )
+            }
+        }
+    }
+}
+
+// The DAY-SHAPE sheet (was the balance sheet): per-pillar actual vs intent — "2h 2m / ~1h 30m
+// intent" — each row carrying a small twin-bar (intent ghost behind, actual fill in front), the
+// capacity line up top. Rows follow the intent order (the same order the gauge groups segments
+// in); actual-only buckets (e.g. Unfiled) append after with no intent figure.
 @Composable
 internal fun BalanceSheet(gauges: DayListGauges, onDismiss: () -> Unit) {
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = Ex3Colors.surface
     ) {
+        val actualById = gauges.balance.associateBy { it.folderId }
+        // One reference scale for every twin-bar so rows compare against each other honestly.
+        val maxRef = kotlin.math.max(
+            1,
+            kotlin.math.max(
+                gauges.deviations.maxOfOrNull { kotlin.math.max(it.actualMinutes, it.intentMinutes) } ?: 0,
+                gauges.balance.maxOfOrNull { it.minutes } ?: 0
+            )
+        )
         Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             Text(
-                text = "Today's balance",
+                text = "Day shape",
                 style = MaterialTheme.typography.titleMedium,
                 color = Ex3Colors.ink
             )
@@ -673,40 +723,88 @@ internal fun BalanceSheet(gauges: DayListGauges, onDismiss: () -> Unit) {
                 color = Ex3Colors.inkMuted
             )
             Spacer(Modifier.height(16.dp))
-            for (pillar in gauges.balance.sortedByDescending { it.minutes }) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)
-                ) {
-                    Box(
-                        Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(pillarTone(pillar.folderId))
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        text = pillar.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Ex3Colors.ink,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = "${formatDuration(pillar.minutes)} · ${(pillar.share * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Ex3Colors.inkMuted
-                    )
-                }
+            for (deviation in gauges.deviations) {
+                DayShapeSheetRow(
+                    name = deviation.name,
+                    tone = pillarTone(deviation.folderId),
+                    actualMinutes = actualById[deviation.folderId]?.minutes ?: deviation.actualMinutes,
+                    intentMinutes = deviation.intentMinutes,
+                    maxRef = maxRef,
+                    underline = deviation.severity != com.twolaugh.ex3cuusion.core.domain.DayShapeSeverity.None
+                )
             }
-            if (gauges.missingPillars.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = "Nothing today from: ${gauges.missingPillars.joinToString(", ")}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Ex3Colors.missed
+            // actual-only buckets (no top-level intent): unfiled work still shows its minutes
+            for (pillar in gauges.balance.filter { share -> gauges.deviations.none { it.folderId == share.folderId } }) {
+                DayShapeSheetRow(
+                    name = pillar.name,
+                    tone = pillarTone(pillar.folderId),
+                    actualMinutes = pillar.minutes,
+                    intentMinutes = null,
+                    maxRef = maxRef,
+                    underline = false
                 )
             }
             Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+// One sheet row: dot + name, "2h 2m / ~1h 30m intent" figure, and the twin-bar underneath —
+// intent ghost (faint tone, full intent width) with the solid actual fill drawn in front.
+@Composable
+private fun DayShapeSheetRow(
+    name: String,
+    tone: Color,
+    actualMinutes: Int,
+    intentMinutes: Int?,
+    maxRef: Int,
+    underline: Boolean
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(tone)
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Ex3Colors.ink,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = if (intentMinutes != null) {
+                    "${formatDuration(actualMinutes)} / ~${formatDuration(intentMinutes)} intent"
+                } else {
+                    formatDuration(actualMinutes)
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = if (underline) Ex3Colors.missed else Ex3Colors.inkMuted
+            )
+        }
+        Spacer(Modifier.height(5.dp))
+        androidx.compose.foundation.Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+        ) {
+            drawRect(Ex3Colors.raised)
+            if (intentMinutes != null && intentMinutes > 0) {
+                drawRect(
+                    color = tone.copy(alpha = 0.25f),
+                    size = androidx.compose.ui.geometry.Size(size.width * (intentMinutes.toFloat() / maxRef).coerceIn(0f, 1f), size.height)
+                )
+            }
+            if (actualMinutes > 0) {
+                drawRect(
+                    color = tone,
+                    size = androidx.compose.ui.geometry.Size(size.width * (actualMinutes.toFloat() / maxRef).coerceIn(0f, 1f), size.height)
+                )
+            }
         }
     }
 }
