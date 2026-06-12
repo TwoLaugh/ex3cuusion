@@ -28,3 +28,19 @@ Hard constraints from the idea-review (2026-06-11):
   no pillar minute-quotas.
 - Rejected: two-minute capture lane, share-target, Hemingway-bridge
   prompt, pillar minute-targets, interstitial journaling.
+
+## Design principles (added 2026-06-12, user's words paraphrased)
+- ELEGANCE OVER CHROME: new capability must enter through an existing
+  affordance before it is allowed to add buttons. Examples set by the
+  user: the grip handle pressed-without-moving opens the row's action
+  menu (edit/delete/log progress); the habit strip stays a pure
+  completion surface — one trailing "..." enters an edit state instead
+  of making every chip tappable-by-accident.
+- CAPACITY AND BALANCE ARE ONE IDEA ("day shape"): capacity = the day
+  window (user-set start/end); intent = pillar folder weights
+  normalized (no new config); the gauge shows the intent ghost behind
+  the actual pillar-coloured fill. Nudges are proportionate and
+  loose-tolerance (a workday is legitimately work-heavy), never binary
+  nags. Replaces the separate capacity/balance bars when built.
+- Habit strip is for FLOATING habits only; time-anchored recurring
+  (wake, brush, bed) live on the list as entries.
