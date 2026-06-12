@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- The hold-to-complete ring at full fill: the app's signature gesture as its mark. -->
+    <path
+        android:pathData="M54,54m-17,0a17,17 0,1 1,34 0a17,17 0,1 1,-34 0"
+        android:strokeColor="#E0683A" android:strokeWidth="4.5" android:fillColor="#00000000"/>
+    <path
+        android:pathData="M46.5,54.5l5,5l10,-10.5"
+        android:strokeColor="#ECE7DC" android:strokeWidth="4" android:fillColor="#00000000"
+        android:strokeLineCap="round" android:strokeLineJoin="round"/>
+</vector>
