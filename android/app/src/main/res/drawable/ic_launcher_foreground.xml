@@ -1,50 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The 33 "GOD" figures (Bon Iver / Eric Timothy Carlson + Aaron Anderson's video): her body
-     face-down with legs splayed to the ring, his legs straight down past it — together tracing
-     the peace-sign strokes inside the green circle. Hand-traced vector, personal dogfood build
-     only — swap before any public release. -->
+<!-- The Seed of Life: seven overlapping circles, the seven days of creation — a book of days,
+     and one circle per pillar. Six in terracotta around one in paper-cream (today, the centre),
+     inside a faint world-circle. Exact sacred geometry: outer centres sit ON the central
+     circle at 60° intervals, every radius 13. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
 
-    <!-- green ring: thin, donut fill so the top-to-bottom gradient is dependable -->
+    <!-- world circle -->
     <path
-        android:pathData="M54,23.9 a30.1,30.1 0 1,1 -0.02,0 Z M54,27.1 a26.9,26.9 0 1,0 0.02,0 Z"
-        android:fillType="evenOdd">
-        <aapt:attr name="android:fillColor">
-            <gradient android:type="linear"
-                android:startX="54" android:startY="23.9"
-                android:endX="54" android:endY="84.1"
-                android:startColor="#2FB054" android:endColor="#0E8A43"/>
-        </aapt:attr>
-    </path>
+        android:pathData="M54,26.5 a27.5,27.5 0 1,1 -0.02,0 Z"
+        android:strokeColor="#52ECE7DC" android:strokeWidth="1.6" android:fillColor="#00000000"/>
 
-    <!-- clasped hands / fingers crossing the ring top -->
-    <path android:fillColor="#D71F26"
-        android:pathData="M50.8,27 L50.5,21.4 L51.6,21 L51.9,24 L52.5,20.2 L53.6,20 L53.9,23.6 L54.8,20 L55.9,20.2 L55.9,24 L56.7,20.9 L57.7,21.4 L57.4,27 L54,28.6 Z"/>
-    <!-- arms: two slim strips with a tight central seam -->
-    <path android:fillColor="#D71F26"
-        android:pathData="M50.9,25.4 C49.9,28.4 49.5,31.6 49.7,35.4 L53.6,36.2 L53.6,26.6 C52.6,26.6 51.6,26.2 50.9,25.4 Z"/>
-    <path android:fillColor="#D71F26"
-        android:pathData="M57.1,25.4 C58.1,28.4 58.5,31.6 58.3,35.4 L54.4,36.2 L54.4,26.6 C55.4,26.6 56.4,26.2 57.1,25.4 Z"/>
-    <!-- chest with the long head void (real hole — survives themed icons), waist, rounded hips -->
-    <path android:fillColor="#D71F26" android:fillType="evenOdd"
-        android:pathData="M49.8,34.6 C49.3,38.8 49.4,43.2 50.1,47.2 C48.9,50.4 48.2,53.2 48,56 C47.9,58.2 48.6,59.9 50,60.9 L58,60.9 C59.4,59.9 60.1,58.2 60,56 C59.8,53.2 59.1,50.4 57.9,47.2 C58.6,43.2 58.7,38.8 58.2,34.6 C56.8,33.6 51.2,33.6 49.8,34.6 Z M54,35.8 a2.5,5.7 0 1,1 -0.02,0 Z"/>
-    <!-- her left leg: torso-thick thigh, S-curve, pointed foot past the ring -->
-    <path android:fillColor="#D71F26"
-        android:pathData="M48.4,51.6 C45,54.6 41.6,58.4 38.6,62.6 C36.4,65.8 34.4,69.2 32.9,72.9 L31.9,75.6 L34.3,77.2 L36.2,74.6 C38.5,71.4 41.1,68.2 43.9,65.2 C47,61.9 50.2,58.9 53.2,56.4 L52.4,52.8 Z"/>
-    <!-- her right leg -->
-    <path android:fillColor="#D71F26"
-        android:pathData="M59.6,51.6 C63,54.6 66.4,58.4 69.4,62.6 C71.6,65.8 73.6,69.2 75.1,72.9 L76.1,75.6 L73.7,77.2 L71.8,74.6 C69.5,71.4 66.9,68.2 64.1,65.2 C61,61.9 57.8,58.9 54.8,56.4 L55.6,52.8 Z"/>
-    <!-- his left leg: thigh, knee, calf, pointed foot well past the ring -->
-    <path android:fillColor="#D71F26"
-        android:pathData="M51.2,59.8 C50.6,62.6 50.4,65.4 50.7,68 C50.2,71.4 50.2,74.6 50.8,77.8 L51.5,83.4 L52.7,86.4 L53.6,82.6 L53.6,60 Z"/>
-    <!-- his right leg -->
-    <path android:fillColor="#D71F26"
-        android:pathData="M56.8,59.8 C57.4,62.6 57.6,65.4 57.3,68 C57.8,71.4 57.8,74.6 57.2,77.8 L56.5,83.4 L55.3,86.4 L54.4,82.6 L54.4,60 Z"/>
+    <!-- the six days / outer pillars -->
+    <path
+        android:pathData="M54,41 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M65.26,47.5 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M65.26,60.5 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M54,67 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M42.74,60.5 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M42.74,47.5 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0"
+        android:strokeColor="#E0683A" android:strokeWidth="2.1" android:fillColor="#00000000"/>
 
-    <!-- moles -->
-    <path android:fillColor="#100F0D"
-        android:pathData="M50.8,49.5 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M57.7,52.5 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M40.8,67.5 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M68.5,65.5 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M52,72 m-0.45,0 a0.45,0.45 0 1,1 0.9,0 a0.45,0.45 0 1,1 -0.9,0 M56.4,76 m-0.45,0 a0.45,0.45 0 1,1 0.9,0 a0.45,0.45 0 1,1 -0.9,0"/>
+    <!-- today, the centre -->
+    <path
+        android:pathData="M54,54 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0"
+        android:strokeColor="#ECE7DC" android:strokeWidth="2.1" android:fillColor="#00000000"/>
 </vector>
