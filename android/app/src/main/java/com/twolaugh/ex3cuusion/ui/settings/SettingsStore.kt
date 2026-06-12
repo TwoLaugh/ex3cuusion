@@ -65,12 +65,41 @@ class SettingsStore(context: Context) {
     private val _skinFlow = MutableStateFlow(skin)
     val skinFlow: StateFlow<String> = _skinFlow.asStateFlow()
 
+    // B1: the day window ("Day" section in Settings) the capacity gauge derives from. Raw text is
+    // stored as typed (write-through fields, no save button); the GETTERS validate, so readers —
+    // the flow included — only ever see a well-formed HH:MM or the default.
+    var dayStart: String
+        get() = prefs.getString(KEY_DAY_START, DEFAULT_DAY_START)?.takeIf(::validHhMm) ?: DEFAULT_DAY_START
+        set(value) {
+            prefs.edit().putString(KEY_DAY_START, value.trim()).apply()
+            _dayWindowFlow.value = dayStart to dayEnd
+        }
+
+    var dayEnd: String
+        get() = prefs.getString(KEY_DAY_END, DEFAULT_DAY_END)?.takeIf(::validHhMm) ?: DEFAULT_DAY_END
+        set(value) {
+            prefs.edit().putString(KEY_DAY_END, value.trim()).apply()
+            _dayWindowFlow.value = dayStart to dayEnd
+        }
+
+    private val _dayWindowFlow = MutableStateFlow(dayStart to dayEnd)
+
+    // (start, end) as validated HH:MM strings; AppViewModel applies it to the engine on change.
+    val dayWindowFlow: StateFlow<Pair<String, String>> = _dayWindowFlow.asStateFlow()
+
     companion object {
         const val DEFAULT_MODEL = "gpt-5.4-mini"
         const val DEFAULT_SKIN = "warm_dark"
+        const val DEFAULT_DAY_START = "08:00"
+        const val DEFAULT_DAY_END = "23:00"
         private const val KEY_API_KEY = "openai_api_key"
         private const val KEY_MODEL = "openai_model"
         private const val KEY_ENRICHMENT_ENABLED = "ai_enrichment_enabled"
         private const val KEY_SKIN = "today_skin"
+        private const val KEY_DAY_START = "day_window_start"
+        private const val KEY_DAY_END = "day_window_end"
+
+        private val HH_MM = Regex("""^([01]\d|2[0-3]):[0-5]\d$""")
+        private fun validHhMm(value: String): Boolean = HH_MM.matches(value.trim())
     }
 }

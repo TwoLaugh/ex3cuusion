@@ -24,7 +24,6 @@ import com.twolaugh.ex3cuusion.core.model.ActiveTimer
 import com.twolaugh.ex3cuusion.core.model.AppState
 import com.twolaugh.ex3cuusion.core.model.DayListSource
 import com.twolaugh.ex3cuusion.core.model.FolderStatus
-import com.twolaugh.ex3cuusion.core.store.MAIN_FOLDER_ID
 import com.twolaugh.ex3cuusion.core.store.StateStore
 import com.twolaugh.ex3cuusion.core.store.UndoStack
 import com.twolaugh.ex3cuusion.core.store.normalizeState
@@ -100,7 +99,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         // normalizeState guarantees. Real data arrives via the T107 import bridge.
         val initial = store.load() ?: store.save(firstRunState())
         engine = DomainEngine(initial, undoStack, store)
+        // B1: the day window lives in SettingsStore (transient config — the engine stays JSON-
+        // state pure). Applied here, and re-applied + re-rendered on every settings change so the
+        // capacity gauge reflects the new window in the next render.
+        engine.setDayWindow(settings.dayStart, settings.dayEnd)
         syncClock()
+        viewModelScope.launch {
+            settings.dayWindowFlow.collect { (start, end) ->
+                engine.setDayWindow(start, end)
+                refresh()
+            }
+        }
         // Mirrors the web's live clock: a 60s ticker keeps currentDate/currentTime on the device
         // clock, so missed pins update and the day rolls naturally at midnight.
         viewModelScope.launch {
@@ -129,7 +138,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             AppState(
                 currentDate = now.toLocalDate().toString(),
                 currentTime = now.format(TIME_FORMAT),
-                availableMinutes = 300 // the web seed's default daily capacity
+                // Web-compat only: Android capacity derives from the Settings day window (B1);
+                // this field rides along in the document for the web, which still reads it.
+                availableMinutes = 300
             )
         )
     }
@@ -371,13 +382,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _pagesView.value = buildPagesView(engine.state)
     }
 
-    // The grid's "jot to Main..." field: instant quick-capture note into the Main page.
-    fun jotToMain(body: String) {
-        val cleaned = body.trim()
-        if (cleaned.isEmpty()) return
-        engine.createDocument(MAIN_FOLDER_ID, cleaned)
+    // B3: the "jot to the dump..." field — quick jots APPEND to the dump note (the inbox) as
+    // timestamped lines instead of creating new documents.
+    fun jotToDump(body: String) {
+        engine.appendToDump(body)
         refreshPages()
         refresh() // keep canUndo/lastChangeSummary on the Today surface honest
+    }
+
+    // B3: read telemetry on editor open (recents ordering). Not undoable, no history — only the
+    // pages read model needs re-pulling.
+    fun markNoteViewed(noteId: String) {
+        engine.markDocumentViewed(noteId)
+        refreshPages()
     }
 
     fun createNote(folderId: String, body: String, title: String? = null): String {

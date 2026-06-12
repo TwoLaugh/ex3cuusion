@@ -61,6 +61,8 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
     var model by remember { mutableStateOf(settings.model) }
     var enabled by remember { mutableStateOf(settings.enrichmentEnabled) }
     var keyVisible by remember { mutableStateOf(false) }
+    var dayStart by remember { mutableStateOf(settings.dayStart) }
+    var dayEnd by remember { mutableStateOf(settings.dayEnd) }
 
     Scaffold(containerColor = Ex3Colors.bg) { padding ->
         Column(
@@ -83,6 +85,51 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
                     text = "Settings",
                     style = MaterialTheme.typography.titleLarge,
                     color = Ex3Colors.ink
+                )
+            }
+
+            // B1: the day window — capacity = minutes between these two clock times (day-shape
+            // principle: capacity is the day window, not an abstract minute budget). Write-through
+            // like everything here; the store ignores half-typed values until they parse.
+            Spacer(Modifier.height(24.dp))
+            Text(
+                text = "Day",
+                style = MaterialTheme.typography.titleMedium,
+                color = Ex3Colors.ink
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Your waking window — today's capacity is what is left of it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Ex3Colors.inkMuted
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = dayStart,
+                    onValueChange = {
+                        dayStart = it
+                        settings.dayStart = it
+                    },
+                    label = { Text("Starts (HH:MM)") },
+                    placeholder = { Text(SettingsStore.DEFAULT_DAY_START) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = settingsFieldColors(),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = dayEnd,
+                    onValueChange = {
+                        dayEnd = it
+                        settings.dayEnd = it
+                    },
+                    label = { Text("Ends (HH:MM)") },
+                    placeholder = { Text(SettingsStore.DEFAULT_DAY_END) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = settingsFieldColors(),
+                    modifier = Modifier.weight(1f)
                 )
             }
 

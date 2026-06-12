@@ -75,7 +75,8 @@ class PlannerHelpersTest {
 
     @Test
     fun `capacity drops after repeated overload deferrals`() {
-        // planner.test.ts "reduces capacity after repeated overload deferrals": 300 - 90 = 210.
+        // B1: the seed clock is 08:30 in the default 08:00-23:00 window -> 870 remaining; three
+        // overload deferrals keep the old -90 reduction: 870 - 90 = 780.
         val state = seedState().copy(
             deferrals = listOf(
                 DeferralLog(id = "d1", date = "2026-06-01", planItemId = "a", reason = DeferralReason.Overplanned),
@@ -83,12 +84,12 @@ class PlannerHelpersTest {
                 DeferralLog(id = "d3", date = "2026-06-02", planItemId = "c", reason = DeferralReason.LowEnergy)
             )
         )
-        assertEquals(210, calculateCapacity(state))
+        assertEquals(780, calculateCapacity(state))
     }
 
     @Test
     fun `daily review calibration reduces future capacity`() {
-        // planner.test.ts "uses daily review calibration to reduce future capacity": 300 - 75 = 225.
+        // B1: 870 window-remaining at 08:30, the review adjustment is kept: 870 - 75 = 795.
         val state = seedState().copy(
             currentDate = "2026-06-02",
             dailyReviews = listOf(
@@ -101,7 +102,29 @@ class PlannerHelpersTest {
                 )
             )
         )
-        assertEquals(225, calculateCapacity(state))
+        assertEquals(795, calculateCapacity(state))
+    }
+
+    @Test
+    fun `capacity derives from the day window - remaining today, clamped, full for planning`() {
+        val window = DayWindow(start = "09:00", end = "21:00")
+        // mid-day: 21:00 - 14:00 = 420 remaining
+        assertEquals(420, calculateCapacity(seedState().copy(currentTime = "14:00"), window = window))
+        // before the window opens: the clock clamps to dayStart -> the full 720
+        assertEquals(720, calculateCapacity(seedState().copy(currentTime = "07:15"), window = window))
+        // after dayEnd: the day is over -> 0, no phantom floor
+        assertEquals(0, calculateCapacity(seedState().copy(currentTime = "21:30"), window = window))
+        // planning a future date: the full window regardless of tonight's clock
+        assertEquals(720, calculateCapacity(seedState().copy(currentTime = "21:30"), fullDay = true, window = window))
+        // the >= 0 clamp holds even when overload reductions push the figure negative
+        val overloaded = seedState().copy(
+            currentTime = "22:30",
+            deferrals = listOf(
+                DeferralLog(id = "d1", date = "2026-06-01", planItemId = "a", reason = DeferralReason.Overplanned),
+                DeferralLog(id = "d2", date = "2026-06-01", planItemId = "b", reason = DeferralReason.NoTime)
+            )
+        )
+        assertEquals(0, calculateCapacity(overloaded, window = window))
     }
 
     @Test

@@ -124,16 +124,39 @@ fun taskScore(state: AppState, task: Task, date: String): Double {
         highEnergyPenalty
 }
 
-// T110: `fullDay` skips the current-clock subtraction — the baseline for a date that has not
-// started yet (planning tomorrow tonight must not inherit tonight's nearly-spent clock). The
-// deferral/review adjustments still apply: they describe the user, not the time of day.
-fun calculateCapacity(state: AppState, fullDay: Boolean = false): Int {
-    val dayEndMinutes = 22 * 60
-    val remainingToday = max(45, dayEndMinutes - timeToMinutes(state.currentTime))
-    val clockAwareAvailable = if (fullDay) state.availableMinutes else min(state.availableMinutes, remainingToday)
+// B1 (day-shape, product-definition): capacity = the user's day window, set in Settings. This is
+// transient app config, NOT part of the shared JSON state — `state.availableMinutes` stays in the
+// model for web compat but Android ignores it entirely.
+data class DayWindow(val start: String = DEFAULT_START, val end: String = DEFAULT_END) {
+    companion object {
+        const val DEFAULT_START = "08:00"
+        const val DEFAULT_END = "23:00"
+    }
+}
+
+// Capacity from the day window. `fullDay` (T110 planning mode / future dates) is the whole
+// window; TODAY's remaining capacity = dayEnd - max(currentTime, dayStart), clamped >= 0 — after
+// dayEnd the day is honestly over (capacity 0).
+//
+// Kept from the old availableMinutes-based formula (they describe the user, not the clock):
+//   - the deferral-overload reductions (3+ overload deferrals in the last 5 -> -90, 2 -> -60);
+//   - the daily-review adjustment, summed over the last 5 planning-affecting reviews and clamped
+//     to [-120, +45].
+// Dropped: the hardcoded 22:00 day end (now the window's), the 45-minute end-of-day floor and
+// the 90/120-minute capacity floors — they existed to keep an arbitrary 300-minute budget from
+// reading as "day over" too early; with a real window the honest clamp is just >= 0.
+fun calculateCapacity(state: AppState, fullDay: Boolean = false, window: DayWindow = DayWindow()): Int {
+    val windowStart = timeToMinutes(window.start)
+    val windowEnd = timeToMinutes(window.end)
+    val baseline = if (fullDay) {
+        max(0, windowEnd - windowStart)
+    } else {
+        max(0, windowEnd - max(timeToMinutes(state.currentTime), windowStart))
+    }
     val recentDeferrals = state.deferrals.takeLast(5)
     val overloadReasons = setOf(DeferralReason.NoTime, DeferralReason.Overplanned, DeferralReason.LowEnergy)
     val overloadSignals = recentDeferrals.count { it.reason in overloadReasons }
+    val overloadReduction = if (overloadSignals >= 3) 90 else if (overloadSignals >= 2) 60 else 0
     val reviewAdjustment = max(
         -120,
         min(
@@ -144,9 +167,7 @@ fun calculateCapacity(state: AppState, fullDay: Boolean = false): Int {
                 .sumOf { it.capacityAdjustmentMinutes }
         )
     )
-    if (overloadSignals >= 3) return max(90, clockAwareAvailable - 90 + reviewAdjustment)
-    if (overloadSignals >= 2) return max(120, clockAwareAvailable - 60 + reviewAdjustment)
-    return max(90, clockAwareAvailable + reviewAdjustment)
+    return max(0, baseline - overloadReduction + reviewAdjustment)
 }
 
 fun loadLevel(total: Int, available: Int): LoadLevel = when {

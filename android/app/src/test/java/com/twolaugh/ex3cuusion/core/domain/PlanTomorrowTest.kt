@@ -94,11 +94,26 @@ class PlanTomorrowTest {
 
     @Test
     fun `future-date gauges use the full-day capacity baseline - today stays clock-aware`() {
-        engine.setClock(today, "21:30") // 30 evening minutes left
-        // today: min(available 300, max(45, 22:00 - 21:30)) -> floor-guarded 90
+        engine.setClock(today, "21:30") // 90 evening minutes left in the default 08:00-23:00 window
         assertEquals(90, engine.dayListView().gauges.capacityMinutes)
-        // tomorrow has not started: the full availableMinutes baseline, no clock subtraction
-        assertEquals(300, engine.dayListView(tomorrow).gauges.capacityMinutes)
+        // tomorrow has not started: the full window (B1), no clock subtraction
+        assertEquals(900, engine.dayListView(tomorrow).gauges.capacityMinutes)
+    }
+
+    @Test
+    fun `day-window change reflects in the next render - junk is ignored`() {
+        engine.setClock(today, "12:00")
+        assertEquals(660, engine.dayListView().gauges.capacityMinutes) // 23:00 - 12:00
+
+        engine.setDayWindow("09:00", "18:00")
+        assertEquals(360, engine.dayListView().gauges.capacityMinutes) // 18:00 - 12:00
+        assertEquals(540, engine.dayListView(tomorrow).gauges.capacityMinutes) // planning: full window
+
+        engine.setDayWindow("9", "later") // half-typed Settings input must not move the window
+        assertEquals(360, engine.dayListView().gauges.capacityMinutes)
+
+        engine.setClock(today, "19:30") // past the new dayEnd: the day is over
+        assertEquals(0, engine.dayListView().gauges.capacityMinutes)
     }
 
     @Test

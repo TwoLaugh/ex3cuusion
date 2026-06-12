@@ -12,5 +12,10 @@ data class Document(
     val title: String? = null,
     val body: String,
     val createdAt: String,
-    val updatedAt: String
+    val updatedAt: String,
+    // B3: when the note was last OPENED (read) — transient telemetry for the Pages "recent"
+    // ordering, bumped directly on editor open (not undoable, no history). Additive optional:
+    // absent in old documents and in anything the web writes, and stateJson's encodeDefaults=false
+    // keeps it off the wire while null, matching the other optional fields here.
+    val lastViewedAt: String? = null
 )

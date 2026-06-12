@@ -81,16 +81,44 @@ class NormalizeStateTest {
     }
 
     @Test
-    fun `normalizing the seed fixture only adds the Main page`() {
+    fun `normalizing the seed fixture only adds the Main page and the dump note`() {
         val fixture = stateJson.decodeFromString<AppState>(loadFixtureText())
         val normalized = normalizeState(fixture)
-        // T108: the web seed predates the Main page, so normalize appends exactly that folder
-        // and touches nothing else.
+        // T108/B3: the web seed predates the Main page and the dump note, so normalize adds
+        // exactly those two and touches nothing else.
         val main = normalized.folders.last()
         assertEquals("folder_main", main.id)
-        assertEquals(fixture, normalized.copy(folders = normalized.folders.filterNot { it.id == "folder_main" }))
-        // A state that already has Main is a pure fixed point.
+        val dump = normalized.documents.first()
+        assertEquals("doc_dump", dump.id)
+        assertEquals(
+            fixture,
+            normalized.copy(
+                folders = normalized.folders.filterNot { it.id == "folder_main" },
+                documents = normalized.documents.filterNot { it.id == "doc_dump" }
+            )
+        )
+        // A state that already has both is a pure fixed point.
         assertEquals(normalized, normalizeState(normalized))
+    }
+
+    @Test
+    fun `the dump note is ensured in Main with the state clock, an existing dump is untouched`() {
+        val normalized = normalizeState(minimalState())
+        val dump = normalized.documents.single()
+        assertEquals("doc_dump", dump.id)
+        assertEquals("folder_main", dump.folderId)
+        assertEquals("Dump", dump.title)
+        assertEquals("", dump.body)
+        assertEquals("2026-06-11T09:00:00.000Z", dump.createdAt)
+        assertEquals(dump.createdAt, dump.updatedAt)
+
+        // An existing doc_dump is left exactly as the user has it (renamed/moved/filled is fine).
+        val customized = normalized.copy(
+            documents = listOf(dump.copy(title = "Inbox", body = "- 09:00 keep me"))
+        )
+        val renormalized = normalizeState(customized)
+        assertEquals("Inbox", renormalized.documents.single().title)
+        assertEquals("- 09:00 keep me", renormalized.documents.single().body)
     }
 
     @Test

@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Today
@@ -70,7 +72,20 @@ class MainActivity : ComponentActivity() {
                     controller.isAppearanceLightNavigationBars = lightBehindNavBar
                 }
 
-                CompositionLocalProvider(LocalSkin provides skin) {
+                // B2: text-selection colors follow the SKIN, not the hardcoded warm-dark Material
+                // scheme. Without this every BasicTextField (the inline-add rows, TaskSheet, note
+                // editor) paints its selection box + cursor handles in the warm-dark orange — on
+                // the light paper skins that reads as a wrong-coloured text box.
+                val selectionColors = remember(skin) {
+                    TextSelectionColors(
+                        handleColor = skin.palette.accent,
+                        backgroundColor = skin.palette.accent.copy(alpha = 0.4f)
+                    )
+                }
+                CompositionLocalProvider(
+                    LocalSkin provides skin,
+                    LocalTextSelectionColors provides selectionColors
+                ) {
                     if (showSettings) {
                         BackHandler { showSettings = false }
                         SettingsScreen(settings = viewModel.settings, onBack = { showSettings = false })

@@ -30,10 +30,12 @@ import com.twolaugh.ex3cuusion.core.model.TaskStatus
 import com.twolaugh.ex3cuusion.core.model.TaskType
 import com.twolaugh.ex3cuusion.core.model.TrayOutcome
 import com.twolaugh.ex3cuusion.core.model.TraySignal
+import com.twolaugh.ex3cuusion.core.store.DUMP_DOCUMENT_ID
 import com.twolaugh.ex3cuusion.core.store.MAIN_FOLDER_ID
 import com.twolaugh.ex3cuusion.core.store.StateStore
 import com.twolaugh.ex3cuusion.core.store.UndoStack
 import com.twolaugh.ex3cuusion.core.store.ChangeHistoryItem
+import com.twolaugh.ex3cuusion.core.store.dumpDocument
 import com.twolaugh.ex3cuusion.core.store.mainFolder
 import java.time.Instant
 import java.util.UUID
@@ -52,6 +54,12 @@ class DomainEngine(
     private val store: StateStore? = null
 ) {
     var state: AppState = initialState
+        private set
+
+    // B1: the day window the capacity gauge derives from. TRANSIENT engine config, deliberately
+    // outside the JSON state document (the engine stays state-pure) — AppViewModel applies it
+    // from SettingsStore on init and again whenever the setting changes.
+    var dayWindow: DayWindow = DayWindow()
         private set
 
     private var idCounter = 0
@@ -143,6 +151,13 @@ class DomainEngine(
 
     // --- clock (test/dev harness, mirrors state.ts setClock/advanceDay; not undoable) -------------
 
+    // B1: invalid HH:MM values are ignored (the Settings field writes through per keystroke; the
+    // engine must not trust half-typed input). Not undoable, not persisted — pure config.
+    fun setDayWindow(start: String, end: String) {
+        if (!validTime(start) || !validTime(end)) return
+        dayWindow = DayWindow(start = start, end = end)
+    }
+
     fun setClock(date: String, time: String) {
         state = state.copy(currentDate = date, currentTime = time)
         persist()
@@ -169,7 +184,7 @@ class DomainEngine(
     // planning must not move the acceptance signals (T110).
     fun dayListView(date: String = state.currentDate): DayListView {
         val list = ensureDayList(date)
-        val rendered = renderDayList(state, list, recordTelemetry = date == state.currentDate)
+        val rendered = renderDayList(state, list, recordTelemetry = date == state.currentDate, dayWindow = dayWindow)
         state = rendered.state
         persist()
         return rendered.view
@@ -596,6 +611,51 @@ class DomainEngine(
         val document = findDocument(documentId) ?: return
         recordChange("manual_edit", "Deleted note \"${documentLabel(document.title, document.body)}\"")
         state = state.copy(documents = state.documents.filter { it.id != documentId })
+        persist()
+    }
+
+    // B3: materialize the DUMP note (and Main, its home) into a never-normalized state — the
+    // public entry points below must always have a real dump to land on. No history of its own:
+    // callers materialize BEFORE their snapshot, the ensureDayList pattern.
+    private fun materializeDump(): Document {
+        if (state.folders.none { it.id == MAIN_FOLDER_ID }) {
+            state = state.copy(folders = state.folders + mainFolder())
+        }
+        val existing = state.documents.find { it.id == DUMP_DOCUMENT_ID }
+        if (existing != null) return existing
+        val dump = dumpDocument(createdAt = nowIso())
+        state = state.copy(documents = listOf(dump) + state.documents)
+        return dump
+    }
+
+    // B3: the Pages quick-jot — the dump note IS the inbox, so a jot APPENDS a timestamped "- "
+    // line to its body instead of creating a new document. One undoable change.
+    fun appendToDump(text: String) {
+        val cleaned = text.trim()
+        if (cleaned.isEmpty()) return
+        materializeDump() // before the snapshot, so undo keeps the dump and removes only the line
+        recordChange("capture", "Jotted \"${truncateTitle(cleaned)}\" to the dump")
+        val line = "- ${state.currentDate} ${state.currentTime} · $cleaned"
+        state = state.copy(
+            documents = state.documents.map { doc ->
+                if (doc.id != DUMP_DOCUMENT_ID) doc
+                else doc.copy(
+                    body = if (doc.body.isBlank()) line else doc.body.trimEnd() + "\n" + line,
+                    updatedAt = nowIso()
+                )
+            }
+        )
+        persist()
+    }
+
+    // B3: read telemetry, NOT an edit — opening a note in the editor bumps lastViewedAt for the
+    // Pages "recent" ordering. Deliberately no recordChange (undo must never rewind a glance);
+    // persisted directly.
+    fun markDocumentViewed(documentId: String) {
+        val document = findDocument(documentId) ?: return
+        val stamped = document.copy(lastViewedAt = nowIso())
+        if (stamped == document) return
+        state = state.copy(documents = state.documents.map { if (it.id == documentId) stamped else it })
         persist()
     }
 

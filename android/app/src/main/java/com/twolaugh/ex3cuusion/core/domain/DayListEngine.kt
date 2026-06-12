@@ -305,7 +305,14 @@ fun stateTimestamp(state: AppState): String = "${state.currentDate}T${state.curr
 //   - recordTelemetry=false suppresses the surfacing write entirely: rendering tomorrow's tray
 //     while planning must not teach the acceptance model (the engine passes the flag; the view
 //     rows then read the unstamped signals, which only affects same-day display niceties).
-fun renderDayList(state: AppState, list: DayList, recordTelemetry: Boolean = true): RenderedDayList {
+// B1: `dayWindow` is the transient Settings-owned day window the capacity gauge derives from
+// (the engine passes its config in; the default keeps existing callers/tests meaningful).
+fun renderDayList(
+    state: AppState,
+    list: DayList,
+    recordTelemetry: Boolean = true,
+    dayWindow: DayWindow = DayWindow()
+): RenderedDayList {
     val date = list.date
     val isFutureDate = date > state.currentDate
     val nowMinutes = if (isFutureDate) 0 else timeToMinutes(state.currentTime)
@@ -482,7 +489,7 @@ fun renderDayList(state: AppState, list: DayList, recordTelemetry: Boolean = tru
                 gapMinutes = gapMinutes
             ),
             gauges = DayListGauges(
-                capacityMinutes = calculateCapacity(state, fullDay = isFutureDate),
+                capacityMinutes = calculateCapacity(state, fullDay = isFutureDate, window = dayWindow),
                 listMinutes = listMinutes,
                 calibratedListMinutes = calibratedListMinutes,
                 balance = minutesByPillar,

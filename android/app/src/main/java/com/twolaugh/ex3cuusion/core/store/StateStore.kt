@@ -1,6 +1,7 @@
 package com.twolaugh.ex3cuusion.core.store
 
 import com.twolaugh.ex3cuusion.core.model.AppState
+import com.twolaugh.ex3cuusion.core.model.Document
 import com.twolaugh.ex3cuusion.core.model.Folder
 import com.twolaugh.ex3cuusion.core.model.FolderStatus
 import kotlinx.serialization.json.Json
@@ -57,6 +58,20 @@ const val MAIN_FOLDER_ID = "folder_main"
 internal fun mainFolder(): Folder =
     Folder(id = MAIN_FOLDER_ID, name = "Main", color = 0, status = FolderStatus.Active)
 
+// B3: the DUMP note — the one persistent inbox note at the top of the Pages tab. Quick jots
+// append to its body; every normalized state has it (in Main). Deleting it just means it comes
+// back empty on the next normalize.
+const val DUMP_DOCUMENT_ID = "doc_dump"
+
+internal fun dumpDocument(createdAt: String): Document = Document(
+    id = DUMP_DOCUMENT_ID,
+    folderId = MAIN_FOLDER_ID,
+    title = "Dump",
+    body = "",
+    createdAt = createdAt,
+    updatedAt = createdAt
+)
+
 // Port of normalizeState's NORMALIZATION layer (repository.ts). The legacy domains/projects/
 // routines forward-migration is intentionally NOT ported: the phone never sees pre-T088 data.
 // Missing-array defaulting (the `??=` lines) is handled structurally by the @Serializable
@@ -82,8 +97,16 @@ fun normalizeState(state: AppState): AppState {
 
     // T108: a document can never dangle — notes whose folder vanished reparent to Main (unlike
     // tasks, a note has no meaning without a page to live on).
-    val repairedDocuments = state.documents.map { doc ->
+    val reparented = state.documents.map { doc ->
         if (doc.folderId !in folderIds) doc.copy(folderId = MAIN_FOLDER_ID) else doc
+    }
+
+    // B3: the DUMP note always exists (created empty, stamped with the state clock). An existing
+    // doc_dump is left exactly as the user has it, like folder_main above.
+    val repairedDocuments = if (reparented.none { it.id == DUMP_DOCUMENT_ID }) {
+        listOf(dumpDocument(createdAt = "${state.currentDate}T${state.currentTime}:00.000Z")) + reparented
+    } else {
+        reparented
     }
 
     // Drop block selections whose folder no longer exists.

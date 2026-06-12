@@ -1,8 +1,8 @@
 package com.twolaugh.ex3cuusion.ui.pages
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -19,14 +19,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,21 +46,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.twolaugh.ex3cuusion.core.domain.FolderCardView
+import androidx.compose.ui.unit.sp
+import com.twolaugh.ex3cuusion.core.domain.DumpCardView
+import com.twolaugh.ex3cuusion.core.domain.RecentNoteView
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
+import com.twolaugh.ex3cuusion.ui.today.SectionLabel
 import com.twolaugh.ex3cuusion.ui.today.hairline
 
-// T108: the Pages grid — every folder is a colour-coded page card, Keep-style. Main (the
-// quick-capture inbox) is pinned first; the rest order by recency. The jot field at the top
-// drops a note straight into Main without leaving the grid.
+// B3: the Pages tab home — jot field on top, then the DUMP note (the one persistent inbox note,
+// always first, visually distinguished), then RECENT: the most recently edited/viewed notes
+// across all folders, colour-coded by their folder's tone. The folder hierarchy lives on its own
+// Browse page, reached through the small header icon (elegance: reuse the header, no fab).
 
 internal fun pageTone(index: Int) = Ex3Colors.pageTones[index.coerceIn(0, Ex3Colors.pageTones.size - 1)]
 
 @Composable
 internal fun PagesScreen(
-    cards: List<FolderCardView>,
+    dump: DumpCardView?,
+    recents: List<RecentNoteView>,
     onJot: (String) -> Unit,
-    onOpenFolder: (String) -> Unit
+    onOpenDump: () -> Unit,
+    onOpenNote: (RecentNoteView) -> Unit,
+    onBrowse: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -67,28 +77,62 @@ internal fun PagesScreen(
             .padding(horizontal = 20.dp)
     ) {
         Spacer(Modifier.height(8.dp))
-        JotToMainRow(onJot = onJot)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = "Pages",
+                style = MaterialTheme.typography.titleLarge,
+                color = Ex3Colors.ink,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onBrowse) {
+                Icon(
+                    imageVector = Icons.Outlined.FolderOpen,
+                    contentDescription = "Browse folders",
+                    tint = Ex3Colors.inkMuted
+                )
+            }
+        }
+
+        JotToDumpRow(onJot = onJot)
         HorizontalDivider(thickness = 0.5.dp, color = hairline)
         Spacer(Modifier.height(16.dp))
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+        LazyColumn(
             contentPadding = PaddingValues(bottom = 24.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(cards, key = { it.folderId }) { card ->
-                FolderCard(card = card, onClick = { onOpenFolder(card.folderId) })
+            if (dump != null) {
+                item(key = "dump") {
+                    DumpCard(dump = dump, onClick = onOpenDump)
+                    Spacer(Modifier.height(20.dp))
+                }
+            }
+            item(key = "recent_label") {
+                SectionLabel("RECENT")
+                Spacer(Modifier.height(8.dp))
+            }
+            if (recents.isEmpty()) {
+                item(key = "recent_empty") {
+                    Text(
+                        text = "Notes you edit or open show up here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Ex3Colors.inkFaint,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
+            }
+            items(recents, key = { it.noteId }) { note ->
+                RecentNoteCard(note = note, onClick = { onOpenNote(note) })
+                Spacer(Modifier.height(8.dp))
             }
         }
     }
 }
 
-// Borderless quick-jot into Main: clears on done and keeps focus for rapid batch capture,
-// exactly like the Today list's inline add.
+// Borderless quick-jot: clears on done and keeps focus for rapid batch capture, exactly like the
+// Today list's inline add. B3: jots APPEND to the dump note (the inbox) as timestamped lines.
 @Composable
-private fun JotToMainRow(onJot: (String) -> Unit) {
+private fun JotToDumpRow(onJot: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -115,7 +159,7 @@ private fun JotToMainRow(onJot: (String) -> Unit) {
                 Box {
                     if (draft.isEmpty()) {
                         Text(
-                            text = "jot to Main...",
+                            text = "jot to the dump...",
                             style = MaterialTheme.typography.bodyLarge,
                             color = Ex3Colors.inkFaint
                         )
@@ -130,69 +174,99 @@ private fun JotToMainRow(onJot: (String) -> Unit) {
     }
 }
 
+// The DUMP — one special always-first card: accent hairline border, larger than the recents,
+// showing the TAIL of the body (the newest jots live at the bottom). Tap = straight into the
+// editor.
 @Composable
-private fun FolderCard(card: FolderCardView, onClick: () -> Unit) {
+private fun DumpCard(dump: DumpCardView, onClick: () -> Unit) {
+    val tail = dump.body.trim().lines().filter { it.isNotBlank() }.takeLast(4)
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = Ex3Colors.surface,
+        border = BorderStroke(1.dp, Ex3Colors.accent.copy(alpha = 0.55f)),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
     ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 112.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            Text(
+                text = "Dump",
+                style = MaterialTheme.typography.titleMedium,
+                color = Ex3Colors.ink
+            )
+            Spacer(Modifier.height(6.dp))
+            if (tail.isEmpty()) {
+                Text(
+                    text = "the inbox — jot above, file later",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Ex3Colors.inkFaint
+                )
+            } else {
+                for (line in tail) {
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 21.sp),
+                        color = Ex3Colors.inkMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+// One recent note: left accent bar in the folder's palette tone, title/preview, folder name.
+@Composable
+private fun RecentNoteCard(note: RecentNoteView, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = Ex3Colors.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+    ) {
         Row(Modifier.height(IntrinsicSize.Min)) {
-            // The colour as a subtle left accent bar — Main wears the app accent as a hairline
-            // instead of a page tone (it is the inbox, not a pillar).
             Box(
                 Modifier
-                    .width(if (card.isMain) 2.dp else 3.dp)
+                    .width(3.dp)
                     .fillMaxHeight()
-                    .background(if (card.isMain) Ex3Colors.accent else pageTone(card.colorIndex))
+                    .background(pageTone(note.colorIndex))
             )
             Column(
                 Modifier
                     .weight(1f)
-                    .heightIn(min = 96.dp)
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Text(
-                    text = card.name,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                    color = Ex3Colors.ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (card.previewTitle != null || card.previewBody != null) {
-                    Spacer(Modifier.height(6.dp))
-                    if (card.previewTitle != null) {
-                        Text(
-                            text = card.previewTitle,
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                            color = Ex3Colors.inkMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    if (card.previewBody != null) {
-                        Text(
-                            text = card.previewBody,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Ex3Colors.inkMuted,
-                            maxLines = if (card.previewTitle != null) 2 else 3,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                if (note.title != null) {
+                    Text(
+                        text = note.title,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                        color = Ex3Colors.ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-                Spacer(Modifier.weight(1f))
-                Spacer(Modifier.height(8.dp))
+                if (note.previewBody != null) {
+                    Text(
+                        text = note.previewBody,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (note.title != null) Ex3Colors.inkMuted else Ex3Colors.ink,
+                        maxLines = if (note.title != null) 1 else 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    text = buildString {
-                        append("${card.noteCount} ${if (card.noteCount == 1) "note" else "notes"}")
-                        if (card.activeTaskCount > 0) {
-                            append(" · ${card.activeTaskCount} ${if (card.activeTaskCount == 1) "task" else "tasks"}")
-                        }
-                    },
-                    style = MaterialTheme.typography.labelMedium, // 12sp
+                    text = note.folderName,
+                    style = MaterialTheme.typography.labelMedium,
                     color = Ex3Colors.inkFaint
                 )
             }
