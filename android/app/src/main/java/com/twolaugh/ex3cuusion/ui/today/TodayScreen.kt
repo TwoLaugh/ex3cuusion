@@ -19,12 +19,17 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -185,7 +190,11 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
 
     Scaffold(
         containerColor = if (variant == null) Ex3Colors.bg else skin.palette.bg,
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        // Top/side insets only: the bottom is already covered by the shell's NavigationBar
+        // padding (consumed there) — the default systemBars value would re-add the system nav
+        // inset a second time and widen the IME void below.
+        contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
     ) { padding ->
         val view = ui.view ?: return@Scaffold
         // T110 planning mode: the surface is pointed at tomorrow (ui.view already is tomorrow's
@@ -196,6 +205,7 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
                 .imePadding()
         ) {
             // Slim sticky timer bar: pinned above the scrollable column so it never scrolls away.

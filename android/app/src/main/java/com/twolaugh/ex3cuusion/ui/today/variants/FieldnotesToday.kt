@@ -454,6 +454,9 @@ private fun FnInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
                 Box(
                     Modifier
                         .fillMaxWidth()
+                        // constant bottom reserve keeps the typewriter line INSIDE the decoration
+                        // bounds — drawn past them the field clips it and it never shows
+                        .padding(bottom = 6.dp)
                         .drawBehind {
                             if (focused) {
                                 // the typewriter line the next strike lands on

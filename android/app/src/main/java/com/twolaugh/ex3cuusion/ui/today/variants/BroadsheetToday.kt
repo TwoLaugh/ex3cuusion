@@ -494,6 +494,9 @@ private fun BsInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
                 Box(
                     Modifier
                         .fillMaxWidth()
+                        // constant bottom reserve keeps the ledger line INSIDE the decoration
+                        // bounds — drawn past them the field clips it and it never shows
+                        .padding(bottom = 7.dp)
                         .drawBehind {
                             if (focused) {
                                 // the ledger line the new entry is being written on

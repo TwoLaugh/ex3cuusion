@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
@@ -121,7 +122,11 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         ) { padding ->
-                            Box(Modifier.fillMaxSize().padding(padding)) {
+                            // consumeWindowInsets: the bar-height padding above covers the system
+                            // nav inset too, so children's imePadding must subtract it — without
+                            // this the IME height stacks ON TOP of the bar padding and the
+                            // keyboard pushes a big blank band of background above itself.
+                            Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                                 when (tab) {
                                     RootTab.Today -> TodayScreen(viewModel, onOpenSettings = { showSettings = true })
                                     RootTab.Pages -> PagesHost(viewModel)
