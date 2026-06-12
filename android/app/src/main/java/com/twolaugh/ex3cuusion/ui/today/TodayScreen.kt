@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -82,6 +84,7 @@ import com.twolaugh.ex3cuusion.ui.today.variants.TodayVariant
 import com.twolaugh.ex3cuusion.ui.today.variants.VariantActions
 import com.twolaugh.ex3cuusion.ui.today.variants.VariantBalance
 import com.twolaugh.ex3cuusion.ui.today.variants.VariantTodayBody
+import com.twolaugh.ex3cuusion.ui.today.variants.habitEditOutline
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -145,6 +148,10 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
     // variant's actions.openBalance() raise the same flag; the sheet itself differs per path.
     val showBalanceSheet = remember { mutableStateOf(false) }
 
+    // TASK SHEET host state: which task's sheet is open (null = closed). Host-level so the one
+    // sheet implementation serves warm-dark and every variant alike.
+    val sheetTaskId = remember { mutableStateOf<String?>(null) }
+
     // The ONE wiring of a layout variant to the app: method references into the AppViewModel
     // (so instantCapture rides the same T105 enrichment pipeline), plus the host-owned balance
     // sheet. Remembered against the ViewModel so variant rows see a stable callback object.
@@ -161,6 +168,8 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
             override fun carriedToSomeday(taskId: String) = viewModel.carriedToSomeday(taskId)
             override fun letGo(taskId: String) = viewModel.letGo(taskId)
             override fun openBalance() { showBalanceSheet.value = true }
+            override fun openTask(taskId: String) { sheetTaskId.value = taskId }
+            override fun archiveTask(taskId: String) = viewModel.archive(taskId)
         }
     }
 
@@ -261,7 +270,12 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                         Spacer(Modifier.height(20.dp))
                         SectionLabel("HABITS")
                         Spacer(Modifier.height(8.dp))
-                        HabitStrip(habits = view.habits, onToggle = viewModel::tick, onReorder = viewModel::reorderHabits)
+                        HabitStrip(
+                            habits = view.habits,
+                            onToggle = viewModel::tick,
+                            onReorder = viewModel::reorderHabits,
+                            onOpenTask = { sheetTaskId.value = it }
+                        )
                     }
 
                     Spacer(Modifier.height(24.dp))
@@ -277,7 +291,9 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                         onStartTimer = viewModel::startTimer,
                         onSomeday = viewModel::carriedToSomeday,
                         onLetGo = viewModel::letGo,
-                        onCapture = viewModel::instantCapture
+                        onCapture = viewModel::instantCapture,
+                        onOpenTask = { sheetTaskId.value = it },
+                        onArchive = viewModel::archive
                     )
 
                     val tray = view.tray
@@ -334,6 +350,30 @@ fun TodayScreen(viewModel: AppViewModel, onOpenSettings: () -> Unit = {}) {
                     VariantBalance(variant = variant, ui = ui)
                     Spacer(Modifier.height(24.dp))
                 }
+            }
+        }
+
+        // The TASK SHEET — one host-level instance over every skin. Data re-derives from engine
+        // state each recomposition (ui is in this scope), so the progress row updates live after
+        // a log. LocalSkin here is already the active skin, so the sheet styles itself correctly.
+        val openTaskId = sheetTaskId.value
+        if (openTaskId != null) {
+            val data = viewModel.taskSheetData(openTaskId)
+            if (data != null) {
+                TaskSheet(
+                    data = data,
+                    onSave = { patch -> viewModel.saveTask(openTaskId, patch) },
+                    onLogProgress = { minutes -> viewModel.logProgress(openTaskId, minutes) },
+                    onArchive = {
+                        viewModel.archive(openTaskId)
+                        sheetTaskId.value = null
+                    },
+                    onLetGo = {
+                        viewModel.letGo(openTaskId)
+                        sheetTaskId.value = null
+                    },
+                    onDismiss = { sheetTaskId.value = null }
+                )
             }
         }
     }
@@ -703,12 +743,18 @@ internal fun BalanceBar(shares: List<DayListPillarShare>) {
 private fun HabitStrip(
     habits: List<DayListHabitView>,
     onToggle: (String) -> Unit,
-    onReorder: (List<String>) -> Unit
+    onReorder: (List<String>) -> Unit,
+    onOpenTask: (String) -> Unit = {}
 ) {
     // All habits visible at once; chips support BOTH gestures: hold still to complete, hold and
     // MOVE to rearrange. Chips render in committed order during a drag (reordering composition
     // mid-gesture kills the gesture coroutine, same trap as the list rows); the dragged chip
     // floats via translation and the new order commits on release.
+    //
+    // EDIT STATE (elegance rule: chips stay a PURE completion surface): the one trailing "..."
+    // affordance arms editing — chips gain a faint dashed outline and a TAP opens the TaskSheet;
+    // tapping "..." again exits. No per-chip buttons, no accidental tap actions outside editing.
+    var editing by remember { mutableStateOf(false) }
     val order = habits.map { it.taskId }
     val chipBounds = remember { mutableStateMapOf<String, androidx.compose.ui.geometry.Rect>() }
     var dragChipId by remember { mutableStateOf<String?>(null) }
@@ -779,6 +825,8 @@ private fun HabitStrip(
                 ) {
                     HabitChip(
                         habit = habit,
+                        editing = editing,
+                        onOpen = { onOpenTask(habit.taskId) },
                         onToggle = { onToggle(habit.taskId) },
                         onDragStart = {
                             dragChipId = habit.taskId
@@ -801,16 +849,36 @@ private fun HabitStrip(
                 }
             }
         }
+        // The ONE trailing affordance: "..." toggles the edit state (accent-tinted while armed).
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = Color.Transparent,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                if (editing) Ex3Colors.accent else Ex3Colors.inkFaint.copy(alpha = 0.6f)
+            ),
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { editing = !editing }
+        ) {
+            Text(
+                text = "···",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (editing) Ex3Colors.accent else Ex3Colors.inkMuted,
+                modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
+            )
+        }
     }
     }
 }
 
 // Compact display name: everything before the first long-form separator. "Seal technique —
-// moisturise within 30s post-shower" reads as "Seal technique" on a chip.
+// moisturise within 30s post-shower" reads as "Seal technique" on a chip. Chips allow ~30
+// chars over up to two lines before truncating; the TaskSheet shows the full name.
 private fun habitShortName(title: String): String {
     var cut = title.split(" — ", " - ", " – ").first().trim()
-    if (cut.length > 24) cut = cut.split(" + ").first().trim()
-    return if (cut.length > 24) cut.take(23).trimEnd() + "…" else cut
+    if (cut.length > 30) cut = cut.split(" + ").first().trim()
+    return if (cut.length > 30) cut.take(29).trimEnd() + "…" else cut
 }
 
 // A short letterspaced section label — the at-a-glance separator between zones of the screen.
@@ -826,6 +894,8 @@ internal fun SectionLabel(text: String) {
 @Composable
 private fun HabitChip(
     habit: DayListHabitView,
+    editing: Boolean = false,
+    onOpen: () -> Unit = {},
     onToggle: () -> Unit,
     onDragStart: () -> Unit = {},
     onDragBy: (androidx.compose.ui.geometry.Offset) -> Unit = {},
@@ -833,7 +903,8 @@ private fun HabitChip(
 ) {
     val ticked = habit.completedToday
     // One gesture, two outcomes: hold STILL and the fill commits the tick; MOVE past slop and the
-    // hold cancels into a rearrange drag.
+    // hold cancels into a rearrange drag. In the strip's EDIT state both are replaced by a plain
+    // tap that opens the TaskSheet (cue: the dashed outline).
     val hold = rememberHoldToComplete()
     val settle = remember { Animatable(1f) }
     val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -846,11 +917,17 @@ private fun HabitChip(
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = if (ticked) Ex3Colors.inkMuted else Color.Transparent,
-        border = if (ticked) null else androidx.compose.foundation.BorderStroke(1.dp, Ex3Colors.inkFaint),
+        border = if (ticked || editing) null else androidx.compose.foundation.BorderStroke(1.dp, Ex3Colors.inkFaint),
         modifier = Modifier
             // tactility: the chip squeezes as the hold fill grows, then settles on commit
             .scale(settle.value * (1f - 0.05f * hold.progress.value))
-            .pointerInput(habit.taskId) {
+            .then(
+                if (editing) {
+                    Modifier
+                        .habitEditOutline(Ex3Colors.accent.copy(alpha = 0.65f), 8.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onOpen)
+                } else Modifier.pointerInput(habit.taskId) {
                 val slop = 12.dp.toPx()
                 kotlinx.coroutines.coroutineScope {
                     awaitEachGesture {
@@ -896,6 +973,7 @@ private fun HabitChip(
                     }
                 }
             }
+            )
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -906,6 +984,15 @@ private fun HabitChip(
                         drawRect(
                             color = Ex3Colors.accent.copy(alpha = 0.22f),
                             size = size.copy(width = size.width * hold.progress.value)
+                        )
+                    }
+                    // Thin partial fill along the bottom edge: logged progress / effort estimate.
+                    if (!ticked && habit.progressMinutesToday > 0 && habit.effortMinutes > 0) {
+                        val frac = (habit.progressMinutesToday.toFloat() / habit.effortMinutes).coerceIn(0f, 1f)
+                        drawRect(
+                            color = Ex3Colors.accent.copy(alpha = 0.6f),
+                            topLeft = Offset(0f, size.height - 2.dp.toPx()),
+                            size = androidx.compose.ui.geometry.Size(size.width * frac, 2.dp.toPx())
                         )
                     }
                 }
@@ -922,7 +1009,8 @@ private fun HabitChip(
             Text(
                 text = habitShortName(habit.title),
                 style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
+                maxLines = 2,
+                modifier = Modifier.widthIn(max = 150.dp),
                 color = if (ticked) Ex3Colors.bg else Ex3Colors.ink
             )
             if (habit.streak >= 2) {

@@ -125,12 +125,13 @@ class DomainEngine(
         type: ExecutionEventType,
         taskIds: List<String>? = null,
         planItemId: String? = null,
-        actualMinutes: Int? = null
+        actualMinutes: Int? = null,
+        date: String = state.currentDate
     ) {
         state = state.copy(
             executionEvents = state.executionEvents + ExecutionEvent(
                 id = nextId("event"),
-                date = state.currentDate,
+                date = date,
                 createdAt = nowIso(),
                 type = type,
                 taskIds = taskIds,
@@ -884,15 +885,32 @@ class DomainEngine(
             val title = findTask(timer.taskId)?.title ?: timer.taskId
             recordChange("timer", "Worked on \"${truncateTitle(title)}\" (${actual}m)")
             state = state.copy(activeTimer = null)
-            addExecutionEvent(
-                ExecutionEventType.WorkedOn,
-                taskIds = listOf(timer.taskId),
-                planItemId = "plan_${state.currentDate}_${timer.taskId}",
-                actualMinutes = actual
-            )
+            addWorkedOnEvent(timer.taskId, actual)
         }
         persist()
         return actual
+    }
+
+    // The ONE worked_on writer — timer stops and manual progress logs produce the identical event
+    // shape, so calibration/forecasting and the progressMinutesToday views see both the same way.
+    private fun addWorkedOnEvent(taskId: String, minutes: Int, date: String = state.currentDate) {
+        addExecutionEvent(
+            ExecutionEventType.WorkedOn,
+            taskIds = listOf(taskId),
+            planItemId = "plan_${date}_$taskId",
+            actualMinutes = minutes,
+            date = date
+        )
+    }
+
+    // TaskSheet progress logging: hand-log minutes worked on a task without completing it — the
+    // manual sibling of stopTaskTimer(complete = false). Undoable; non-positive minutes are a no-op.
+    fun logTaskProgress(taskId: String, minutes: Int, date: String = state.currentDate) {
+        if (minutes <= 0) return
+        val task = state.tasks.find { it.id == taskId && it.status != TaskStatus.Archived } ?: return
+        recordChange("timer", "Logged ${minutes}m on \"${truncateTitle(task.title)}\"")
+        addWorkedOnEvent(taskId, minutes, date)
+        persist()
     }
 
     private fun elapsedMinutes(fromIso: String, toIso: String): Int {
@@ -944,38 +962,69 @@ class DomainEngine(
         return task.id
     }
 
-    fun updateTask(taskId: String, patch: TaskPatch) {
+    // Patch a task. A patch that changes nothing records nothing (no history — the TaskSheet's
+    // "no-op save" guarantee). `syncPinDate` is the sheet's pin-sync seam: when the patch carries
+    // scheduledTime, the day-list entry pin for that date follows it ("" clears both) inside the
+    // SAME undoable change, mirroring the applyEnrichment pin-sync pattern.
+    fun updateTask(taskId: String, patch: TaskPatch, syncPinDate: String? = null) {
         val task = findTask(taskId) ?: return
+        var next = task
+        patch.title?.trim()?.takeIf { it.isNotEmpty() }?.let { next = next.copy(title = it) }
+        if (patch.folderId != null) {
+            val target = patch.folderId.takeIf { id -> state.folders.any { it.id == id } } ?: next.folderId
+            val folder = target?.let { id -> state.folders.find { it.id == id } }
+            val inChildFolder = folder?.parentFolderId != null
+            next = next.copy(
+                folderId = target,
+                type = if (inChildFolder) {
+                    if (next.completionBehavior == CompletionBehavior.KeepAsSuggestion) TaskType.SoftInvitation else TaskType.ProjectTask
+                } else if (next.type == TaskType.ProjectTask) TaskType.Atomic else next.type
+            )
+        }
+        patch.completionBehavior?.let { next = next.copy(completionBehavior = it) }
+        patch.definitionOfDone?.trim()?.takeIf { it.isNotEmpty() }?.let { next = next.copy(definitionOfDone = it) }
+        patch.priority?.let { next = next.copy(priority = clamp(it, 1, 10, next.priority)) }
+        patch.importance?.let { next = next.copy(importance = clamp(it, 1, 10, next.importance)) }
+        patch.urgency?.let { next = next.copy(urgency = clamp(it, 1, 10, next.urgency)) }
+        patch.effortMinutes?.let { next = next.copy(effortMinutes = clamp(it, 1, 720, next.effortMinutes)) }
+        // optionalText-style semantics on dueDate/scheduledTime: "" clears, a valid value sets,
+        // junk is ignored (the sheet validates, but the engine must not trust it).
+        patch.dueDate?.let {
+            if (it.isEmpty()) next = next.copy(dueDate = null)
+            else if (validDate(it)) next = next.copy(dueDate = it)
+        }
+        patch.scheduledDate?.takeIf { validDate(it) }?.let { next = next.copy(scheduledDate = it) }
+        patch.scheduledTime?.let {
+            if (it.isEmpty()) next = next.copy(scheduledTime = null)
+            else if (validTime(it)) next = next.copy(scheduledTime = it)
+        }
+        patch.energy?.let { next = next.copy(energy = it) }
+        patch.strictness?.let { next = next.copy(strictness = it) }
+        // T092: explicit per-task habit flag (boolean only; false clears it).
+        patch.habit?.let { next = next.copy(habit = if (it) true else null) }
+        patch.repeatPolicy?.let { next = next.copy(repeatPolicy = it) }
+        // Tags: full replacement, trimmed and blank-filtered; an all-blank list clears.
+        patch.tags?.let { tags ->
+            next = next.copy(tags = tags.map(String::trim).filter(String::isNotEmpty).takeIf(List<String>::isNotEmpty))
+        }
+
+        // Pin sync: the date's list entry follows the patched scheduledTime (valid sets, "" clears).
+        var pinnedTime: String? = null
+        var pinChanged = false
+        if (syncPinDate != null && patch.scheduledTime != null && (patch.scheduledTime.isEmpty() || validTime(patch.scheduledTime))) {
+            ensureDayList(syncPinDate) // materialize BEFORE the snapshot so undo keeps it
+            val entry = dayListFor(syncPinDate).entries.find { it.taskId == taskId }
+            pinnedTime = patch.scheduledTime.takeIf { it.isNotEmpty() }
+            pinChanged = entry != null && entry.pinnedTime != pinnedTime
+        }
+
+        if (next == task && !pinChanged) return // a no-op save records nothing
         recordChange("manual_edit", "Updated task \"${truncateTitle(task.title)}\"")
-        updateTaskIn(taskId) { current ->
-            var next = current
-            patch.title?.trim()?.takeIf { it.isNotEmpty() }?.let { next = next.copy(title = it) }
-            if (patch.folderId != null) {
-                val target = patch.folderId.takeIf { id -> state.folders.any { it.id == id } } ?: next.folderId
-                val folder = target?.let { id -> state.folders.find { it.id == id } }
-                val inChildFolder = folder?.parentFolderId != null
-                next = next.copy(
-                    folderId = target,
-                    type = if (inChildFolder) {
-                        if (next.completionBehavior == CompletionBehavior.KeepAsSuggestion) TaskType.SoftInvitation else TaskType.ProjectTask
-                    } else if (next.type == TaskType.ProjectTask) TaskType.Atomic else next.type
-                )
+        if (next != task) updateTaskIn(taskId) { next }
+        if (pinChanged) {
+            replaceDayList(syncPinDate!!) { list ->
+                list.copy(entries = list.entries.map { if (it.taskId == taskId) it.copy(pinnedTime = pinnedTime) else it })
             }
-            patch.completionBehavior?.let { next = next.copy(completionBehavior = it) }
-            patch.definitionOfDone?.trim()?.takeIf { it.isNotEmpty() }?.let { next = next.copy(definitionOfDone = it) }
-            patch.priority?.let { next = next.copy(priority = clamp(it, 1, 10, next.priority)) }
-            patch.importance?.let { next = next.copy(importance = clamp(it, 1, 10, next.importance)) }
-            patch.urgency?.let { next = next.copy(urgency = clamp(it, 1, 10, next.urgency)) }
-            patch.effortMinutes?.let { next = next.copy(effortMinutes = clamp(it, 1, 720, next.effortMinutes)) }
-            patch.dueDate?.takeIf { validDate(it) }?.let { next = next.copy(dueDate = it) }
-            patch.scheduledDate?.takeIf { validDate(it) }?.let { next = next.copy(scheduledDate = it) }
-            patch.scheduledTime?.takeIf { validTime(it) }?.let { next = next.copy(scheduledTime = it) }
-            patch.energy?.let { next = next.copy(energy = it) }
-            patch.strictness?.let { next = next.copy(strictness = it) }
-            // T092: explicit per-task habit flag (boolean only; false clears it).
-            patch.habit?.let { next = next.copy(habit = if (it) true else null) }
-            patch.repeatPolicy?.let { next = next.copy(repeatPolicy = it) }
-            next
         }
         persist()
     }
@@ -1027,6 +1076,8 @@ data class TaskPatch(
     val importance: Int? = null,
     val urgency: Int? = null,
     val habit: Boolean? = null,
+    // Full tag replacement (trimmed/blank-filtered in updateTask); null = not provided.
+    val tags: List<String>? = null,
     val repeatPolicy: RepeatPolicy? = null,
     val dueDate: String? = null,
     val scheduledDate: String? = null,

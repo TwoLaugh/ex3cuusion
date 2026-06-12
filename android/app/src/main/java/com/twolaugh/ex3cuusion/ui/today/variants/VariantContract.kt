@@ -25,4 +25,8 @@ interface VariantActions {
     fun carriedToSomeday(taskId: String)
     fun letGo(taskId: String)
     fun openBalance()
+    // Open the host-level TaskSheet for a task (grip-press menu Edit/Log, habit-strip edit taps).
+    fun openTask(taskId: String)
+    // Archive from the grip-press menu (the menu confirms inline before calling this).
+    fun archiveTask(taskId: String)
 }

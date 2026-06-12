@@ -183,12 +183,22 @@ fun FieldnotesTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
         }
         FnInlineAdd(skin = skin, onCapture = actions::instantCapture)
 
-        // HABITS — stamps
+        // HABITS — stamps. The "···" in the header arms the edit state: stamps go dashed and a
+        // tap opens the TaskSheet.
         if (view.habits.isNotEmpty()) {
+            var habitsEditing by remember { mutableStateOf(false) }
             val ticked = view.habits.count { it.completedToday }
             Spacer(Modifier.height(10.dp))
             FnSectionHead(skin, "HABITS — stamp when done.") {
-                Text("$ticked / ${view.habits.size}", style = fnHand(skin, 16.sp), color = skin.palette.inkMuted)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text("$ticked / ${view.habits.size}", style = fnHand(skin, 16.sp), color = skin.palette.inkMuted)
+                    Text(
+                        "···",
+                        style = fnType(skin, 13.sp),
+                        color = if (habitsEditing) red else skin.palette.inkMuted,
+                        modifier = Modifier.clickable { habitsEditing = !habitsEditing }.padding(start = 8.dp)
+                    )
+                }
             }
             Spacer(Modifier.height(8.dp))
             FlowRow(
@@ -197,7 +207,10 @@ fun FieldnotesTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
                 modifier = Modifier.fillMaxWidth()
             ) {
                 view.habits.forEachIndexed { i, habit ->
-                    FnStamp(habit = habit, index = i, skin = skin, onTick = { actions.tick(habit.taskId) })
+                    FnStamp(
+                        habit = habit, index = i, skin = skin, editing = habitsEditing,
+                        onTick = { actions.tick(habit.taskId) }, onOpen = { actions.openTask(habit.taskId) }
+                    )
                 }
             }
         }
@@ -348,17 +361,28 @@ private fun FnListRow(
                     }
                 }
             }
+            // logged progress in the margin hand: "30/90m"
+            val figure = if (entry.progressMinutesToday > 0 && !ticked) {
+                "${entry.progressMinutesToday}/${entry.effortMinutes}m"
+            } else {
+                "${entry.effortMinutes}m"
+            }
             Text(
-                "${entry.effortMinutes}m",
+                figure,
                 style = fnHand(skin, 19.sp), color = if (ticked) skin.palette.inkMuted else red,
                 modifier = Modifier
                     .padding(start = 8.dp)
                     .graphicsLayer { rotationZ = -2f }
             )
         }
-        Box(
-            Modifier.size(width = 32.dp, height = 44.dp).variantDragHandle(drag, entry.taskId),
-            contentAlignment = Alignment.Center
+        // the reorder grip; a press without a drag opens the row's action menu
+        VariantGripHandle(
+            state = drag,
+            id = entry.taskId,
+            onEdit = { actions.openTask(entry.taskId) },
+            onLogProgress = { actions.openTask(entry.taskId) },
+            onArchive = { actions.archiveTask(entry.taskId) },
+            modifier = Modifier.size(width = 32.dp, height = 44.dp)
         ) {
             Text("⁞", style = fnType(skin, 16.sp), color = skin.palette.inkMuted)
         }
@@ -407,9 +431,18 @@ private fun FnInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
 }
 
 // A circular rubber stamp: double ring, tilted, two abbreviated typewriter lines. The hold inks
-// it in (red wash grows with progress); once ticked it stays stamped in red.
+// it in (red wash grows with progress); once ticked it stays stamped in red. Edit state: the
+// outer ring goes DASHED and a tap opens the TaskSheet. Logged progress shows as a partial red
+// arc rising around the ring.
 @Composable
-private fun FnStamp(habit: DayListHabitView, index: Int, skin: Ex3Skin, onTick: () -> Unit) {
+private fun FnStamp(
+    habit: DayListHabitView,
+    index: Int,
+    skin: Ex3Skin,
+    editing: Boolean,
+    onTick: () -> Unit,
+    onOpen: () -> Unit
+) {
     val ticked = habit.completedToday
     val hold = rememberHoldToComplete()
     val red = skin.palette.accent
@@ -428,11 +461,30 @@ private fun FnStamp(habit: DayListHabitView, index: Int, skin: Ex3Skin, onTick: 
                 } else if (p > 0f) {
                     drawCircle(red.copy(alpha = 0.30f * p))
                 }
-                // double ring
-                drawCircle(tone, radius = size.minDimension / 2 - 1.dp.toPx(), style = Stroke(1.5.dp.toPx()))
+                // double ring (the outer one dashes while editing)
+                val outerStyle = if (editing) {
+                    Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx())))
+                } else {
+                    Stroke(1.5.dp.toPx())
+                }
+                drawCircle(tone, radius = size.minDimension / 2 - 1.dp.toPx(), style = outerStyle)
                 drawCircle(tone, radius = size.minDimension / 2 - 4.dp.toPx(), style = Stroke(1.dp.toPx()))
+                // partial progress: a red arc climbing the ring, proportional to logged/effort
+                if (!ticked && habit.progressMinutesToday > 0 && habit.effortMinutes > 0) {
+                    val frac = (habit.progressMinutesToday.toFloat() / habit.effortMinutes).coerceIn(0f, 1f)
+                    drawArc(
+                        red.copy(alpha = 0.8f),
+                        startAngle = -90f,
+                        sweepAngle = 360f * frac,
+                        useCenter = false,
+                        style = Stroke(2.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
             }
-            .holdToComplete(hold, durationMs = 450, onComplete = onTick),
+            .then(
+                if (editing) Modifier.clickable(onClick = onOpen)
+                else Modifier.holdToComplete(hold, durationMs = 450, onComplete = onTick)
+            ),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

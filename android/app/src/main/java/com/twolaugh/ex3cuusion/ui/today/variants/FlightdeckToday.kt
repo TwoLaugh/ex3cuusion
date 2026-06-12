@@ -134,7 +134,7 @@ fun FlightdeckTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
 
         if (view.habits.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            FdHabitsPanel(habits = view.habits, skin = skin, onTick = actions::tick)
+            FdHabitsPanel(habits = view.habits, skin = skin, onTick = actions::tick, onOpen = actions::openTask)
         }
 
         // flight plan
@@ -317,8 +317,10 @@ private fun FdDial(listMinutes: Int, capacityMinutes: Int, skin: Ex3Skin, modifi
 // ── SYSTEMS · HABITS: numbered pips, filled when ticked, hold-to-complete fill per pip ──────────
 
 @Composable
-private fun FdHabitsPanel(habits: List<DayListHabitView>, skin: Ex3Skin, onTick: (String) -> Unit) {
+private fun FdHabitsPanel(habits: List<DayListHabitView>, skin: Ex3Skin, onTick: (String) -> Unit, onOpen: (String) -> Unit) {
     val pending = habits.count { !it.completedToday }
+    // The header "···" arms the edit state: pips gain a dashed outline; a TAP opens the sheet.
+    var editing by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -330,11 +332,22 @@ private fun FdHabitsPanel(habits: List<DayListHabitView>, skin: Ex3Skin, onTick:
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("SYSTEMS · HABITS", style = fdLabel(skin), color = skin.palette.ink, modifier = Modifier.weight(1f))
             Text("$pending/${habits.size} PENDING", style = fdMono(skin, 10.sp, FontWeight.Normal), color = skin.palette.inkMuted)
+            Text(
+                "···",
+                style = fdMono(skin, 12.sp),
+                color = if (editing) skin.palette.accent else skin.palette.inkMuted,
+                modifier = Modifier.clickable { editing = !editing }.padding(start = 8.dp, top = 2.dp, bottom = 2.dp)
+            )
         }
         Spacer(Modifier.height(7.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.fillMaxWidth()) {
             habits.forEachIndexed { i, habit ->
-                Box(Modifier.weight(1f)) { FdHabitPip(habit = habit, number = i + 1, skin = skin, onTick = { onTick(habit.taskId) }) }
+                Box(Modifier.weight(1f)) {
+                    FdHabitPip(
+                        habit = habit, number = i + 1, skin = skin, editing = editing,
+                        onTick = { onTick(habit.taskId) }, onOpen = { onOpen(habit.taskId) }
+                    )
+                }
             }
         }
         Spacer(Modifier.height(6.dp))
@@ -348,9 +361,17 @@ private fun FdHabitsPanel(habits: List<DayListHabitView>, skin: Ex3Skin, onTick:
 }
 
 // One pip = the hold-to-complete target, restyled: the pip floods with accent as the hold runs;
-// ticked pips render solid accent with the number in panel colour.
+// ticked pips render solid accent with the number in panel colour. Edit state: dashed outline,
+// tap opens the TaskSheet. A thin accent baseline shows logged progress / effort.
 @Composable
-private fun FdHabitPip(habit: DayListHabitView, number: Int, skin: Ex3Skin, onTick: () -> Unit) {
+private fun FdHabitPip(
+    habit: DayListHabitView,
+    number: Int,
+    skin: Ex3Skin,
+    editing: Boolean,
+    onTick: () -> Unit,
+    onOpen: () -> Unit
+) {
     val hold = rememberHoldToComplete()
     val ticked = habit.completedToday
     val shape = RoundedCornerShape(3.dp)
@@ -366,8 +387,24 @@ private fun FdHabitPip(habit: DayListHabitView, number: Int, skin: Ex3Skin, onTi
                 if (!ticked && p > 0f) {
                     drawRect(color = skin.palette.accent.copy(alpha = 0.45f), size = size.copy(width = size.width * p))
                 }
+                if (!ticked && habit.progressMinutesToday > 0 && habit.effortMinutes > 0) {
+                    val frac = (habit.progressMinutesToday.toFloat() / habit.effortMinutes).coerceIn(0f, 1f)
+                    drawRect(
+                        color = skin.palette.accent.copy(alpha = 0.75f),
+                        topLeft = Offset(0f, size.height - 2.dp.toPx()),
+                        size = Size(size.width * frac, 2.dp.toPx())
+                    )
+                }
             }
-            .holdToComplete(hold, durationMs = 450, onComplete = onTick),
+            .then(
+                if (editing) {
+                    Modifier
+                        .habitEditOutline(skin.palette.accent.copy(alpha = 0.7f), 3.dp)
+                        .clickable(onClick = onOpen)
+                } else {
+                    Modifier.holdToComplete(hold, durationMs = 450, onComplete = onTick)
+                }
+            ),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -490,10 +527,14 @@ private fun FdPlanRow(
             }
         }
 
-        // reorder grip
-        Box(
-            Modifier.width(36.dp).fillMaxHeight().variantDragHandle(drag, entry.taskId),
-            contentAlignment = Alignment.Center
+        // reorder grip; a press without a drag opens the row's action menu
+        VariantGripHandle(
+            state = drag,
+            id = entry.taskId,
+            onEdit = { actions.openTask(entry.taskId) },
+            onLogProgress = { actions.openTask(entry.taskId) },
+            onArchive = { actions.archiveTask(entry.taskId) },
+            modifier = Modifier.width(36.dp).fillMaxHeight()
         ) {
             Text("≡", style = fdMono(skin, 14.sp, FontWeight.Normal), color = skin.palette.inkFaint)
         }
@@ -503,13 +544,19 @@ private fun FdPlanRow(
 private fun fdRowMeta(entry: DayListEntryView, isEnriching: Boolean): String {
     if (isEnriching) return "FILING..."
     val carried = entry.carriedCount?.takeIf { it >= 1 }?.let { "↪ ${it}D · " } ?: ""
+    // logged progress in the instrument register: "30M/90M ·"
+    val progress = if (entry.progressMinutesToday > 0 && !entry.completedToday) {
+        "${entry.progressMinutesToday}M/${entry.effortMinutes}M · "
+    } else {
+        ""
+    }
     val tag = folderLeaf(entry.folderPath)?.uppercase(Locale.UK)
     val main = when {
         entry.pinnedTime != null -> entry.pinnedTime + (tag?.let { " · $it" } ?: "")
         tag != null -> tag
         else -> "UNFILED"
     }
-    return carried + main
+    return carried + progress + main
 }
 
 // ── inline add ───────────────────────────────────────────────────────────────────────────────────

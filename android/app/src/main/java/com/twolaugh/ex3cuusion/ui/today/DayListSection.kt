@@ -99,7 +99,9 @@ internal fun DayListSection(
     onStartTimer: (String) -> Unit,
     onSomeday: (String) -> Unit,
     onLetGo: (String) -> Unit,
-    onCapture: (String) -> Unit
+    onCapture: (String) -> Unit,
+    onOpenTask: (String) -> Unit = {},
+    onArchive: (String) -> Unit = {}
 ) {
     val taskIds = entries.map { it.taskId }
     val firstUntickedId = entries.firstOrNull { !it.completedToday }?.taskId
@@ -191,6 +193,8 @@ internal fun DayListSection(
                         onStartTimer = { onStartTimer(entry.taskId) },
                         onSomeday = { onSomeday(entry.taskId) },
                         onLetGo = { onLetGo(entry.taskId) },
+                        onOpenTask = { onOpenTask(entry.taskId) },
+                        onArchive = { onArchive(entry.taskId) },
                         onDragStart = {
                             dragId = id
                             dragTotal = 0f
@@ -224,6 +228,8 @@ private fun DismissibleListRow(
     onStartTimer: () -> Unit,
     onSomeday: () -> Unit,
     onLetGo: () -> Unit,
+    onOpenTask: () -> Unit,
+    onArchive: () -> Unit,
     onDragStart: () -> Unit,
     onDragBy: (Float) -> Unit,
     onDragEnd: () -> Unit,
@@ -268,6 +274,8 @@ private fun DismissibleListRow(
             onStartTimer = onStartTimer,
             onSomeday = onSomeday,
             onLetGo = onLetGo,
+            onOpenTask = onOpenTask,
+            onArchive = onArchive,
             onDragStart = onDragStart,
             onDragBy = onDragBy,
             onDragEnd = onDragEnd,
@@ -287,6 +295,8 @@ private fun ListRow(
     onStartTimer: () -> Unit,
     onSomeday: () -> Unit,
     onLetGo: () -> Unit,
+    onOpenTask: () -> Unit,
+    onArchive: () -> Unit,
     onDragStart: () -> Unit,
     onDragBy: (Float) -> Unit,
     onDragEnd: () -> Unit,
@@ -443,18 +453,24 @@ private fun ListRow(
                 modifier = Modifier.padding(start = 8.dp)
             )
 
-            // The reorder grip. A handle inside a verticalScroll loses the vertical-gesture race
-            // unless it CLAIMS the pointer on finger-down: consume the down and every subsequent
-            // change so the scroll container (and swipe box) never see an unconsumed stream.
+            // The reorder grip, doing DOUBLE DUTY (ELEGANCE OVER CHROME — no new row buttons).
+            // A handle inside a verticalScroll loses the vertical-gesture race unless it CLAIMS
+            // the pointer on finger-down: consume the down and every subsequent change so the
+            // scroll container (and swipe box) never see an unconsumed stream. Movement past a
+            // ~10dp slop becomes the reorder drag exactly as before; releasing WITHOUT crossing
+            // slop is a press — it opens the row's action menu (Edit / Log progress / Archive)
+            // anchored right here at the grip.
+            var menuOpen by remember { mutableStateOf(false) }
             Box(
                 modifier = Modifier
                     .size(width = 44.dp, height = 48.dp)
                     .pointerInput(entry.taskId) {
+                        val slop = 10.dp.toPx()
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             down.consume()
-                            onDragStart()
-                            var dragged = false
+                            var total = Offset.Zero
+                            var dragging = false
                             try {
                                 while (true) {
                                     val event = awaitPointerEvent()
@@ -463,28 +479,38 @@ private fun ListRow(
                                         change.consume()
                                         break
                                     }
-                                    val dy = change.positionChange().y
-                                    if (dy != 0f) {
-                                        dragged = true
-                                        onDragBy(dy)
+                                    val delta = change.positionChange()
+                                    total += delta
+                                    if (!dragging && (kotlin.math.abs(total.x) > slop || kotlin.math.abs(total.y) > slop)) {
+                                        dragging = true
+                                        onDragStart()
+                                        if (total.y != 0f) onDragBy(total.y) // replay pre-slop travel
+                                    } else if (dragging && delta.y != 0f) {
+                                        onDragBy(delta.y)
                                     }
                                     change.consume()
                                 }
-                                onDragEnd()
+                                if (dragging) onDragEnd() else menuOpen = true
                             } catch (t: Throwable) {
-                                onDragCancel()
+                                if (dragging) onDragCancel()
                                 throw t
                             }
-                            if (!dragged) { /* a plain tap on the grip is a no-op reorder */ }
                         }
                     },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Filled.DragIndicator,
-                    contentDescription = "Reorder",
+                    contentDescription = "Reorder or open actions",
                     tint = Ex3Colors.inkFaint.copy(alpha = 0.55f),
                     modifier = Modifier.size(18.dp)
+                )
+                TaskRowMenu(
+                    expanded = menuOpen,
+                    onDismiss = { menuOpen = false },
+                    onEdit = onOpenTask,
+                    onLogProgress = onOpenTask, // v1: "Log progress" opens the sheet (progress row is right there)
+                    onArchive = onArchive
                 )
             }
         }
@@ -493,16 +519,23 @@ private fun ListRow(
 
 private fun listRowMeta(entry: DayListEntryView): String {
     val carried = entry.carriedCount?.takeIf { it >= 1 }?.let { "↪ ${it}d · " } ?: ""
+    // Logged progress shows as "Xm/Ym" in place of the bare estimate (unticked rows only).
+    val effort = if (entry.progressMinutesToday > 0 && !entry.completedToday) {
+        "${entry.progressMinutesToday}m/${entry.effortMinutes}m"
+    } else {
+        "${entry.effortMinutes}m"
+    }
     val main = if (entry.pinnedTime != null) {
-        entry.pinnedTime
+        // Pinned rows stay clean unless work is actually logged.
+        if (entry.progressMinutesToday > 0 && !entry.completedToday) "${entry.pinnedTime} · $effort" else entry.pinnedTime
     } else {
         val folder = entry.folderPath?.substringAfterLast(" / ")
         // Skip the folder when the title already says it ("Meditation - 2hr sit" next to a
         // "Meditation" folder) - redundant meta is noise at a glance.
         if (folder != null && !entry.title.startsWith(folder, ignoreCase = true)) {
-            "$folder · ${entry.effortMinutes}m"
+            "$folder · $effort"
         } else {
-            "${entry.effortMinutes}m"
+            effort
         }
     }
     return carried + main

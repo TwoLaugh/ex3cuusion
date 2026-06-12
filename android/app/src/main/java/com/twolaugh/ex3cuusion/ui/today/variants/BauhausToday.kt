@@ -241,8 +241,10 @@ fun BauhausTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier = 
                 }
             }
 
-            // habits: outline shapes that fill when ticked
+            // habits: outline shapes that fill when ticked. The "···" arms the edit state:
+            // glyphs gain a dashed outline and a tap opens the TaskSheet.
             if (view.habits.isNotEmpty()) {
+                var habitsEditing by remember { mutableStateOf(false) }
                 val tickedHabits = view.habits.count { it.completedToday }
                 Spacer(Modifier.height(10.dp))
                 Box(Modifier.fillMaxWidth().height(4.dp).background(skin.palette.ink))
@@ -250,9 +252,18 @@ fun BauhausTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier = 
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                     Text("HABITS — FILL THE ROW", style = bhLabel(skin), color = skin.palette.ink, modifier = Modifier.weight(1f))
                     Text("$tickedHabits/${view.habits.size}", style = bhDisplay(skin, 14.sp), color = skin.palette.ink)
+                    Text(
+                        "···",
+                        style = bhDisplay(skin, 14.sp),
+                        color = if (habitsEditing) skin.palette.accent else skin.palette.inkMuted,
+                        modifier = Modifier.clickable { habitsEditing = !habitsEditing }.padding(start = 10.dp)
+                    )
                 }
                 Spacer(Modifier.height(8.dp))
-                FlowRowOfHabitShapes(ui = ui, skin = skin, onTick = actions::tick)
+                FlowRowOfHabitShapes(
+                    ui = ui, skin = skin, editing = habitsEditing,
+                    onTick = actions::tick, onOpen = actions::openTask
+                )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     view.habits.joinToString(" · ") { habitShort(it.title).lowercase(Locale.UK) },
@@ -429,9 +440,14 @@ private fun BhListRow(
                 modifier = Modifier.clickable { actions.startTimer(entry.taskId) }.padding(6.dp)
             )
         }
-        Box(
-            Modifier.size(width = 32.dp, height = 44.dp).variantDragHandle(drag, entry.taskId),
-            contentAlignment = Alignment.Center
+        // the reorder grip; a press without a drag opens the row's action menu
+        VariantGripHandle(
+            state = drag,
+            id = entry.taskId,
+            onEdit = { actions.openTask(entry.taskId) },
+            onLogProgress = { actions.openTask(entry.taskId) },
+            onArchive = { actions.archiveTask(entry.taskId) },
+            modifier = Modifier.size(width = 32.dp, height = 44.dp)
         ) {
             Text("≡", style = bhDisplay(skin, 13.sp), color = skin.palette.inkMuted)
         }
@@ -440,9 +456,16 @@ private fun BhListRow(
 
 private fun bhRowMeta(entry: DayListEntryView, isTimerActive: Boolean, isEnriching: Boolean): String {
     if (isEnriching) return "FILING…"
+    // logged progress in the block caption voice: "30/90M"
+    val figure = if (entry.progressMinutesToday > 0 && !entry.completedToday) {
+        "${entry.progressMinutesToday}/${entry.effortMinutes}M"
+    } else {
+        "${entry.effortMinutes}M"
+    }
     val parts = buildList {
         folderLeaf(entry.folderPath)?.let { add(it.uppercase(Locale.UK)) }
-        add(entry.pinnedTime ?: "${entry.effortMinutes}M")
+        add(entry.pinnedTime ?: figure)
+        if (entry.pinnedTime != null && entry.progressMinutesToday > 0 && !entry.completedToday) add(figure)
         entry.carriedCount?.takeIf { it >= 1 }?.let { add("↪${it}D") }
         if (isTimerActive) add("NOW ▶")
     }
@@ -483,7 +506,13 @@ private fun BhInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FlowRowOfHabitShapes(ui: UiState, skin: Ex3Skin, onTick: (String) -> Unit) {
+private fun FlowRowOfHabitShapes(
+    ui: UiState,
+    skin: Ex3Skin,
+    editing: Boolean,
+    onTick: (String) -> Unit,
+    onOpen: (String) -> Unit
+) {
     val habits = ui.view?.habits ?: return
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -492,14 +521,27 @@ private fun FlowRowOfHabitShapes(ui: UiState, skin: Ex3Skin, onTick: (String) ->
     ) {
         habits.forEachIndexed { i, habit ->
             val hold = rememberHoldToComplete()
+            // Partial fill: logged progress / effort shows as a translucent part-fill of the
+            // glyph (a held press still floods over it).
+            val progressFill = if (!habit.completedToday && habit.effortMinutes > 0) {
+                (habit.progressMinutesToday.toFloat() / habit.effortMinutes).coerceIn(0f, 0.6f)
+            } else 0f
             BauhausShapeGlyph(
                 index = i % 6,
                 tone = skin.palette.pillarTones[i % skin.palette.pillarTones.size],
                 glyphSize = 19.dp,
-                fillProgress = if (habit.completedToday) 1f else hold.progress.value,
+                fillProgress = if (habit.completedToday) 1f else maxOf(hold.progress.value, progressFill),
                 modifier = Modifier
                     .padding(2.dp) // a touch of finger room around each glyph
-                    .holdToComplete(hold, durationMs = 450, onComplete = { onTick(habit.taskId) })
+                    .then(
+                        if (editing) {
+                            Modifier
+                                .habitEditOutline(skin.palette.ink.copy(alpha = 0.5f), 2.dp)
+                                .clickable { onOpen(habit.taskId) }
+                        } else {
+                            Modifier.holdToComplete(hold, durationMs = 450, onComplete = { onTick(habit.taskId) })
+                        }
+                    )
             )
         }
     }

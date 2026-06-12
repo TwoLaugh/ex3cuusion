@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -150,8 +151,10 @@ fun AfterburnerTodayBody(ui: UiState, actions: VariantActions, modifier: Modifie
         Spacer(Modifier.height(10.dp))
         AbPowerHero(ui = ui, skin = skin, onTap = actions::openBalance)
 
-        // habits: pill chips
+        // habits: pill chips. Chips stay a pure completion surface; the ONE trailing "···" chip
+        // arms the edit state (dashed outlines, tap opens the TaskSheet).
         if (view.habits.isNotEmpty()) {
+            var habitsEditing by remember { mutableStateOf(false) }
             val ticked = view.habits.count { it.completedToday }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp), verticalAlignment = Alignment.Bottom) {
@@ -165,8 +168,26 @@ fun AfterburnerTodayBody(ui: UiState, actions: VariantActions, modifier: Modifie
                 modifier = Modifier.fillMaxWidth()
             ) {
                 for (habit in view.habits) {
-                    AbHabitChip(habit = habit, skin = skin, onTick = { actions.tick(habit.taskId) })
+                    AbHabitChip(
+                        habit = habit, skin = skin, editing = habitsEditing,
+                        onTick = { actions.tick(habit.taskId) }, onOpen = { actions.openTask(habit.taskId) }
+                    )
                 }
+                // the one trailing affordance
+                Text(
+                    "···",
+                    style = abSans(skin, 11.5.sp),
+                    color = if (habitsEditing) skin.palette.accent else skin.palette.inkMuted,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(99.dp))
+                        .border(
+                            1.dp,
+                            if (habitsEditing) skin.palette.accent else skin.palette.hairline,
+                            RoundedCornerShape(99.dp)
+                        )
+                        .clickable { habitsEditing = !habitsEditing }
+                        .padding(horizontal = 11.dp, vertical = 5.dp)
+                )
             }
         }
 
@@ -312,9 +333,16 @@ private fun AbPowerCells(skin: Ex3Skin, frac: Float, total: Int = 14) {
     }
 }
 
-// Pill chip: hold floods it with the gradient; ticked chips stay gradient-filled.
+// Pill chip: hold floods it with the gradient; ticked chips stay gradient-filled. Edit state:
+// dashed outline, tap opens the TaskSheet. A thin gradient baseline shows logged progress.
 @Composable
-private fun AbHabitChip(habit: DayListHabitView, skin: Ex3Skin, onTick: () -> Unit) {
+private fun AbHabitChip(
+    habit: DayListHabitView,
+    skin: Ex3Skin,
+    editing: Boolean,
+    onTick: () -> Unit,
+    onOpen: () -> Unit
+) {
     val ticked = habit.completedToday
     val hold = rememberHoldToComplete()
     val shape = RoundedCornerShape(99.dp)
@@ -324,7 +352,7 @@ private fun AbHabitChip(habit: DayListHabitView, skin: Ex3Skin, onTick: () -> Un
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
             .clip(shape)
-            .border(1.dp, if (ticked) Color.Transparent else skin.palette.hairline, shape)
+            .border(1.dp, if (ticked || editing) Color.Transparent else skin.palette.hairline, shape)
             .drawBehind {
                 if (ticked) {
                     drawRect(Brush.horizontalGradient(grad))
@@ -338,16 +366,34 @@ private fun AbHabitChip(habit: DayListHabitView, skin: Ex3Skin, onTick: () -> Un
                             alpha = 0.55f
                         )
                     }
+                    // thin partial fill along the bottom edge: logged progress / effort
+                    if (habit.progressMinutesToday > 0 && habit.effortMinutes > 0) {
+                        val frac = (habit.progressMinutesToday.toFloat() / habit.effortMinutes).coerceIn(0f, 1f)
+                        drawRect(
+                            Brush.horizontalGradient(grad, startX = 0f, endX = size.width),
+                            topLeft = Offset(0f, size.height - 2.dp.toPx()),
+                            size = Size(size.width * frac, 2.dp.toPx())
+                        )
+                    }
                 }
             }
-            .holdToComplete(hold, durationMs = 450, onComplete = onTick)
+            .then(
+                if (editing) {
+                    Modifier
+                        .habitEditOutline(skin.palette.accentSoft.copy(alpha = 0.8f), 14.dp)
+                        .clickable(onClick = onOpen)
+                } else {
+                    Modifier.holdToComplete(hold, durationMs = 450, onComplete = onTick)
+                }
+            )
             .padding(horizontal = 11.dp, vertical = 5.dp)
     ) {
         Text(
             habitShort(habit.title),
             style = abSans(skin, 11.5.sp),
             color = if (ticked) Color.White else skin.palette.inkMuted,
-            maxLines = 1
+            maxLines = 2,
+            modifier = Modifier.widthIn(max = 150.dp)
         )
         if (habit.streak >= 2) {
             Text(
@@ -462,16 +508,26 @@ private fun AbListRow(
                 )
             }
             Spacer(Modifier.width(10.dp))
+            // logged progress in the numeral register: "30/90m"
+            val figure = if (entry.progressMinutesToday > 0 && !ticked) {
+                "${entry.progressMinutesToday}/${entry.effortMinutes}m"
+            } else {
+                "${entry.effortMinutes}m"
+            }
             Text(
-                "${entry.effortMinutes}m",
+                figure,
                 style = abNum(skin, 17.sp),
                 color = if (ticked) skin.palette.inkFaint else tone
             )
         }
-        // reorder grip
-        Box(
-            Modifier.width(32.dp).heightIn(min = 48.dp).variantDragHandle(drag, entry.taskId),
-            contentAlignment = Alignment.Center
+        // reorder grip; a press without a drag opens the row's action menu
+        VariantGripHandle(
+            state = drag,
+            id = entry.taskId,
+            onEdit = { actions.openTask(entry.taskId) },
+            onLogProgress = { actions.openTask(entry.taskId) },
+            onArchive = { actions.archiveTask(entry.taskId) },
+            modifier = Modifier.width(32.dp).heightIn(min = 48.dp)
         ) {
             Text("≡", style = abNum(skin, 14.sp, FontWeight.Medium), color = skin.palette.inkFaint)
         }

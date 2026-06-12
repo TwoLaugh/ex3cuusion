@@ -81,7 +81,7 @@ private fun phMono(skin: Ex3Skin, size: TextUnit = 12.5.sp, weight: FontWeight =
 
 // ──┤ LABEL ├──────── divider: short lead-in line, bracketed label, rule to the edge.
 @Composable
-private fun PhDivider(skin: Ex3Skin, label: String) {
+private fun PhDivider(skin: Ex3Skin, label: String, trailing: (@Composable () -> Unit)? = null) {
     val dim = skin.palette.inkMuted
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -89,6 +89,7 @@ private fun PhDivider(skin: Ex3Skin, label: String) {
     ) {
         Box(Modifier.width(14.dp).height(1.dp).background(dim))
         Text("┤ $label ├", style = phMono(skin, 11.5.sp), color = dim)
+        trailing?.invoke()
         Box(Modifier.weight(1f).height(1.dp).background(dim))
     }
 }
@@ -168,17 +169,30 @@ fun PhosphorTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier =
             }
         }
 
-        // HABITS: two-column bracket-checkbox grid
+        // HABITS: two-column bracket-checkbox grid. "[⋯]" in the divider arms the edit state:
+        // lines gain a dashed outline and a tap opens the TaskSheet.
         if (view.habits.isNotEmpty()) {
+            var habitsEditing by remember { mutableStateOf(false) }
             val ticked = view.habits.count { it.completedToday }
-            PhDivider(skin, "HABITS $ticked/${view.habits.size}")
+            PhDivider(skin, "HABITS $ticked/${view.habits.size}") {
+                Text(
+                    "[⋯]",
+                    style = phMono(skin, 11.5.sp),
+                    color = if (habitsEditing) amber else dim,
+                    modifier = Modifier.clickable { habitsEditing = !habitsEditing }.padding(horizontal = 3.dp)
+                )
+            }
             val splitAt = (view.habits.size + 1) / 2
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.weight(1f)) {
-                    for (habit in view.habits.take(splitAt)) PhHabitLine(habit, skin, onTick = actions::tick)
+                    for (habit in view.habits.take(splitAt)) {
+                        PhHabitLine(habit, skin, habitsEditing, onTick = actions::tick, onOpen = actions::openTask)
+                    }
                 }
                 Column(Modifier.weight(1f)) {
-                    for (habit in view.habits.drop(splitAt)) PhHabitLine(habit, skin, onTick = actions::tick)
+                    for (habit in view.habits.drop(splitAt)) {
+                        PhHabitLine(habit, skin, habitsEditing, onTick = actions::tick, onOpen = actions::openTask)
+                    }
                 }
             }
         }
@@ -220,8 +234,16 @@ fun PhosphorTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier =
 }
 
 // "[ ] seal technique" — hold floods the line with faint amber; ticked = inverse-video [x].
+// Edit state: dashed outline, tap opens the TaskSheet. A thin amber baseline shows logged
+// progress / effort on unticked lines.
 @Composable
-private fun PhHabitLine(habit: DayListHabitView, skin: Ex3Skin, onTick: (String) -> Unit) {
+private fun PhHabitLine(
+    habit: DayListHabitView,
+    skin: Ex3Skin,
+    editing: Boolean,
+    onTick: (String) -> Unit,
+    onOpen: (String) -> Unit
+) {
     val ticked = habit.completedToday
     val hold = rememberHoldToComplete()
     Row(
@@ -233,8 +255,24 @@ private fun PhHabitLine(habit: DayListHabitView, skin: Ex3Skin, onTick: (String)
                 if (!ticked && p > 0f) {
                     drawRect(skin.palette.ink.copy(alpha = 0.18f), size = size.copy(width = size.width * p))
                 }
+                if (!ticked && habit.progressMinutesToday > 0 && habit.effortMinutes > 0) {
+                    val frac = (habit.progressMinutesToday.toFloat() / habit.effortMinutes).coerceIn(0f, 1f)
+                    drawRect(
+                        skin.palette.ink.copy(alpha = 0.5f),
+                        topLeft = Offset(0f, size.height - 1.5.dp.toPx()),
+                        size = Size(size.width * frac, 1.5.dp.toPx())
+                    )
+                }
             }
-            .holdToComplete(hold, durationMs = 450, onComplete = { onTick(habit.taskId) })
+            .then(
+                if (editing) {
+                    Modifier
+                        .habitEditOutline(skin.palette.ink.copy(alpha = 0.5f), 0.dp)
+                        .clickable { onOpen(habit.taskId) }
+                } else {
+                    Modifier.holdToComplete(hold, durationMs = 450, onComplete = { onTick(habit.taskId) })
+                }
+            )
             .padding(vertical = 1.dp)
     ) {
         Text(if (ticked) "[x]" else "[ ]", style = phMono(skin, 12.sp), color = skin.palette.ink)
@@ -311,7 +349,13 @@ private fun PhListRow(
                         modifier = Modifier.clickable { actions.startTimer(entry.taskId) }.padding(horizontal = 6.dp)
                     )
                 }
-                Text("${entry.effortMinutes}m", style = phMono(skin, 12.5.sp, FontWeight.Bold), color = if (ticked) skin.palette.inkFaint else amber)
+                // logged progress reads as "30/90m" in the same mono register
+                val figure = if (entry.progressMinutesToday > 0 && !ticked) {
+                    "${entry.progressMinutesToday}/${entry.effortMinutes}m"
+                } else {
+                    "${entry.effortMinutes}m"
+                }
+                Text(figure, style = phMono(skin, 12.5.sp, FontWeight.Bold), color = if (ticked) skin.palette.inkFaint else amber)
             }
             Text(
                 "└ " + phRowMeta(entry, isEnriching),
@@ -333,10 +377,14 @@ private fun PhListRow(
                 }
             }
         }
-        // reorder grip
-        Box(
-            Modifier.width(34.dp).fillMaxHeight().heightIn(min = 36.dp).variantDragHandle(drag, entry.taskId),
-            contentAlignment = Alignment.Center
+        // reorder grip; a press without a drag opens the row's action menu
+        VariantGripHandle(
+            state = drag,
+            id = entry.taskId,
+            onEdit = { actions.openTask(entry.taskId) },
+            onLogProgress = { actions.openTask(entry.taskId) },
+            onArchive = { actions.archiveTask(entry.taskId) },
+            modifier = Modifier.width(34.dp).fillMaxHeight().heightIn(min = 36.dp)
         ) {
             Text("≡", style = phMono(skin, 13.sp), color = skin.palette.inkFaint)
         }

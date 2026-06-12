@@ -21,16 +21,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.twolaugh.ex3cuusion.core.domain.DayListPillarShare
+import com.twolaugh.ex3cuusion.ui.today.TaskRowMenu
 
 // T109: the list-reorder gesture, extracted VERBATIM (math and ordering rules) from
 // DayListSection so every layout variant reuses one debugged implementation instead of
@@ -129,16 +136,23 @@ fun Modifier.variantDragRow(state: VariantDragState, id: String): Modifier = thi
     .zIndex(if (state.isDragging(id)) 1f else 0f)
     .graphicsLayer { translationY = state.translationFor(id) }
 
-// The grip-handle gesture (copied from DayListSection's reorder grip): drags immediately on
-// touch — no long-press — and consumes the whole pointer stream so it never loses the race
-// against the scroll container or a swipe box.
-fun Modifier.variantDragHandle(state: VariantDragState, id: String): Modifier =
+// The grip-handle gesture (copied from DayListSection's reorder grip): consumes the whole
+// pointer stream on finger-down so it never loses the race against the scroll container or a
+// swipe box. The grip does DOUBLE DUTY (ELEGANCE OVER CHROME): movement past a small slop
+// becomes the reorder drag exactly as before; a release WITHOUT crossing slop is a press, and
+// fires `onPress` (the row's action menu) instead of a dead no-op tap.
+fun Modifier.variantDragHandle(
+    state: VariantDragState,
+    id: String,
+    onPress: (() -> Unit)? = null
+): Modifier =
     pointerInput(id) {
+        val slop = 10.dp.toPx()
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             down.consume()
-            state.startDrag(id)
-            var dragged = false
+            var total = Offset.Zero
+            var dragging = false
             try {
                 while (true) {
                     val event = awaitPointerEvent()
@@ -147,21 +161,66 @@ fun Modifier.variantDragHandle(state: VariantDragState, id: String): Modifier =
                         change.consume()
                         break
                     }
-                    val dy = change.positionChange().y
-                    if (dy != 0f) {
-                        dragged = true
-                        state.dragBy(dy)
+                    val delta = change.positionChange()
+                    total += delta
+                    if (!dragging && (kotlin.math.abs(total.x) > slop || kotlin.math.abs(total.y) > slop)) {
+                        dragging = true
+                        state.startDrag(id)
+                        if (total.y != 0f) state.dragBy(total.y) // replay the pre-slop travel
+                    } else if (dragging && delta.y != 0f) {
+                        state.dragBy(delta.y)
                     }
                     change.consume()
                 }
-                state.endDrag(cancelled = false)
+                if (dragging) state.endDrag(cancelled = false) else onPress?.invoke()
             } catch (t: Throwable) {
-                state.endDrag(cancelled = true)
+                if (dragging) state.endDrag(cancelled = true)
                 throw t
             }
-            if (!dragged) { /* a plain tap on the grip is a no-op reorder */ }
         }
     }
+
+// A grip handle WITH the press menu: the shared composition every variant row uses — the drag
+// gesture above plus the skin-toned TaskRowMenu anchored at the grip. Glyph styling stays the
+// variant's own.
+@Composable
+fun VariantGripHandle(
+    state: VariantDragState,
+    id: String,
+    onEdit: () -> Unit,
+    onLogProgress: () -> Unit,
+    onArchive: () -> Unit,
+    modifier: Modifier = Modifier,
+    glyph: @Composable () -> Unit
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box(
+        modifier.variantDragHandle(state, id, onPress = { menuOpen = true }),
+        contentAlignment = Alignment.Center
+    ) {
+        glyph()
+        TaskRowMenu(
+            expanded = menuOpen,
+            onDismiss = { menuOpen = false },
+            onEdit = onEdit,
+            onLogProgress = onLogProgress,
+            onArchive = onArchive
+        )
+    }
+}
+
+// The habits edit-state cue: a faint dashed outline drawn around an element while the strip's
+// trailing "..." has armed editing.
+fun Modifier.habitEditOutline(color: Color, cornerRadius: Dp = 8.dp): Modifier = drawBehind {
+    drawRoundRect(
+        color = color,
+        style = Stroke(
+            width = 1.dp.toPx(),
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
+        ),
+        cornerRadius = CornerRadius(cornerRadius.toPx())
+    )
+}
 
 // Swipe-to-dismiss (end-to-start) = remove to tray; disabled while a reorder drag is live so the
 // two gestures can never fight (same rule as DayListSection's DismissibleListRow).
@@ -225,11 +284,12 @@ fun formatClock(minutes: Int): String = "%d:%02d".format(minutes / 60, minutes %
 fun formatBlockCaption(minutes: Int): String = "%dH%02d".format(minutes / 60, minutes % 60)
 
 // Compact habit display name — same trimming rules as TodayScreen.habitShortName (private
-// there, so re-stated): everything before the first long-form separator, hard-capped.
+// there, so re-stated): everything before the first long-form separator, hard-capped at ~30
+// chars (chips now allow two lines before truncation; the sheet shows the full name).
 fun habitShort(title: String): String {
     var cut = title.split(" — ", " - ", " – ").first().trim()
-    if (cut.length > 24) cut = cut.split(" + ").first().trim()
-    return if (cut.length > 24) cut.take(23).trimEnd() + "…" else cut
+    if (cut.length > 30) cut = cut.split(" + ").first().trim()
+    return if (cut.length > 30) cut.take(29).trimEnd() + "…" else cut
 }
 
 // Hold-to-complete feedback, flightdeck style: a border SWEEP that traces the row's perimeter

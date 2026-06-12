@@ -12,9 +12,14 @@ import com.twolaugh.ex3cuusion.core.domain.DayListView
 import com.twolaugh.ex3cuusion.core.domain.DomainEngine
 import com.twolaugh.ex3cuusion.core.domain.PagesView
 import com.twolaugh.ex3cuusion.core.domain.StaleResolution
+import com.twolaugh.ex3cuusion.core.domain.TaskPatch
 import com.twolaugh.ex3cuusion.core.domain.addDays
 import com.twolaugh.ex3cuusion.core.domain.buildPagesView
+import com.twolaugh.ex3cuusion.core.domain.findDayList
 import com.twolaugh.ex3cuusion.core.domain.folderPath
+import com.twolaugh.ex3cuusion.core.domain.habitStreak
+import com.twolaugh.ex3cuusion.core.domain.taskProgressMinutes
+import com.twolaugh.ex3cuusion.core.model.TaskStatus
 import com.twolaugh.ex3cuusion.core.model.ActiveTimer
 import com.twolaugh.ex3cuusion.core.model.AppState
 import com.twolaugh.ex3cuusion.core.model.DayListSource
@@ -278,6 +283,52 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun letGo(taskId: String) {
         engine.releaseTask(taskId)
         refresh()
+    }
+
+    // --- TASK SHEET (grip-press menu + habit-strip edit state are its only entry points) ----------
+
+    fun archive(taskId: String) {
+        engine.archiveTask(taskId)
+        refresh()
+    }
+
+    // Sheet save: ONE undoable change covering the changed fields, with the day-list pin for the
+    // active (or planning) date kept in sync with the patched pinned time.
+    fun saveTask(taskId: String, patch: TaskPatch) {
+        engine.updateTask(taskId, patch, syncPinDate = activeDate())
+        refresh()
+    }
+
+    fun logProgress(taskId: String, minutes: Int) {
+        engine.logTaskProgress(taskId, minutes)
+        refresh()
+    }
+
+    // The sheet's read model, derived fresh from engine state on every recomposition (the host
+    // recomposes after each mutation's refresh, so the progress row stays live after a log).
+    fun taskSheetData(taskId: String): TaskSheetData? {
+        val state = engine.state
+        val task = state.tasks.find { it.id == taskId && it.status != TaskStatus.Archived } ?: return null
+        val date = activeDate()
+        val entry = findDayList(state, date)?.entries?.find { it.taskId == taskId }
+        return TaskSheetData(
+            taskId = task.id,
+            title = task.title,
+            folderId = task.folderId,
+            folderPath = task.folderId?.let { folderPath(state, it) },
+            effortMinutes = task.effortMinutes,
+            dueDate = task.dueDate,
+            pinnedTime = entry?.pinnedTime ?: task.scheduledTime,
+            tags = task.tags ?: emptyList(),
+            habit = task.habit == true,
+            repeatSummary = repeatSummaryText(task.repeatPolicy),
+            streak = habitStreak(state, task, state.currentDate),
+            progressMinutesToday = taskProgressMinutes(state, task.id, state.currentDate),
+            folderOptions = state.folders
+                .filter { it.status != FolderStatus.Archived }
+                .mapNotNull { folder -> folderPath(state, folder.id)?.let { FolderOption(folder.id, it) } }
+                .sortedBy { it.path.lowercase() }
+        )
     }
 
     fun startTimer(taskId: String) {

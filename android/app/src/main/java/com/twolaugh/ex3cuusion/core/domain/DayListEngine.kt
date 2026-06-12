@@ -60,7 +60,9 @@ data class DayListEntryView(
     // T095 carry honesty: consecutive mornings this entry has carried forward.
     val carriedCount: Int? = null,
     // T095: at 3+ carries the row offers split / someday / release inline.
-    val carryNudge: Boolean = false
+    val carryNudge: Boolean = false,
+    // Sum of this date's worked_on minutes (timer stops + manual progress logs).
+    val progressMinutesToday: Int = 0
 )
 
 data class DayListHabitView(
@@ -68,7 +70,9 @@ data class DayListHabitView(
     val title: String,
     val effortMinutes: Int,
     val completedToday: Boolean,
-    val streak: Int
+    val streak: Int,
+    // Sum of this date's worked_on minutes (timer stops + manual progress logs).
+    val progressMinutesToday: Int = 0
 )
 
 data class DayListTrayTask(
@@ -325,7 +329,8 @@ fun renderDayList(state: AppState, list: DayList, recordTelemetry: Boolean = tru
             completedToday = completedToday,
             missedPin = missedPin,
             carriedCount = entry.carriedCount,
-            carryNudge = (entry.carriedCount ?: 0) >= 3
+            carryNudge = (entry.carriedCount ?: 0) >= 3,
+            progressMinutesToday = taskProgressMinutes(state, task.id, date)
         )
     }
 
@@ -336,7 +341,8 @@ fun renderDayList(state: AppState, list: DayList, recordTelemetry: Boolean = tru
             title = task.title,
             effortMinutes = task.effortMinutes,
             completedToday = taskCompletedOnDate(state, task, date),
-            streak = habitStreak(state, task, date)
+            streak = habitStreak(state, task, date),
+            progressMinutesToday = taskProgressMinutes(state, task.id, date)
         )
     }
 
@@ -520,6 +526,16 @@ fun taskCompletedOnDate(state: AppState, task: Task, date: String): Boolean {
             (event.taskId == task.id || event.taskIds?.contains(task.id) == true)
     }
 }
+
+// Sum of a date's worked_on minutes for a task (timer stops + manual progress logs) — the
+// progressMinutesToday view field's single source of truth.
+fun taskProgressMinutes(state: AppState, taskId: String, date: String): Int =
+    state.executionEvents
+        .filter { event ->
+            event.date == date && event.type == ExecutionEventType.WorkedOn &&
+                (event.taskId == taskId || event.taskIds?.contains(taskId) == true)
+        }
+        .sumOf { it.actualMinutes ?: 0 }
 
 // Habit streak: consecutive completed days ending today (or yesterday, so an unticked morning
 // does not zero the streak). Derived from the persistent history plus lastCompletedAt; capped at

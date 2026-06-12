@@ -97,10 +97,11 @@ private fun BsRule(skin: Ex3Skin, double: Boolean = false) {
 }
 
 @Composable
-private fun BsSectionHead(skin: Ex3Skin, text: String) {
+private fun BsSectionHead(skin: Ex3Skin, text: String, trailing: (@Composable () -> Unit)? = null) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.weight(1f).height(1.dp).background(skin.palette.ink))
         Text(text, style = bsCaps(skin, 11.sp), color = skin.palette.ink)
+        trailing?.invoke()
         Box(Modifier.weight(1f).height(1.dp).background(skin.palette.ink))
     }
 }
@@ -212,19 +213,32 @@ fun BroadsheetTodayBody(ui: UiState, actions: VariantActions, modifier: Modifier
         }
         BsInlineAdd(skin = skin, onCapture = actions::instantCapture)
 
-        // DAILY OBSERVANCES — two-column checkbox grid
+        // DAILY OBSERVANCES — two-column checkbox grid. The "···" in the section rule arms the
+        // edit state: rows gain a dashed outline and a tap opens the TaskSheet.
         if (view.habits.isNotEmpty()) {
+            var habitsEditing by remember { mutableStateOf(false) }
             val tickedHabits = view.habits.count { it.completedToday }
             Spacer(Modifier.height(10.dp))
-            BsSectionHead(skin, "DAILY OBSERVANCES — $tickedHabits OF ${view.habits.size}")
+            BsSectionHead(skin, "DAILY OBSERVANCES — $tickedHabits OF ${view.habits.size}") {
+                Text(
+                    "···",
+                    style = bsCaps(skin, 11.sp),
+                    color = if (habitsEditing) skin.palette.accent else skin.palette.inkMuted,
+                    modifier = Modifier.clickable { habitsEditing = !habitsEditing }.padding(horizontal = 4.dp)
+                )
+            }
             Spacer(Modifier.height(5.dp))
             val splitAt = (view.habits.size + 1) / 2
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.weight(1f)) {
-                    for (habit in view.habits.take(splitAt)) BsHabitRow(habit, skin, onTick = actions::tick)
+                    for (habit in view.habits.take(splitAt)) {
+                        BsHabitRow(habit, skin, habitsEditing, onTick = actions::tick, onOpen = actions::openTask)
+                    }
                 }
                 Column(Modifier.weight(1f)) {
-                    for (habit in view.habits.drop(splitAt)) BsHabitRow(habit, skin, onTick = actions::tick)
+                    for (habit in view.habits.drop(splitAt)) {
+                        BsHabitRow(habit, skin, habitsEditing, onTick = actions::tick, onOpen = actions::openTask)
+                    }
                 }
             }
         }
@@ -388,10 +402,15 @@ private fun BsAgendaRow(
                 }
             }
         }
-        // the reorder grip, set like a compositor's mark in the margin
-        Box(
-            Modifier.size(width = 34.dp, height = 44.dp).variantDragHandle(drag, entry.taskId),
-            contentAlignment = Alignment.Center
+        // the reorder grip, set like a compositor's mark in the margin; a press without a drag
+        // opens the row's action menu (grip double duty, same as warm-dark)
+        VariantGripHandle(
+            state = drag,
+            id = entry.taskId,
+            onEdit = { actions.openTask(entry.taskId) },
+            onLogProgress = { actions.openTask(entry.taskId) },
+            onArchive = { actions.archiveTask(entry.taskId) },
+            modifier = Modifier.size(width = 34.dp, height = 44.dp)
         ) {
             Text("⁞", style = bsSerif(skin, 18.sp), color = skin.palette.inkMuted)
         }
@@ -403,6 +422,10 @@ private fun bsRowAnnotation(entry: DayListEntryView, isEnriching: Boolean): Stri
     val parts = buildList {
         entry.carriedCount?.takeIf { it >= 1 }?.let { add("carried $it day${if (it == 1) "" else "s"}") }
         if (entry.pinnedTime != null && entry.missedPin) add("missed its ${entry.pinnedTime} appointment")
+        // logged progress, set as an editor's aside
+        if (entry.progressMinutesToday > 0 && !entry.completedToday) {
+            add("${entry.progressMinutesToday}m of ${entry.effortMinutes}m logged")
+        }
     }
     return parts.joinToString(" — ").ifEmpty { null }
 }
@@ -439,9 +462,16 @@ private fun BsInlineAdd(skin: Ex3Skin, onCapture: (String) -> Unit) {
 }
 
 // One observance: square ink checkbox + narrow sans name; hold-to-complete FILLS the checkbox
-// with ink as the press runs (the broadsheet restyle of the hold ring).
+// with ink as the press runs (the broadsheet restyle of the hold ring). In the edit state the
+// row gains a dashed outline and a TAP opens the TaskSheet instead.
 @Composable
-private fun BsHabitRow(habit: DayListHabitView, skin: Ex3Skin, onTick: (String) -> Unit) {
+private fun BsHabitRow(
+    habit: DayListHabitView,
+    skin: Ex3Skin,
+    editing: Boolean,
+    onTick: (String) -> Unit,
+    onOpen: (String) -> Unit
+) {
     val ticked = habit.completedToday
     val hold = rememberHoldToComplete()
     Row(
@@ -449,7 +479,15 @@ private fun BsHabitRow(habit: DayListHabitView, skin: Ex3Skin, onTick: (String) 
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .holdToComplete(hold, durationMs = 450, onComplete = { onTick(habit.taskId) })
+            .then(
+                if (editing) {
+                    Modifier
+                        .habitEditOutline(skin.palette.accent.copy(alpha = 0.6f), 2.dp)
+                        .clickable { onOpen(habit.taskId) }
+                } else {
+                    Modifier.holdToComplete(hold, durationMs = 450, onComplete = { onTick(habit.taskId) })
+                }
+            )
             .padding(vertical = 3.dp)
     ) {
         Box(
