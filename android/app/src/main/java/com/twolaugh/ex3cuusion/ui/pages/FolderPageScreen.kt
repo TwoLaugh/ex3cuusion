@@ -36,12 +36,13 @@ import androidx.compose.ui.unit.sp
 import com.twolaugh.ex3cuusion.core.domain.FolderPageView
 import com.twolaugh.ex3cuusion.core.domain.NoteView
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
+import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 import com.twolaugh.ex3cuusion.ui.today.SectionLabel
 import com.twolaugh.ex3cuusion.ui.today.formatDuration
-import com.twolaugh.ex3cuusion.ui.today.hairline
 
 // T108: one folder's page — its notes (newest first), a quiet glance at its active tasks, the
-// 8 colour dots, and the new-note affordance.
+// 8 colour dots, and the new-note affordance. Renders under EVERY skin, so all ink/hairline
+// tokens come from LocalSkin (the folder tones themselves stay the static index-stable list).
 @Composable
 internal fun FolderPageScreen(
     page: FolderPageView,
@@ -50,6 +51,7 @@ internal fun FolderPageScreen(
     onOpenNote: (String) -> Unit,
     onNewNote: () -> Unit
 ) {
+    val palette = LocalSkin.current.palette
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -63,13 +65,13 @@ internal fun FolderPageScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back to pages",
-                    tint = Ex3Colors.inkMuted
+                    tint = palette.inkMuted
                 )
             }
             Text(
                 text = page.name,
                 style = MaterialTheme.typography.titleLarge,
-                color = Ex3Colors.ink,
+                color = palette.ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -80,17 +82,17 @@ internal fun FolderPageScreen(
 
         Spacer(Modifier.height(16.dp))
         NewNoteRow(onNewNote = onNewNote)
-        HorizontalDivider(thickness = 0.5.dp, color = hairline)
+        HorizontalDivider(thickness = 0.5.dp, color = palette.hairline)
 
         for (note in page.notes) {
             NoteRow(note = note, onClick = { onOpenNote(note.id) })
-            HorizontalDivider(thickness = 0.5.dp, color = hairline)
+            HorizontalDivider(thickness = 0.5.dp, color = palette.hairline)
         }
         if (page.notes.isEmpty()) {
             Text(
                 text = "No notes here yet.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Ex3Colors.inkFaint,
+                color = palette.inkFaint,
                 modifier = Modifier.padding(vertical = 16.dp)
             )
         }
@@ -109,7 +111,7 @@ internal fun FolderPageScreen(
                     Text(
                         text = task.title,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Ex3Colors.inkMuted,
+                        color = palette.inkMuted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
@@ -117,7 +119,7 @@ internal fun FolderPageScreen(
                     Text(
                         text = formatDuration(task.effortMinutes),
                         style = MaterialTheme.typography.labelMedium,
-                        color = Ex3Colors.inkFaint,
+                        color = palette.inkFaint,
                         modifier = Modifier.padding(start = 12.dp)
                     )
                 }
@@ -132,6 +134,7 @@ internal fun FolderPageScreen(
 // 44x44dp cell so eight of them still fit a narrow phone with honest touch targets.
 @Composable
 private fun ColorDotsRow(selected: Int, onSelect: (Int) -> Unit) {
+    val palette = LocalSkin.current.palette
     Row(Modifier.fillMaxWidth()) {
         for (index in Ex3Colors.pageTones.indices) {
             val tone = pageTone(index)
@@ -150,7 +153,7 @@ private fun ColorDotsRow(selected: Int, onSelect: (Int) -> Unit) {
                         .clip(CircleShape)
                         .background(tone)
                         .then(
-                            if (isSelected) Modifier.border(1.5.dp, Ex3Colors.ink.copy(alpha = 0.7f), CircleShape)
+                            if (isSelected) Modifier.border(1.5.dp, palette.ink.copy(alpha = 0.7f), CircleShape)
                             else Modifier
                         )
                 )
@@ -161,6 +164,7 @@ private fun ColorDotsRow(selected: Int, onSelect: (Int) -> Unit) {
 
 @Composable
 private fun NewNoteRow(onNewNote: () -> Unit) {
+    val palette = LocalSkin.current.palette
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -170,18 +174,19 @@ private fun NewNoteRow(onNewNote: () -> Unit) {
             .clickable(onClick = onNewNote)
     ) {
         Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-            Text(text = "+", style = MaterialTheme.typography.bodyLarge, color = Ex3Colors.inkFaint)
+            Text(text = "+", style = MaterialTheme.typography.bodyLarge, color = palette.inkFaint)
         }
         Text(
             text = "new note",
             style = MaterialTheme.typography.bodyLarge,
-            color = Ex3Colors.inkFaint
+            color = palette.inkFaint
         )
     }
 }
 
 @Composable
 private fun NoteRow(note: NoteView, onClick: () -> Unit) {
+    val palette = LocalSkin.current.palette
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -192,7 +197,7 @@ private fun NoteRow(note: NoteView, onClick: () -> Unit) {
             Text(
                 text = note.title,
                 style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                color = Ex3Colors.ink,
+                color = palette.ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -202,7 +207,7 @@ private fun NoteRow(note: NoteView, onClick: () -> Unit) {
             Text(
                 text = note.body.trim(),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp, lineHeight = 22.sp),
-                color = if (note.title != null) Ex3Colors.inkMuted else Ex3Colors.ink,
+                color = if (note.title != null) palette.inkMuted else palette.ink,
                 maxLines = 6,
                 overflow = TextOverflow.Ellipsis
             )

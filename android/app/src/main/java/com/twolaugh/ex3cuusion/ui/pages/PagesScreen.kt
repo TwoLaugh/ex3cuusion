@@ -50,13 +50,18 @@ import androidx.compose.ui.unit.sp
 import com.twolaugh.ex3cuusion.core.domain.DumpCardView
 import com.twolaugh.ex3cuusion.core.domain.RecentNoteView
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
+import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 import com.twolaugh.ex3cuusion.ui.today.SectionLabel
-import com.twolaugh.ex3cuusion.ui.today.hairline
 
 // B3: the Pages tab home — jot field on top, then the DUMP note (the one persistent inbox note,
 // always first, visually distinguished), then RECENT: the most recently edited/viewed notes
 // across all folders, colour-coded by their folder's tone. The folder hierarchy lives on its own
 // Browse page, reached through the small header icon (elegance: reuse the header, no fab).
+//
+// Daily-driver polish: Pages renders under EVERY skin (the tab is reachable regardless of the
+// Today variant), so all ink/surface/hairline tokens come from LocalSkin — the old warm-dark
+// statics painted near-white text on the light paper skins. The 8 folder tones stay the static
+// index-stable list (Folder.color stores the index); they are mid-value and read on every bg.
 
 internal fun pageTone(index: Int) = Ex3Colors.pageTones[index.coerceIn(0, Ex3Colors.pageTones.size - 1)]
 
@@ -69,6 +74,7 @@ internal fun PagesScreen(
     onOpenNote: (RecentNoteView) -> Unit,
     onBrowse: () -> Unit
 ) {
+    val palette = LocalSkin.current.palette
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -81,20 +87,20 @@ internal fun PagesScreen(
             Text(
                 text = "Pages",
                 style = MaterialTheme.typography.titleLarge,
-                color = Ex3Colors.ink,
+                color = palette.ink,
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onBrowse) {
                 Icon(
                     imageVector = Icons.Outlined.FolderOpen,
                     contentDescription = "Browse folders",
-                    tint = Ex3Colors.inkMuted
+                    tint = palette.inkMuted
                 )
             }
         }
 
         JotToDumpRow(onJot = onJot)
-        HorizontalDivider(thickness = 0.5.dp, color = hairline)
+        HorizontalDivider(thickness = 0.5.dp, color = palette.hairline)
         Spacer(Modifier.height(16.dp))
 
         LazyColumn(
@@ -116,7 +122,7 @@ internal fun PagesScreen(
                     Text(
                         text = "Notes you edit or open show up here.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Ex3Colors.inkFaint,
+                        color = palette.inkFaint,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
                 }
@@ -133,6 +139,7 @@ internal fun PagesScreen(
 // Today list's inline add. B3: jots APPEND to the dump note (the inbox) as timestamped lines.
 @Composable
 private fun JotToDumpRow(onJot: (String) -> Unit) {
+    val palette = LocalSkin.current.palette
     var draft by remember { mutableStateOf("") }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -141,14 +148,14 @@ private fun JotToDumpRow(onJot: (String) -> Unit) {
             .heightIn(min = 52.dp)
     ) {
         Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-            Text(text = "+", style = MaterialTheme.typography.bodyLarge, color = Ex3Colors.inkFaint)
+            Text(text = "+", style = MaterialTheme.typography.bodyLarge, color = palette.inkFaint)
         }
         BasicTextField(
             value = draft,
             onValueChange = { draft = it },
             singleLine = true,
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ex3Colors.ink),
-            cursorBrush = SolidColor(Ex3Colors.accent),
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.ink),
+            cursorBrush = SolidColor(palette.accent),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = {
                 val text = draft.trim()
@@ -161,7 +168,7 @@ private fun JotToDumpRow(onJot: (String) -> Unit) {
                         Text(
                             text = "jot to the dump...",
                             style = MaterialTheme.typography.bodyLarge,
-                            color = Ex3Colors.inkFaint
+                            color = palette.inkFaint
                         )
                     }
                     innerTextField()
@@ -179,11 +186,12 @@ private fun JotToDumpRow(onJot: (String) -> Unit) {
 // editor.
 @Composable
 private fun DumpCard(dump: DumpCardView, onClick: () -> Unit) {
+    val palette = LocalSkin.current.palette
     val tail = dump.body.trim().lines().filter { it.isNotBlank() }.takeLast(4)
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = Ex3Colors.surface,
-        border = BorderStroke(1.dp, Ex3Colors.accent.copy(alpha = 0.55f)),
+        color = palette.surface,
+        border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.55f)),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
@@ -198,21 +206,21 @@ private fun DumpCard(dump: DumpCardView, onClick: () -> Unit) {
             Text(
                 text = "Dump",
                 style = MaterialTheme.typography.titleMedium,
-                color = Ex3Colors.ink
+                color = palette.ink
             )
             Spacer(Modifier.height(6.dp))
             if (tail.isEmpty()) {
                 Text(
                     text = "the inbox — jot above, file later",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Ex3Colors.inkFaint
+                    color = palette.inkFaint
                 )
             } else {
                 for (line in tail) {
                     Text(
                         text = line,
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 21.sp),
-                        color = Ex3Colors.inkMuted,
+                        color = palette.inkMuted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -225,9 +233,10 @@ private fun DumpCard(dump: DumpCardView, onClick: () -> Unit) {
 // One recent note: left accent bar in the folder's palette tone, title/preview, folder name.
 @Composable
 private fun RecentNoteCard(note: RecentNoteView, onClick: () -> Unit) {
+    val palette = LocalSkin.current.palette
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = Ex3Colors.surface,
+        color = palette.surface,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
@@ -249,7 +258,7 @@ private fun RecentNoteCard(note: RecentNoteView, onClick: () -> Unit) {
                     Text(
                         text = note.title,
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                        color = Ex3Colors.ink,
+                        color = palette.ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -258,7 +267,7 @@ private fun RecentNoteCard(note: RecentNoteView, onClick: () -> Unit) {
                     Text(
                         text = note.previewBody,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (note.title != null) Ex3Colors.inkMuted else Ex3Colors.ink,
+                        color = if (note.title != null) palette.inkMuted else palette.ink,
                         maxLines = if (note.title != null) 1 else 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -267,7 +276,7 @@ private fun RecentNoteCard(note: RecentNoteView, onClick: () -> Unit) {
                 Text(
                     text = note.folderName,
                     style = MaterialTheme.typography.labelMedium,
-                    color = Ex3Colors.inkFaint
+                    color = palette.inkFaint
                 )
             }
         }

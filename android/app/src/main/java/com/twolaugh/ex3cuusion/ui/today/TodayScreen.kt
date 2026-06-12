@@ -812,12 +812,13 @@ private fun DayShapeSheetRow(
 @Composable
 internal fun BalanceBar(shares: List<DayListPillarShare>) {
     // 2dp gaps + 5dp height + a minimum visual share: six segments must be countable at a glance.
+    // Skin-aware track: the bar renders inside CloseoutCard on every skin.
     Row(
         Modifier
             .fillMaxWidth()
             .height(5.dp)
             .clip(RoundedCornerShape(3.dp))
-            .background(Ex3Colors.raised),
+            .background(LocalSkin.current.palette.raised),
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         for (pillar in shares) {
@@ -980,12 +981,13 @@ private fun habitShortName(title: String): String {
 }
 
 // A short letterspaced section label — the at-a-glance separator between zones of the screen.
+// Skin-aware (Pages reuses it on every palette); warm-dark's palette mirrors Ex3Colors exactly.
 @Composable
 internal fun SectionLabel(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall.copy(letterSpacing = androidx.compose.ui.unit.TextUnit(1.8f, androidx.compose.ui.unit.TextUnitType.Sp)),
-        color = Ex3Colors.inkFaint
+        color = LocalSkin.current.palette.inkFaint
     )
 }
 
@@ -1132,9 +1134,12 @@ private fun HabitChip(
 
 @Composable
 private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTomorrow: () -> Unit) {
+    // Host chrome shared by warm-dark AND every variant skin — tokens come from the skin
+    // (warm-dark's palette mirrors Ex3Colors, so the default skin is unchanged).
+    val palette = LocalSkin.current.palette
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = Ex3Colors.surface,
+        color = palette.surface,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(16.dp)) {
@@ -1142,7 +1147,7 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTo
                 Text(
                     text = "Day closed — ${closeout.doneCount} done",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Ex3Colors.ink,
+                    color = palette.ink,
                     modifier = Modifier.weight(1f)
                 )
                 Box(
@@ -1152,7 +1157,7 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTo
                         .clickable(onClick = onDismiss),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(text = "×", color = Ex3Colors.inkMuted, style = MaterialTheme.typography.titleMedium)
+                    Text(text = "×", color = palette.inkMuted, style = MaterialTheme.typography.titleMedium)
                 }
             }
 
@@ -1167,7 +1172,7 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTo
                     Icon(
                         imageVector = Icons.Filled.LocalFireDepartment,
                         contentDescription = null,
-                        tint = Ex3Colors.accent,
+                        tint = palette.accent,
                         modifier = Modifier.size(13.dp)
                     )
                 }
@@ -1177,7 +1182,7 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTo
                         if (closeout.streaksKept > 0) append(" · ${closeout.streaksKept} streaks kept")
                     },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Ex3Colors.inkMuted
+                    color = palette.inkMuted
                 )
             }
 
@@ -1196,11 +1201,11 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTo
                             .size(16.dp)
                             .clip(RoundedCornerShape(4.dp))
                             .background(
-                                if (intensity > 0f) Ex3Colors.accent.copy(alpha = 0.18f + 0.82f * intensity)
-                                else Ex3Colors.raised
+                                if (intensity > 0f) palette.accent.copy(alpha = 0.18f + 0.82f * intensity)
+                                else palette.raised
                             )
                             .then(
-                                if (isToday) Modifier.border(1.dp, Ex3Colors.ink.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                                if (isToday) Modifier.border(1.dp, palette.ink.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
                                 else Modifier
                             )
                     )
@@ -1212,7 +1217,7 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTo
                 Text(
                     text = "carried to tomorrow: ${closeout.carriedForward}",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Ex3Colors.inkMuted
+                    color = palette.inkMuted
                 )
             }
 
@@ -1221,7 +1226,7 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTo
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = Color.Transparent,
-                border = androidx.compose.foundation.BorderStroke(1.dp, Ex3Colors.accent.copy(alpha = 0.65f)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, palette.accent.copy(alpha = 0.65f)),
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
@@ -1231,7 +1236,7 @@ private fun CloseoutCard(closeout: CloseoutView, onDismiss: () -> Unit, onPlanTo
                     text = "Plan tomorrow →",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
-                    color = Ex3Colors.accent,
+                    color = palette.accent,
                     modifier = Modifier.padding(vertical = 10.dp).fillMaxWidth(),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )

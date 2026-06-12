@@ -34,7 +34,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
+import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 
 // T108: the note editor — optional title + free body, 15sp at a 1.5 line height for long-form
 // reading. No save button: leaving the screen (back arrow OR system back) commits whatever
@@ -48,6 +48,7 @@ internal fun NoteEditorScreen(
     onCommit: (title: String, body: String) -> Unit,
     onDelete: () -> Unit
 ) {
+    val palette = LocalSkin.current.palette
     var title by remember { mutableStateOf(initialTitle) }
     var body by remember { mutableStateOf(initialBody) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -69,13 +70,13 @@ internal fun NoteEditorScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Save and go back",
-                    tint = Ex3Colors.inkMuted
+                    tint = palette.inkMuted
                 )
             }
             Text(
                 text = folderName,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Ex3Colors.inkFaint,
+                color = palette.inkFaint,
                 modifier = Modifier.weight(1f)
             )
             if (canDelete) {
@@ -84,7 +85,7 @@ internal fun NoteEditorScreen(
                         Icon(
                             imageVector = Icons.Filled.MoreVert,
                             contentDescription = "Note actions",
-                            tint = Ex3Colors.inkMuted
+                            tint = palette.inkMuted
                         )
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -105,15 +106,15 @@ internal fun NoteEditorScreen(
             value = title,
             onValueChange = { title = it },
             singleLine = true,
-            textStyle = MaterialTheme.typography.titleMedium.copy(color = Ex3Colors.ink, fontWeight = FontWeight.Medium),
-            cursorBrush = SolidColor(Ex3Colors.accent),
+            textStyle = MaterialTheme.typography.titleMedium.copy(color = palette.ink, fontWeight = FontWeight.Medium),
+            cursorBrush = SolidColor(palette.accent),
             decorationBox = { innerTextField ->
                 Box {
                     if (title.isEmpty()) {
                         Text(
                             text = "Title",
                             style = MaterialTheme.typography.titleMedium,
-                            color = Ex3Colors.inkFaint
+                            color = palette.inkFaint
                         )
                     }
                     innerTextField()
@@ -128,18 +129,18 @@ internal fun NoteEditorScreen(
             value = body,
             onValueChange = { body = it },
             textStyle = MaterialTheme.typography.bodyMedium.copy(
-                color = Ex3Colors.ink,
+                color = palette.ink,
                 fontSize = 15.sp,
                 lineHeight = 22.5.sp // 15sp x 1.5
             ),
-            cursorBrush = SolidColor(Ex3Colors.accent),
+            cursorBrush = SolidColor(palette.accent),
             decorationBox = { innerTextField ->
                 Box {
                     if (body.isEmpty()) {
                         Text(
                             text = "Write...",
                             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
-                            color = Ex3Colors.inkFaint
+                            color = palette.inkFaint
                         )
                     }
                     innerTextField()
@@ -155,23 +156,23 @@ internal fun NoteEditorScreen(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            containerColor = Ex3Colors.surface,
-            title = { Text("Delete this note?", style = MaterialTheme.typography.titleMedium, color = Ex3Colors.ink) },
+            containerColor = palette.surface,
+            title = { Text("Delete this note?", style = MaterialTheme.typography.titleMedium, color = palette.ink) },
             text = {
                 Text(
                     text = "It can be brought back with undo on the Today screen.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Ex3Colors.inkMuted
+                    color = palette.inkMuted
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
                     onDelete()
-                }) { Text("Delete", color = Ex3Colors.accent) }
+                }) { Text("Delete", color = palette.accent) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("Keep", color = Ex3Colors.inkMuted) }
+                TextButton(onClick = { confirmDelete = false }) { Text("Keep", color = palette.inkMuted) }
             }
         )
     }

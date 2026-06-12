@@ -75,6 +75,7 @@ import androidx.compose.ui.zIndex
 import com.twolaugh.ex3cuusion.core.domain.DayListEntryView
 import com.twolaugh.ex3cuusion.core.model.ActiveTimer
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
+import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.LocalDateTime
@@ -82,6 +83,8 @@ import java.time.ZoneOffset
 
 // --- THE LIST --------------------------------------------------------------------------------------
 
+// WARM-DARK ONLY (mirrors WarmDarkSkin.palette.hairline): the white-alpha rule is invisible on
+// the light paper skins — anything that renders under other skins must use palette.hairline.
 internal val hairline = Color(0x14ECE7DC)
 
 // Rows live in the screen's single scrollable column. Reorder is a dedicated GRIP HANDLE that
@@ -622,7 +625,10 @@ internal fun TimerBar(
 
     var stopDialogOpen by remember { mutableStateOf(false) }
 
-    Surface(color = Ex3Colors.raised) {
+    // Host chrome pinned above EVERY skin's Today body — tokens come from the skin (warm-dark's
+    // palette mirrors Ex3Colors, so the default skin is unchanged).
+    val palette = LocalSkin.current.palette
+    Surface(color = palette.raised) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -633,7 +639,7 @@ internal fun TimerBar(
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Ex3Colors.ink,
+                color = palette.ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
@@ -642,13 +648,13 @@ internal fun TimerBar(
             Text(
                 text = "%d:%02d".format(totalSeconds / 60, totalSeconds % 60) + if (paused) " · paused" else "",
                 style = MaterialTheme.typography.labelMedium,
-                color = if (paused) Ex3Colors.inkMuted else Ex3Colors.accent
+                color = if (paused) palette.inkMuted else palette.accent
             )
             IconButton(onClick = if (paused) onResume else onPause) {
                 Icon(
                     imageVector = if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                     contentDescription = if (paused) "Resume timer" else "Pause timer",
-                    tint = Ex3Colors.inkMuted,
+                    tint = palette.inkMuted,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -656,7 +662,7 @@ internal fun TimerBar(
                 Icon(
                     imageVector = Icons.Filled.Stop,
                     contentDescription = "Stop timer",
-                    tint = Ex3Colors.inkMuted,
+                    tint = palette.inkMuted,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -666,26 +672,26 @@ internal fun TimerBar(
     if (stopDialogOpen) {
         AlertDialog(
             onDismissRequest = { stopDialogOpen = false },
-            containerColor = Ex3Colors.surface,
-            title = { Text("Done?", style = MaterialTheme.typography.titleMedium, color = Ex3Colors.ink) },
+            containerColor = palette.surface,
+            title = { Text("Done?", style = MaterialTheme.typography.titleMedium, color = palette.ink) },
             text = {
                 Text(
                     text = "Complete \"$title\", or just stop the timer?",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Ex3Colors.inkMuted
+                    color = palette.inkMuted
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     stopDialogOpen = false
                     onStop(true)
-                }) { Text("Complete", color = Ex3Colors.accent) }
+                }) { Text("Complete", color = palette.accent) }
             },
             dismissButton = {
                 TextButton(onClick = {
                     stopDialogOpen = false
                     onStop(false)
-                }) { Text("Just stop", color = Ex3Colors.inkMuted) }
+                }) { Text("Just stop", color = palette.inkMuted) }
             }
         )
     }

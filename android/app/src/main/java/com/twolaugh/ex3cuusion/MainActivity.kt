@@ -46,30 +46,28 @@ private enum class RootTab(val label: String) { Today("Today"), Pages("Pages") }
 
 // Thin shell: theme + ViewModel + a Material3 bottom bar over the two root surfaces (T104/T108),
 // with the same hand-rolled toggle to Settings (T105) — still no navigation framework.
-// T109: the persisted skin is read here and provided app-wide via LocalSkin; the Today host
-// switches layout variants off it. Pages and Settings stay on warm-dark tokens (ticket: common
-// chrome stays single), but the bottom bar + window bg follow the skin so the Today surface
-// under test reads edge-to-edge.
+// T109: the persisted skin is read here, drives the Material colorScheme (Ex3Theme) and is
+// provided app-wide via LocalSkin; the Today host switches layout variants off it. Pages and
+// Settings render from the same skin tokens now, so every root surface follows the palette.
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            Ex3Theme {
-                val viewModel: AppViewModel = viewModel()
-                val skinKey by viewModel.settings.skinFlow.collectAsState()
-                val skin = remember(skinKey) { skinForKey(skinKey) }
+            val viewModel: AppViewModel = viewModel()
+            val skinKey by viewModel.settings.skinFlow.collectAsState()
+            val skin = remember(skinKey) { skinForKey(skinKey) }
+            Ex3Theme(skin = skin) {
                 var showSettings by remember { mutableStateOf(false) }
                 var tab by rememberSaveable { mutableStateOf(RootTab.Today) }
 
-                // Status/nav icon contrast follows whatever is actually behind the bars: the skin's
-                // background on the Today tab, warm-dark on Pages/Settings (both still warm-dark).
-                val lightBehindStatusBar = skin.palette.isLight && tab == RootTab.Today && !showSettings
-                val lightBehindNavBar = skin.palette.isLight && !showSettings
+                // Every root surface (Today, Pages, Settings) paints the skin's background now,
+                // so bar-icon contrast follows the skin directly.
+                val lightBars = skin.palette.isLight
                 SideEffect {
                     val controller = WindowCompat.getInsetsController(window, window.decorView)
-                    controller.isAppearanceLightStatusBars = lightBehindStatusBar
-                    controller.isAppearanceLightNavigationBars = lightBehindNavBar
+                    controller.isAppearanceLightStatusBars = lightBars
+                    controller.isAppearanceLightNavigationBars = lightBars
                 }
 
                 // B2: text-selection colors follow the SKIN, not the hardcoded warm-dark Material

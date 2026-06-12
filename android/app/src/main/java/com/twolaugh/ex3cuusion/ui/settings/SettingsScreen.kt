@@ -48,8 +48,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.twolaugh.ex3cuusion.ui.theme.AllSkins
-import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Skin
+import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 import com.twolaugh.ex3cuusion.ui.theme.key
 
 // T105: AI enrichment settings — OpenAI API key (password-style, paste-friendly), model name,
@@ -57,6 +57,9 @@ import com.twolaugh.ex3cuusion.ui.theme.key
 // there is no save button to forget.
 @Composable
 fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
+    // Settings renders under the ACTIVE skin (it is reachable from every Today variant), so all
+    // tokens come from LocalSkin instead of the warm-dark statics.
+    val palette = LocalSkin.current.palette
     var apiKey by remember { mutableStateOf(settings.apiKey) }
     var model by remember { mutableStateOf(settings.model) }
     var enabled by remember { mutableStateOf(settings.enrichmentEnabled) }
@@ -64,7 +67,7 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
     var dayStart by remember { mutableStateOf(settings.dayStart) }
     var dayEnd by remember { mutableStateOf(settings.dayEnd) }
 
-    Scaffold(containerColor = Ex3Colors.bg) { padding ->
+    Scaffold(containerColor = palette.bg) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -78,13 +81,13 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
-                        tint = Ex3Colors.inkMuted
+                        tint = palette.inkMuted
                     )
                 }
                 Text(
                     text = "Settings",
                     style = MaterialTheme.typography.titleLarge,
-                    color = Ex3Colors.ink
+                    color = palette.ink
                 )
             }
 
@@ -95,13 +98,13 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
             Text(
                 text = "Day",
                 style = MaterialTheme.typography.titleMedium,
-                color = Ex3Colors.ink
+                color = palette.ink
             )
             Spacer(Modifier.height(6.dp))
             Text(
                 text = "Your waking window — today's capacity is what is left of it.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Ex3Colors.inkMuted
+                color = palette.inkMuted
             )
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
@@ -140,13 +143,13 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
             Text(
                 text = "Layout & skin",
                 style = MaterialTheme.typography.titleMedium,
-                color = Ex3Colors.ink
+                color = palette.ink
             )
             Spacer(Modifier.height(6.dp))
             Text(
                 text = "Six dogfood candidates from the mockup directions — losers get deleted after the bake-off.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Ex3Colors.inkMuted
+                color = palette.inkMuted
             )
             Spacer(Modifier.height(8.dp))
             val selectedSkinKey by settings.skinFlow.collectAsState()
@@ -162,13 +165,13 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
             Text(
                 text = "AI enrichment",
                 style = MaterialTheme.typography.titleMedium,
-                color = Ex3Colors.ink
+                color = palette.ink
             )
             Spacer(Modifier.height(6.dp))
             Text(
                 text = "Captures are sent to OpenAI with your folder names + task titles for filing; nothing else leaves the device.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Ex3Colors.inkMuted
+                color = palette.inkMuted
             )
 
             Spacer(Modifier.height(20.dp))
@@ -188,7 +191,7 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
                         Icon(
                             imageVector = if (keyVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
                             contentDescription = if (keyVisible) "Hide key" else "Show key",
-                            tint = Ex3Colors.inkFaint
+                            tint = palette.inkFaint
                         )
                     }
                 },
@@ -216,12 +219,12 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
                     Text(
                         text = "AI enrichment",
                         style = MaterialTheme.typography.bodyLarge,
-                        color = Ex3Colors.ink
+                        color = palette.ink
                     )
                     Text(
                         text = if (apiKey.isBlank()) "Add an API key to enable" else "File new captures automatically",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Ex3Colors.inkFaint
+                        color = palette.inkFaint
                     )
                 }
                 Switch(
@@ -232,8 +235,8 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
                         settings.enrichmentEnabled = it
                     },
                     colors = SwitchDefaults.colors(
-                        checkedTrackColor = Ex3Colors.accent,
-                        checkedThumbColor = Ex3Colors.ink
+                        checkedTrackColor = palette.accent,
+                        checkedThumbColor = palette.ink
                     )
                 )
             }
@@ -247,6 +250,7 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
 // gets a hairline ring so dark backgrounds stay visible on the dark settings surface.
 @Composable
 private fun SkinRow(skin: Ex3Skin, selected: Boolean, onSelect: () -> Unit) {
+    val palette = LocalSkin.current.palette
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -258,14 +262,14 @@ private fun SkinRow(skin: Ex3Skin, selected: Boolean, onSelect: () -> Unit) {
             selected = selected,
             onClick = onSelect,
             colors = RadioButtonDefaults.colors(
-                selectedColor = Ex3Colors.accent,
-                unselectedColor = Ex3Colors.inkFaint
+                selectedColor = palette.accent,
+                unselectedColor = palette.inkFaint
             )
         )
         Text(
             text = skin.name,
             style = MaterialTheme.typography.bodyLarge,
-            color = if (selected) Ex3Colors.ink else Ex3Colors.inkMuted,
+            color = if (selected) palette.ink else palette.inkMuted,
             modifier = Modifier.weight(1f)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -274,7 +278,7 @@ private fun SkinRow(skin: Ex3Skin, selected: Boolean, onSelect: () -> Unit) {
                     .size(14.dp)
                     .clip(CircleShape)
                     .background(skin.palette.bg)
-                    .border(1.dp, Ex3Colors.inkFaint, CircleShape)
+                    .border(1.dp, palette.inkFaint, CircleShape)
             )
             Box(Modifier.size(14.dp).clip(CircleShape).background(skin.palette.ink))
             Box(Modifier.size(14.dp).clip(CircleShape).background(skin.palette.accent))
@@ -283,14 +287,17 @@ private fun SkinRow(skin: Ex3Skin, selected: Boolean, onSelect: () -> Unit) {
 }
 
 @Composable
-private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedTextColor = Ex3Colors.ink,
-    unfocusedTextColor = Ex3Colors.ink,
-    cursorColor = Ex3Colors.accent,
-    focusedBorderColor = Ex3Colors.accent,
-    unfocusedBorderColor = Ex3Colors.inkFaint,
-    focusedLabelColor = Ex3Colors.inkMuted,
-    unfocusedLabelColor = Ex3Colors.inkFaint,
-    focusedPlaceholderColor = Ex3Colors.inkFaint,
-    unfocusedPlaceholderColor = Ex3Colors.inkFaint
-)
+private fun settingsFieldColors(): androidx.compose.material3.TextFieldColors {
+    val palette = LocalSkin.current.palette
+    return OutlinedTextFieldDefaults.colors(
+        focusedTextColor = palette.ink,
+        unfocusedTextColor = palette.ink,
+        cursorColor = palette.accent,
+        focusedBorderColor = palette.accent,
+        unfocusedBorderColor = palette.inkFaint,
+        focusedLabelColor = palette.inkMuted,
+        unfocusedLabelColor = palette.inkFaint,
+        focusedPlaceholderColor = palette.inkFaint,
+        unfocusedPlaceholderColor = palette.inkFaint
+    )
+}

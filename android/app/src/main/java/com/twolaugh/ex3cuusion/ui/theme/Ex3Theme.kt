@@ -136,8 +136,11 @@ val BroadsheetSkin = Ex3Skin(
         surface = Color(0xFFF4EDDA),         // print has no panels; the page is the surface
         raised = Color(0xFFEAE1C8),          // a slightly toned cream for the rare inset
         ink = Color(0xFF221B10),
-        inkMuted = Color(0x8C221B10),        // rgba(34,27,16,0.55) from the ticket
-        inkFaint = Color(0x59221B10),        // 0.35 alpha
+        // Contrast pass (daily-driver polish): the ticket's 0.55/0.35 ink alphas measured ~3.7:1
+        // and ~2.1:1 on the cream — body-size muted text needs ~4.5:1. Still pure ink alphas
+        // (print character, never gray): muted 0.70 ≈ 5.8:1, faint 0.55 ≈ 3.7:1 (label sizes).
+        inkMuted = Color(0xB3221B10),        // ink at 0.70
+        inkFaint = Color(0x8C221B10),        // ink at 0.55 — the mockup's "faint"
         hairline = Color(0xFF221B10),        // hairlines are 1px ink rules
         accent = Color(0xFFBF3517),
         accentSoft = Color(0x26BF3517),
@@ -226,8 +229,10 @@ val FieldnotesSkin = Ex3Skin(
         surface = Color(0xFFEDE2C8),
         raised = Color(0xFFE3D6B6),
         ink = Color(0xFF2C2316),
-        inkMuted = Color(0x802C2316),        // faint 0.5 alpha
-        inkFaint = Color(0x4D2C2316),
+        // Contrast pass: 0.50/0.30 ink alphas sat at ~2.9:1 / ~1.8:1 on the field paper — under
+        // even the large-text floor. Kept as ink alphas: muted 0.68 ≈ 4.8:1, faint 0.55 ≈ 3.3:1.
+        inkMuted = Color(0xAD2C2316),        // ink at 0.68
+        inkFaint = Color(0x8C2C2316),        // ink at 0.55
         hairline = Color(0x802C2316),        // dashed underlines drawn at this strength
         accent = Color(0xFFB3402A),
         accentSoft = Color(0x26B3402A),
@@ -286,8 +291,12 @@ val BauhausSkin = Ex3Skin(
         surface = Color(0xFFF5F0E4),
         raised = Color(0xFFEBE4D2),
         ink = Color(0xFF211D16),
-        inkMuted = Color(0x8C211D16),        // mute 0.55 alpha
-        inkFaint = Color(0x1F211D16),        // the 12% row dividers in the mockup
+        // Contrast pass: inkFaint doubles as TEXT app-wide (section labels, placeholders, nav
+        // tabs) — the mockup's 12% divider alpha was invisible as type on the cream. Muted
+        // 0.65 ≈ 5.0:1, faint 0.55 ≈ 3.7:1; the variant's row dividers just read a bit bolder,
+        // which suits the bauhaus border language anyway.
+        inkMuted = Color(0xA6211D16),        // ink at 0.65
+        inkFaint = Color(0x8C211D16),        // ink at 0.55 (was the 12% row-divider alpha)
         hairline = Color(0xFF211D16),        // bold 2px ink borders instead of hairlines
         accent = Color(0xFFD4552E),          // ticket: pick red for actions
         accentSoft = Color(0xFFD9A521),      // pillar yellow as the second accent

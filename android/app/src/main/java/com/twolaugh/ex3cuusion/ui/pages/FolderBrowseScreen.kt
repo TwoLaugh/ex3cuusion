@@ -31,7 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.twolaugh.ex3cuusion.core.domain.FolderTreeRow
-import com.twolaugh.ex3cuusion.ui.theme.Ex3Colors
+import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 
 // B3: the folder HIERARCHY on its own page — an indented tree (depth from the engine's
 // depth-first walk), each row opening the existing FolderPageScreen. Reached only through the
@@ -42,6 +42,7 @@ internal fun FolderBrowseScreen(
     onBack: () -> Unit,
     onOpenFolder: (String) -> Unit
 ) {
+    val palette = LocalSkin.current.palette
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -55,13 +56,13 @@ internal fun FolderBrowseScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back to pages",
-                    tint = Ex3Colors.inkMuted
+                    tint = palette.inkMuted
                 )
             }
             Text(
                 text = "Folders",
                 style = MaterialTheme.typography.titleLarge,
-                color = Ex3Colors.ink
+                color = palette.ink
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -76,6 +77,7 @@ internal fun FolderBrowseScreen(
 
 @Composable
 private fun FolderTreeRowItem(row: FolderTreeRow, onClick: () -> Unit) {
+    val palette = LocalSkin.current.palette
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -90,13 +92,13 @@ private fun FolderTreeRowItem(row: FolderTreeRow, onClick: () -> Unit) {
                 .size(10.dp)
                 .clip(CircleShape)
                 // Main wears the app accent (it is the inbox, not a pillar), like the old grid.
-                .background(if (row.isMain) Ex3Colors.accent else pageTone(row.colorIndex))
+                .background(if (row.isMain) palette.accent else pageTone(row.colorIndex))
         )
         Spacer(Modifier.width(12.dp))
         Text(
             text = row.name,
             style = MaterialTheme.typography.bodyLarge,
-            color = Ex3Colors.ink,
+            color = palette.ink,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
@@ -109,7 +111,7 @@ private fun FolderTreeRowItem(row: FolderTreeRow, onClick: () -> Unit) {
                 }
             },
             style = MaterialTheme.typography.labelMedium,
-            color = Ex3Colors.inkFaint,
+            color = palette.inkFaint,
             modifier = Modifier.padding(start = 12.dp)
         )
     }
