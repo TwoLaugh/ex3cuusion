@@ -1,47 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The 33 "GOD" figure (Bon Iver / Eric Timothy Carlson + Aaron Anderson's video): the red
-     body hung inside the green circle, limbs tracing the peace-sign strokes. Hand-traced
-     vector, personal dogfood build only — swap before any public release. -->
+<!-- The 33 "GOD" figures (Bon Iver / Eric Timothy Carlson + Aaron Anderson's video): her body
+     face-down with legs splayed to the ring, his legs straight down past it — together tracing
+     the peace-sign strokes inside the green circle. Hand-traced vector, personal dogfood build
+     only — swap before any public release. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
 
-    <!-- green ring: donut fill so the top-to-bottom gradient is dependable -->
+    <!-- green ring: thin, donut fill so the top-to-bottom gradient is dependable -->
     <path
-        android:pathData="M54,22.8 a31.2,31.2 0 1,1 -0.02,0 Z M54,28.2 a25.8,25.8 0 1,0 0.02,0 Z"
+        android:pathData="M54,23.9 a30.1,30.1 0 1,1 -0.02,0 Z M54,27.1 a26.9,26.9 0 1,0 0.02,0 Z"
         android:fillType="evenOdd">
         <aapt:attr name="android:fillColor">
             <gradient android:type="linear"
-                android:startX="54" android:startY="22.8"
-                android:endX="54" android:endY="85.2"
+                android:startX="54" android:startY="23.9"
+                android:endX="54" android:endY="84.1"
                 android:startColor="#2FB054" android:endColor="#0E8A43"/>
         </aapt:attr>
     </path>
 
-    <!-- hands gripping above the ring -->
+    <!-- clasped hands / fingers crossing the ring top -->
     <path android:fillColor="#D71F26"
-        android:pathData="M50,26.5 L49.6,21.6 L50.8,21 L51.3,24 L52,20.2 L53.2,20 L53.6,23.6 L54.6,20 L55.8,20.2 L55.8,24 L56.9,20.9 L58.1,21.5 L57.9,26.5 L54,28.5 Z"/>
-    <!-- arms + shoulders + chest, head void punched as a real hole (survives themed icons) -->
+        android:pathData="M50.8,27 L50.5,21.4 L51.6,21 L51.9,24 L52.5,20.2 L53.6,20 L53.9,23.6 L54.8,20 L55.9,20.2 L55.9,24 L56.7,20.9 L57.7,21.4 L57.4,27 L54,28.6 Z"/>
+    <!-- arms: two slim strips with a tight central seam -->
+    <path android:fillColor="#D71F26"
+        android:pathData="M50.9,25.4 C49.9,28.4 49.5,31.6 49.7,35.4 L53.6,36.2 L53.6,26.6 C52.6,26.6 51.6,26.2 50.9,25.4 Z"/>
+    <path android:fillColor="#D71F26"
+        android:pathData="M57.1,25.4 C58.1,28.4 58.5,31.6 58.3,35.4 L54.4,36.2 L54.4,26.6 C55.4,26.6 56.4,26.2 57.1,25.4 Z"/>
+    <!-- chest with the long head void (real hole — survives themed icons), waist, rounded hips -->
     <path android:fillColor="#D71F26" android:fillType="evenOdd"
-        android:pathData="M50.2,25 C47.6,29 46.4,33 46.4,37 C46.2,39 46.4,40.5 46.8,42 L61.2,42 C61.6,40.5 61.8,39 61.6,37 C61.6,33 60.4,29 57.8,25 C56.6,27 51.4,27 50.2,25 Z M54,28.4 a3.3,5.4 0 1,1 -0.02,0 Z"/>
-    <!-- torso: waist into broad hips -->
+        android:pathData="M49.8,34.6 C49.3,38.8 49.4,43.2 50.1,47.2 C48.9,50.4 48.2,53.2 48,56 C47.9,58.2 48.6,59.9 50,60.9 L58,60.9 C59.4,59.9 60.1,58.2 60,56 C59.8,53.2 59.1,50.4 57.9,47.2 C58.6,43.2 58.7,38.8 58.2,34.6 C56.8,33.6 51.2,33.6 49.8,34.6 Z M54,35.8 a2.5,5.7 0 1,1 -0.02,0 Z"/>
+    <!-- her left leg: torso-thick thigh, S-curve, pointed foot past the ring -->
     <path android:fillColor="#D71F26"
-        android:pathData="M46.8,40 C46,45 46.2,49 47.2,52 C45.8,55 45.6,57.8 46.4,60.2 L61.6,60.2 C62.4,57.8 62.2,55 60.8,52 C61.8,49 62,45 61.2,40 Z"/>
-    <!-- left spread leg -->
+        android:pathData="M48.4,51.6 C45,54.6 41.6,58.4 38.6,62.6 C36.4,65.8 34.4,69.2 32.9,72.9 L31.9,75.6 L34.3,77.2 L36.2,74.6 C38.5,71.4 41.1,68.2 43.9,65.2 C47,61.9 50.2,58.9 53.2,56.4 L52.4,52.8 Z"/>
+    <!-- her right leg -->
     <path android:fillColor="#D71F26"
-        android:pathData="M47,52.5 C42.8,58 38.8,64 35.2,71 L32.4,76.2 L34.6,77.6 L38.4,73.4 C43.6,67.4 48.8,61.6 53.4,57.2 L51.6,54.2 Z"/>
-    <!-- right spread leg -->
+        android:pathData="M59.6,51.6 C63,54.6 66.4,58.4 69.4,62.6 C71.6,65.8 73.6,69.2 75.1,72.9 L76.1,75.6 L73.7,77.2 L71.8,74.6 C69.5,71.4 66.9,68.2 64.1,65.2 C61,61.9 57.8,58.9 54.8,56.4 L55.6,52.8 Z"/>
+    <!-- his left leg: thigh, knee, calf, pointed foot well past the ring -->
     <path android:fillColor="#D71F26"
-        android:pathData="M61,52.5 C65.2,58 69.2,64 72.8,71 L75.6,76.2 L73.4,77.6 L69.6,73.4 C64.4,67.4 59.2,61.6 54.6,57.2 L56.4,54.2 Z"/>
-    <!-- left shin -->
+        android:pathData="M51.2,59.8 C50.6,62.6 50.4,65.4 50.7,68 C50.2,71.4 50.2,74.6 50.8,77.8 L51.5,83.4 L52.7,86.4 L53.6,82.6 L53.6,60 Z"/>
+    <!-- his right leg -->
     <path android:fillColor="#D71F26"
-        android:pathData="M50.4,58.5 C49.8,65 49.8,72 50.4,79 L51.2,85.2 L52.6,87.6 L53.3,84 L53.3,58.8 Z"/>
-    <!-- right shin -->
-    <path android:fillColor="#D71F26"
-        android:pathData="M57.6,58.5 C58.2,65 58.2,72 57.6,79 L56.8,85.2 L55.4,87.6 L54.7,84 L54.7,58.8 Z"/>
+        android:pathData="M56.8,59.8 C57.4,62.6 57.6,65.4 57.3,68 C57.8,71.4 57.8,74.6 57.2,77.8 L56.5,83.4 L55.3,86.4 L54.4,82.6 L54.4,60 Z"/>
 
     <!-- moles -->
     <path android:fillColor="#100F0D"
-        android:pathData="M48.9,45 m-0.55,0 a0.55,0.55 0 1,1 1.1,0 a0.55,0.55 0 1,1 -1.1,0 M59.2,49.5 m-0.55,0 a0.55,0.55 0 1,1 1.1,0 a0.55,0.55 0 1,1 -1.1,0 M41.5,67 m-0.55,0 a0.55,0.55 0 1,1 1.1,0 a0.55,0.55 0 1,1 -1.1,0 M67.8,64.5 m-0.55,0 a0.55,0.55 0 1,1 1.1,0 a0.55,0.55 0 1,1 -1.1,0 M51.8,74 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M56.4,68 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0"/>
+        android:pathData="M50.8,49.5 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M57.7,52.5 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M40.8,67.5 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M68.5,65.5 m-0.5,0 a0.5,0.5 0 1,1 1,0 a0.5,0.5 0 1,1 -1,0 M52,72 m-0.45,0 a0.45,0.45 0 1,1 0.9,0 a0.45,0.45 0 1,1 -0.9,0 M56.4,76 m-0.45,0 a0.45,0.45 0 1,1 0.9,0 a0.45,0.45 0 1,1 -0.9,0"/>
 </vector>
