@@ -34,19 +34,28 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.runtime.DisposableEffect
+import com.twolaugh.ex3cuusion.launcher.LauncherPermissions
+import com.twolaugh.ex3cuusion.launcher.ReturnGuardService
 import com.twolaugh.ex3cuusion.ui.theme.AllSkins
 import com.twolaugh.ex3cuusion.ui.theme.Ex3Skin
 import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
@@ -60,12 +69,29 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
     // Settings renders under the ACTIVE skin (it is reachable from every Today variant), so all
     // tokens come from LocalSkin instead of the warm-dark statics.
     val palette = LocalSkin.current.palette
+    val context = LocalContext.current
     var apiKey by remember { mutableStateOf(settings.apiKey) }
     var model by remember { mutableStateOf(settings.model) }
     var enabled by remember { mutableStateOf(settings.enrichmentEnabled) }
     var keyVisible by remember { mutableStateOf(false) }
     var dayStart by remember { mutableStateOf(settings.dayStart) }
     var dayEnd by remember { mutableStateOf(settings.dayEnd) }
+
+    // Launcher mode local state. The master switch + timeout write through like everything else.
+    var launcherEnabled by remember { mutableStateOf(settings.launcherEnabled) }
+    var returnTimeout by remember { mutableStateOf(settings.returnTimeoutMinutes.toString()) }
+
+    // Permission states are read directly in composition; this nonce re-reads them whenever the
+    // screen resumes (the user returns from a system-settings deep link having granted something).
+    var permissionNonce by remember { mutableIntStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) permissionNonce++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Scaffold(containerColor = palette.bg) { padding ->
         Column(
@@ -88,6 +114,97 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
                     text = "Settings",
                     style = MaterialTheme.typography.titleLarge,
                     color = palette.ink
+                )
+            }
+
+            // Launcher mode — the headline feature, so it leads. Master switch + return timeout +
+            // a permissions checklist shown only when the feature is on.
+            Spacer(Modifier.height(24.dp))
+            Text(
+                text = "Launcher",
+                style = MaterialTheme.typography.titleMedium,
+                color = palette.ink
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Make Daybook your home screen. After your limit on any app, you're returned here to re-choose deliberately.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.inkMuted
+            )
+
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Launcher mode",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = palette.ink,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = launcherEnabled,
+                    onCheckedChange = {
+                        launcherEnabled = it
+                        settings.launcherEnabled = it
+                        // Start immediately if perms are present (or stop on OFF).
+                        ReturnGuardService.syncWithSettings(context, settings)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = palette.accent,
+                        checkedThumbColor = palette.ink
+                    )
+                )
+            }
+
+            if (launcherEnabled) {
+                Spacer(Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = returnTimeout,
+                    onValueChange = { input ->
+                        // Keep digits only; write through the validated int (store clamps 1..120).
+                        val digits = input.filter { it.isDigit() }.take(3)
+                        returnTimeout = digits
+                        digits.toIntOrNull()?.let { settings.returnTimeoutMinutes = it }
+                    },
+                    label = { Text("Return after (minutes)") },
+                    placeholder = { Text(SettingsStore.DEFAULT_RETURN_TIMEOUT.toString()) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = settingsFieldColors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Permission checklist — re-read on each resume via permissionNonce.
+                val usageOk = remember(permissionNonce) { LauncherPermissions.hasUsageAccess(context) }
+                val overlayOk = remember(permissionNonce) { LauncherPermissions.hasOverlay(context) }
+                val batteryOk = remember(permissionNonce) { LauncherPermissions.isIgnoringBatteryOptimizations(context) }
+
+                Spacer(Modifier.height(16.dp))
+                PermissionRow(
+                    name = "Usage access",
+                    granted = usageOk,
+                    onGrant = { context.startActivity(LauncherPermissions.usageAccessIntent()) }
+                )
+                PermissionRow(
+                    name = "Display over other apps",
+                    granted = overlayOk,
+                    onGrant = { context.startActivity(LauncherPermissions.overlayIntent(context)) }
+                )
+
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { context.startActivity(LauncherPermissions.homeSettingsIntent()) }) {
+                    Text("Set Daybook as home app", color = palette.accent)
+                }
+                if (!batteryOk) {
+                    TextButton(onClick = { context.startActivity(LauncherPermissions.batteryExemptionIntent(context)) }) {
+                        Text("Ignore battery optimisation", color = palette.accent)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "The limit isn't instant — Daybook checks every couple of seconds. Calls and your dialer are never interrupted.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = palette.inkFaint
                 )
             }
 
@@ -242,6 +359,37 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
             }
 
             Spacer(Modifier.height(40.dp))
+        }
+    }
+}
+
+// Launcher mode: one permission row — name, a ✓/✗ glyph in accent/faint, and a Grant button that
+// deep-links into the matching system-settings screen (hidden once granted).
+@Composable
+private fun PermissionRow(name: String, granted: Boolean, onGrant: () -> Unit) {
+    val palette = LocalSkin.current.palette
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Text(
+            text = if (granted) "✓" else "✗",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (granted) palette.accent else palette.inkFaint
+        )
+        Spacer(Modifier.size(12.dp))
+        Text(
+            text = name,
+            style = MaterialTheme.typography.bodyLarge,
+            color = palette.ink,
+            modifier = Modifier.weight(1f)
+        )
+        if (!granted) {
+            TextButton(onClick = onGrant) {
+                Text("Grant", color = palette.accent)
+            }
         }
     }
 }

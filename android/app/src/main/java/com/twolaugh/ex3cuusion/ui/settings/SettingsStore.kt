@@ -87,17 +87,43 @@ class SettingsStore(context: Context) {
     // (start, end) as validated HH:MM strings; AppViewModel applies it to the engine on change.
     val dayWindowFlow: StateFlow<Pair<String, String>> = _dayWindowFlow.asStateFlow()
 
+    // Launcher mode: the master toggle for the whole "Daybook is my home screen + enforced return"
+    // feature. Defaults OFF — the feature is a hard no-op (no service, no notification) until the
+    // user opts in. Mirrored into a StateFlow so MainActivity can start/stop the guard reactively
+    // and Settings can re-compose live (same shape as skinFlow).
+    var launcherEnabled: Boolean
+        get() = prefs.getBoolean(KEY_LAUNCHER_ENABLED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_LAUNCHER_ENABLED, value).apply()
+            _launcherEnabledFlow.value = value
+        }
+
+    private val _launcherEnabledFlow = MutableStateFlow(launcherEnabled)
+    val launcherEnabledFlow: StateFlow<Boolean> = _launcherEnabledFlow.asStateFlow()
+
+    // Launcher mode: how long (in minutes) you may stay continuously in another app before the
+    // phone is brought back to Today. Default 5, clamped 1..120 on read so the guard loop never
+    // sees a junk/zero value (it reads this fresh every iteration so changes apply live).
+    var returnTimeoutMinutes: Int
+        get() = prefs.getInt(KEY_RETURN_TIMEOUT, DEFAULT_RETURN_TIMEOUT).coerceIn(1, 120)
+        set(value) {
+            prefs.edit().putInt(KEY_RETURN_TIMEOUT, value.coerceIn(1, 120)).apply()
+        }
+
     companion object {
         const val DEFAULT_MODEL = "gpt-5.4-mini"
         const val DEFAULT_SKIN = "warm_dark"
         const val DEFAULT_DAY_START = "08:00"
         const val DEFAULT_DAY_END = "23:00"
+        const val DEFAULT_RETURN_TIMEOUT = 5
         private const val KEY_API_KEY = "openai_api_key"
         private const val KEY_MODEL = "openai_model"
         private const val KEY_ENRICHMENT_ENABLED = "ai_enrichment_enabled"
         private const val KEY_SKIN = "today_skin"
         private const val KEY_DAY_START = "day_window_start"
         private const val KEY_DAY_END = "day_window_end"
+        private const val KEY_LAUNCHER_ENABLED = "launcher_enabled"
+        private const val KEY_RETURN_TIMEOUT = "return_timeout_minutes"
 
         private val HH_MM = Regex("""^([01]\d|2[0-3]):[0-5]\d$""")
         private fun validHhMm(value: String): Boolean = HH_MM.matches(value.trim())
