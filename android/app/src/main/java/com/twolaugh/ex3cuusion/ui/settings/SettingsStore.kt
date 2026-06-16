@@ -2,6 +2,8 @@ package com.twolaugh.ex3cuusion.ui.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.provider.Telephony
+import android.telecom.TelecomManager
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +15,9 @@ import kotlinx.coroutines.flow.asStateFlow
 // master key). Keystore/Tink failures happen on some devices and after backup restores; in that
 // case fall back to plain SharedPreferences rather than losing the AI feature entirely.
 class SettingsStore(context: Context) {
+
+    // Held for the allowlist seed, which needs to resolve the device's default SMS/dialer packages.
+    private val appContext: Context = context.applicationContext
 
     private val prefs: SharedPreferences = try {
         val masterKey = MasterKey.Builder(context)
@@ -110,12 +115,94 @@ class SettingsStore(context: Context) {
             prefs.edit().putInt(KEY_RETURN_TIMEOUT, value.coerceIn(1, 120)).apply()
         }
 
+    // Launcher mode: the per-app allowlist. Starred apps are exempt from the return-bounce (the
+    // guard reads this fresh each tick) and keep their notifications when the notif filter is on.
+    // Stored as a StringSet of package names. Mirrored into a StateFlow so the Apps tab recomposes
+    // its stars live as the user toggles them.
+    //
+    // First-read seeding: when the seeded boolean is still false we initialize the set to a sensible
+    // default (common messengers + the device's default SMS/dialer apps), persist it, and mark
+    // seeded. Gating on the boolean — not on emptiness — means a user who deliberately clears every
+    // star is never re-seeded behind their back.
+    var allowedApps: Set<String>
+        get() {
+            if (!prefs.getBoolean(KEY_ALLOWLIST_SEEDED, false)) {
+                val seed = defaultAllowlistSeed()
+                prefs.edit()
+                    .putStringSet(KEY_ALLOWED_APPS, seed)
+                    .putBoolean(KEY_ALLOWLIST_SEEDED, true)
+                    .apply()
+                return seed
+            }
+            return prefs.getStringSet(KEY_ALLOWED_APPS, emptySet())?.toSet() ?: emptySet()
+        }
+        set(value) {
+            // Writing through also marks seeded so a later read never clobbers an explicit choice.
+            prefs.edit()
+                .putStringSet(KEY_ALLOWED_APPS, value)
+                .putBoolean(KEY_ALLOWLIST_SEEDED, true)
+                .apply()
+            _allowedAppsFlow.value = value
+        }
+
+    private val _allowedAppsFlow = MutableStateFlow(allowedApps)
+    val allowedAppsFlow: StateFlow<Set<String>> = _allowedAppsFlow.asStateFlow()
+
+    // Add/remove a single package and write through (updates the flow). Used by the Apps-tab star.
+    fun toggleAllowedApp(pkg: String) {
+        val current = allowedApps
+        allowedApps = if (pkg in current) current - pkg else current + pkg
+    }
+
+    // The seed set: common messengers/maps + the device's default SMS and dialer packages. Nulls
+    // and blanks are filtered so devices missing an app simply seed fewer entries.
+    private fun defaultAllowlistSeed(): Set<String> {
+        val dynamic = mutableListOf<String?>()
+        dynamic += try {
+            Telephony.Sms.getDefaultSmsPackage(appContext)
+        } catch (_: Exception) {
+            null
+        }
+        dynamic += try {
+            val telecom = appContext.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
+            telecom?.defaultDialerPackage
+        } catch (_: Exception) {
+            null
+        }
+        return (DEFAULT_ALLOWLIST + dynamic)
+            .filterNotNull()
+            .filter { it.isNotBlank() }
+            .toSet()
+    }
+
+    // Launcher mode: when on, the NotificationFilterService dismisses notifications that aren't from
+    // allowed apps / message+email+call categories. Default OFF (hard no-op). Mirrored to a flow so
+    // Settings recomposes live (same shape as launcherEnabledFlow).
+    var notificationFilterEnabled: Boolean
+        get() = prefs.getBoolean(KEY_NOTIF_FILTER, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_NOTIF_FILTER, value).apply()
+            _notificationFilterEnabledFlow.value = value
+        }
+
+    private val _notificationFilterEnabledFlow = MutableStateFlow(notificationFilterEnabled)
+    val notificationFilterEnabledFlow: StateFlow<Boolean> = _notificationFilterEnabledFlow.asStateFlow()
+
     companion object {
         const val DEFAULT_MODEL = "gpt-5.4-mini"
         const val DEFAULT_SKIN = "warm_dark"
         const val DEFAULT_DAY_START = "08:00"
         const val DEFAULT_DAY_END = "23:00"
         const val DEFAULT_RETURN_TIMEOUT = 5
+
+        // Seed packages for the per-app allowlist (common messengers + maps). The default SMS and
+        // dialer packages are resolved at seed time and unioned with these.
+        val DEFAULT_ALLOWLIST = setOf(
+            "com.whatsapp",
+            "com.discord",
+            "com.google.android.apps.maps"
+        )
+
         private const val KEY_API_KEY = "openai_api_key"
         private const val KEY_MODEL = "openai_model"
         private const val KEY_ENRICHMENT_ENABLED = "ai_enrichment_enabled"
@@ -124,6 +211,9 @@ class SettingsStore(context: Context) {
         private const val KEY_DAY_END = "day_window_end"
         private const val KEY_LAUNCHER_ENABLED = "launcher_enabled"
         private const val KEY_RETURN_TIMEOUT = "return_timeout_minutes"
+        private const val KEY_ALLOWED_APPS = "allowed_apps"
+        private const val KEY_ALLOWLIST_SEEDED = "allowlist_seeded"
+        private const val KEY_NOTIF_FILTER = "notification_filter_enabled"
 
         private val HH_MM = Regex("""^([01]\d|2[0-3]):[0-5]\d$""")
         private fun validHhMm(value: String): Boolean = HH_MM.matches(value.trim())

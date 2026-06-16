@@ -17,11 +17,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -35,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.twolaugh.ex3cuusion.launcher.InstalledAppsRepository
 import com.twolaugh.ex3cuusion.launcher.LaunchableApp
+import com.twolaugh.ex3cuusion.ui.settings.SettingsStore
 import com.twolaugh.ex3cuusion.ui.theme.LocalSkin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -43,11 +50,16 @@ import kotlinx.coroutines.withContext
 // explicitly wanted "a simple list you search", not an icon grid. App discovery is heavy, so it
 // runs once off the main thread (cached at the repository level) and shows a quiet loading line
 // meanwhile. Launching an app calls onLaunched() so the host can react if it ever needs to.
+//
+// Launcher mode: each row carries a star that toggles the per-app allowlist (settings). Starred
+// apps run without a time limit and keep their notifications. The star set is observed from
+// settings.allowedAppsFlow so taps recompose live.
 @Composable
-fun AppsHost(onLaunched: () -> Unit = {}) {
+fun AppsHost(settings: SettingsStore, onLaunched: () -> Unit = {}) {
     val palette = LocalSkin.current.palette
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
+    val allowed by settings.allowedAppsFlow.collectAsState()
 
     // Load (or hit the repository cache) off the main thread. produceState keeps the loaded flag
     // distinct from "empty list" so we can show the loading line only while genuinely loading.
@@ -92,6 +104,13 @@ fun AppsHost(onLaunched: () -> Unit = {}) {
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(8.dp))
+        Text(
+            text = "★ apps run without a time limit and keep their notifications.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = palette.inkFaint,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+        Spacer(Modifier.height(8.dp))
 
         when {
             apps == null -> {
@@ -115,12 +134,14 @@ fun AppsHost(onLaunched: () -> Unit = {}) {
                     items(filtered, key = { it.packageName }) { app ->
                         AppRow(
                             app = app,
+                            starred = app.packageName in allowed,
                             onClick = {
                                 InstalledAppsRepository.launchIntentFor(context, app.packageName)?.let {
                                     context.startActivity(it)
                                     onLaunched()
                                 }
-                            }
+                            },
+                            onToggleStar = { settings.toggleAllowedApp(app.packageName) }
                         )
                     }
                 }
@@ -130,29 +151,52 @@ fun AppsHost(onLaunched: () -> Unit = {}) {
 }
 
 @Composable
-private fun AppRow(app: LaunchableApp, onClick: () -> Unit) {
+private fun AppRow(
+    app: LaunchableApp,
+    starred: Boolean,
+    onClick: () -> Unit,
+    onToggleStar: () -> Unit
+) {
     val palette = LocalSkin.current.palette
     // Drawable -> ImageBitmap once per row; remembered on the icon identity so we don't re-rasterize
     // on every recomposition (search typing recomposes the list frequently).
     val bitmap = remember(app.packageName) { app.icon.toBitmap().asImageBitmap() }
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 6.dp)
+            .padding(horizontal = 4.dp)
     ) {
-        Image(
-            bitmap = bitmap,
-            contentDescription = null,
-            modifier = Modifier.size(40.dp)
-        )
-        Text(
-            text = app.label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = palette.ink
-        )
+        // Tap-body (icon + label) launches the app. The star is a SEPARATE clickable so toggling it
+        // never launches.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = 56.dp)
+                .clickable(onClick = onClick)
+                .padding(vertical = 6.dp)
+        ) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp)
+            )
+            Text(
+                text = app.label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = palette.ink
+            )
+        }
+        IconButton(onClick = onToggleStar) {
+            Icon(
+                imageVector = if (starred) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                contentDescription = if (starred) "Remove ${app.label} from no-limit apps"
+                    else "Let ${app.label} run without a limit",
+                tint = if (starred) palette.accent else palette.inkFaint
+            )
+        }
     }
 }

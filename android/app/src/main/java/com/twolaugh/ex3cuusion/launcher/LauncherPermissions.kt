@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.app.NotificationManagerCompat
 
 // Launcher mode: pure helpers around the special-access permissions the guard needs. None of these
 // grant anything — they only REPORT current state and BUILD the deep-link intents the Settings
@@ -49,6 +50,16 @@ object LauncherPermissions {
             Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
             Uri.parse("package:${context.packageName}")
         )
+
+    // Notification access (BIND_NOTIFICATION_LISTENER_SERVICE, granted by the user in system
+    // settings): what lets NotificationFilterService see — and dismiss — posted notifications. This
+    // is checked SEPARATELY from allReady(); it gates the notif filter, not the guard.
+    fun hasNotificationAccess(context: Context): Boolean =
+        NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+
+    fun notificationAccessIntent(): Intent =
+        Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     // The two permissions the guard truly cannot run without: see the foreground app (usage) and
     // pull Daybook forward (overlay). MainActivity/BootReceiver only start the service when both

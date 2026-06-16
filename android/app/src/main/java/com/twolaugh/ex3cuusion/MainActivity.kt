@@ -172,7 +172,7 @@ class MainActivity : ComponentActivity() {
                                 when (tab) {
                                     RootTab.Today -> TodayScreen(viewModel, onOpenSettings = { showSettings = true })
                                     RootTab.Pages -> PagesHost(viewModel)
-                                    RootTab.Apps -> AppsHost()
+                                    RootTab.Apps -> AppsHost(settings = viewModel.settings)
                                 }
                             }
                         }

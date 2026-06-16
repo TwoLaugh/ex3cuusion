@@ -60,6 +60,19 @@
                 android:value="intentional_phone_use_limiter" />
         </service>
 
+        <!-- Launcher mode: the notification filter. A NotificationListenerService bound by the
+             system once the user grants Notification access; inert unless the filter toggle is on.
+             BIND_* is enforced on the service itself — no extra uses-permission is needed. -->
+        <service
+            android:name=".launcher.NotificationFilterService"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- Launcher mode: restart the guard after a reboot if it was active. -->
         <receiver
             android:name=".launcher.BootReceiver"

@@ -80,6 +80,7 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
     // Launcher mode local state. The master switch + timeout write through like everything else.
     var launcherEnabled by remember { mutableStateOf(settings.launcherEnabled) }
     var returnTimeout by remember { mutableStateOf(settings.returnTimeoutMinutes.toString()) }
+    var notificationFilter by remember { mutableStateOf(settings.notificationFilterEnabled) }
 
     // Permission states are read directly in composition; this nonce re-reads them whenever the
     // screen resumes (the user returns from a system-settings deep link having granted something).
@@ -206,6 +207,58 @@ fun SettingsScreen(settings: SettingsStore, onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = palette.inkFaint
                 )
+
+                // The allowlist lives on the Apps tab (per-row stars); this is just a pointer to it.
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Starred apps (Apps tab) run without a limit.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = palette.inkMuted
+                )
+
+                // Notification filter. It is logically independent of the master switch, but for v1
+                // we keep it INSIDE the launcherEnabled block so the Launcher section stays coherent
+                // (turning Launcher mode off hides it). Its own Notification-access permission is
+                // separate from the guard's usage/overlay perms.
+                Spacer(Modifier.height(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Silence other notifications",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = palette.ink,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = notificationFilter,
+                        onCheckedChange = {
+                            notificationFilter = it
+                            settings.notificationFilterEnabled = it
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = palette.accent,
+                            checkedThumbColor = palette.ink
+                        )
+                    )
+                }
+
+                if (notificationFilter) {
+                    // Re-read access on each resume (the user grants it in a system-settings screen).
+                    val notifAccessOk = remember(permissionNonce) {
+                        LauncherPermissions.hasNotificationAccess(context)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    PermissionRow(
+                        name = "Notification access",
+                        granted = notifAccessOk,
+                        onGrant = { context.startActivity(LauncherPermissions.notificationAccessIntent()) }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Keeps messages, emails, calls, and your starred apps. Everything else is dismissed.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.inkFaint
+                    )
+                }
             }
 
             // B1: the day window — capacity = minutes between these two clock times (day-shape

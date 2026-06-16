@@ -62,6 +62,9 @@ class ReturnGuardService : Service() {
 
             val now = System.currentTimeMillis()
             val timeoutMillis = settings.returnTimeoutMinutes.toLong() * 60_000L
+            // Read the allowlist fresh each tick so starring/unstarring an app applies live without
+            // restarting the service.
+            val allowed = settings.allowedApps
 
             // Most recent foreground package in the last 10s. Without usage access this returns
             // nothing (queryEvents is empty) — we keep the last known package and never crash.
@@ -76,8 +79,8 @@ class ReturnGuardService : Service() {
                     // We're home. Reset the away clock.
                     awaySince = null
                 }
-                isExempt(foreground, applicationContext) -> {
-                    // Phone call, dialer, system UI, or the real default home: never fought.
+                isExempt(foreground, applicationContext, allowed) -> {
+                    // Phone call, dialer, system UI, the real default home, or a starred app: never fought.
                     // Simplest correct behavior — pause by clearing the clock so exempt time never
                     // accumulates toward a bounce.
                     awaySince = null
@@ -132,11 +135,13 @@ class ReturnGuardService : Service() {
         return latestPkg
     }
 
-    // The "don't bounce" set. NOTE: maps / navigation apps are NOT exempt by default — the user
-    // asked for an enforced return from everything. To let specific apps run uninterrupted (e.g.
-    // Google Maps while driving), add a user-configurable allowlist check right here.
-    private fun isExempt(pkg: String, context: Context): Boolean {
+    // The "don't bounce" set. Maps / navigation and other apps are exempt iff the user has STARRED
+    // them in the Apps tab (the `allowed` set, read fresh each tick so edits apply live). Beyond the
+    // allowlist, self / active call / system UI / dialer / the real default home are always exempt.
+    private fun isExempt(pkg: String, context: Context, allowed: Set<String>): Boolean {
         if (pkg == context.packageName) return true
+        // User-starred apps run without a limit.
+        if (pkg in allowed) return true
         // Don't interrupt an active call.
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val mode = audio?.mode
