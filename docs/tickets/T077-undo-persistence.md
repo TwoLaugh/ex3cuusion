@@ -22,3 +22,5 @@ repositories, not just in-memory.
 ## Notes
 
 Lower priority for local single-user dev (in-memory is fine); matters for the durable V1 path.
+
+## Status: DONE (2026-06-10, branch daily-driver-polish)

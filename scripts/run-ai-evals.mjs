@@ -20,10 +20,13 @@ if (live && !process.env.OPENAI_API_KEY) {
 
 const serverEnv = {
     ...process.env,
-    OPENAI_MODEL: process.env.OPENAI_MODEL ?? "gpt-5.5"
+    OPENAI_MODEL: process.env.OPENAI_MODEL ?? "gpt-5.5",
+    // Eval servers must be hermetic: never read/write the durable .data/ store.
+    EX3CUUSION_STATE_REPOSITORY: "memory"
   };
-if (!live) serverEnv.EX3CUUSION_AI_MODE = "fixture";
-if (live) delete serverEnv.EX3CUUSION_AI_MODE;
+// Always SET the mode explicitly: a deleted env var gets silently back-filled from .env.local
+// by Next.js, which can flip a "live" run to the fixture interpreter without any error.
+serverEnv.EX3CUUSION_AI_MODE = live ? "live" : "fixture";
 
 const releaseDevServerLock = await acquireDevServerLock("AI eval");
 const serverArgs = isWindows

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { recordPlanItemOutcome } from "@/lib/state";
 
 const outcomeSchema = z.object({
@@ -55,5 +55,5 @@ const outcomeSchema = z.object({
 export async function POST(request: NextRequest) {
   const input = outcomeSchema.parse(await request.json());
   const state = recordPlanItemOutcome(input);
-  return NextResponse.json({ state, plan: buildDayPlan(state) });
+  return NextResponse.json({ state, plan: dayView() });
 }

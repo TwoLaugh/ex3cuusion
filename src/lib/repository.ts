@@ -31,23 +31,38 @@ class InMemoryAppStateRepository implements AppStateRepository {
 }
 
 class FileAppStateRepository implements AppStateRepository {
+  // Live-object cache, mirroring PostgresAppStateRepository: state.ts mutates the object returned
+  // by read() in place, so read() must hand back the SAME object every time and flush it to disk
+  // (persist-on-read). Re-parsing the file per read silently dropped every in-place mutation.
+  private state?: AppState;
+
   constructor(private readonly filePath: string) {}
 
   read(): AppState {
+    if (this.state) {
+      this.persistToDisk(this.state);
+      return normalizeState(this.state);
+    }
     if (!fs.existsSync(this.filePath)) {
       return this.reset();
     }
-    return normalizeState(JSON.parse(fs.readFileSync(this.filePath, "utf8")) as AppState);
+    this.state = normalizeState(JSON.parse(fs.readFileSync(this.filePath, "utf8")) as AppState);
+    return this.state;
   }
 
   write(nextState: AppState): AppState {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify(nextState, null, 2));
-    return this.read();
+    this.state = normalizeState(nextState);
+    this.persistToDisk(this.state);
+    return this.state;
   }
 
   reset(): AppState {
     return this.write(createSeedState());
+  }
+
+  private persistToDisk(state: AppState): void {
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+    fs.writeFileSync(this.filePath, JSON.stringify(state, null, 2));
   }
 }
 
@@ -113,14 +128,32 @@ export function createPostgresRepositoryForTests(): AppStateRepository {
   return new PostgresAppStateRepository();
 }
 
+export function createFileRepositoryForTests(filePath: string): AppStateRepository {
+  return new FileAppStateRepository(filePath);
+}
+
 function buildDefaultRepository(): AppStateRepository {
   if (process.env.EX3CUUSION_STATE_REPOSITORY === "postgres") {
     return new PostgresAppStateRepository();
   }
+  if (process.env.EX3CUUSION_STATE_REPOSITORY === "memory") {
+    return new InMemoryAppStateRepository();
+  }
   if (process.env.EX3CUUSION_STATE_FILE) {
     return new FileAppStateRepository(process.env.EX3CUUSION_STATE_FILE);
   }
-  return new InMemoryAppStateRepository();
+  // Tests stay hermetic (vitest sets NODE_ENV=test).
+  if (process.env.NODE_ENV === "test") {
+    return new InMemoryAppStateRepository();
+  }
+  // Durable by default: a daily-driver planner must survive dev-server restarts. Zero-config
+  // file store under .data/ (gitignored). Postgres stays the opt-in production path; set
+  // EX3CUUSION_STATE_REPOSITORY=memory for the old throwaway behavior.
+  return new FileAppStateRepository(defaultStateFilePath());
+}
+
+export function defaultStateFilePath(): string {
+  return path.join(process.cwd(), ".data", "state.json");
 }
 
 // Legacy shape of a persisted state from before T088 2c-C removed Domain/Project. Used only by the
@@ -184,6 +217,10 @@ function normalizeState(state: AppState): AppState {
   state.executionEvents ??= [];
   state.dailyReviews ??= [];
   state.captureSessions ??= [];
+  state.committedPlans ??= []; // T090
+  state.dayLists ??= []; // T092
+  state.traySignals ??= []; // T093
+
   for (const session of state.captureSessions) {
     session.messages ??= [];
     session.questions ??= [];

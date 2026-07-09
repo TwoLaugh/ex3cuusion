@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Seed of Life: seven overlapping circles, the seven days of creation — a book of days,
+     and one circle per pillar. Six in terracotta around one in paper-cream (today, the centre),
+     inside a faint world-circle. Exact sacred geometry: outer centres sit ON the central
+     circle at 60° intervals, every radius 13. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+
+    <!-- world circle -->
+    <path
+        android:pathData="M54,26.5 a27.5,27.5 0 1,1 -0.02,0 Z"
+        android:strokeColor="#52ECE7DC" android:strokeWidth="1.6" android:fillColor="#00000000"/>
+
+    <!-- the six days / outer pillars -->
+    <path
+        android:pathData="M54,41 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M65.26,47.5 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M65.26,60.5 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M54,67 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M42.74,60.5 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0
+                          M42.74,47.5 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0"
+        android:strokeColor="#E0683A" android:strokeWidth="2.1" android:fillColor="#00000000"/>
+
+    <!-- today, the centre -->
+    <path
+        android:pathData="M54,54 m-13,0 a13,13 0 1,1 26,0 a13,13 0 1,1 -26,0"
+        android:strokeColor="#ECE7DC" android:strokeWidth="2.1" android:fillColor="#00000000"/>
+</vector>

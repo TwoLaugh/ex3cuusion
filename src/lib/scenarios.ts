@@ -191,7 +191,10 @@ export function createRealisticCharacterState(): AppState {
     folderBlockSelections: [],
     dailyReviews: [],
     inbox: [],
-    captureSessions: []
+    captureSessions: [],
+    committedPlans: [],
+    dayLists: [],
+    traySignals: []
   };
 }
 

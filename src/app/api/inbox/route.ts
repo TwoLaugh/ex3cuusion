@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { submitInbox } from "@/lib/state";
 
 const inboxSchema = z.object({
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
         inputLength: input.length
       });
     }
-    return NextResponse.json({ state, plan: buildDayPlan(state) });
+    return NextResponse.json({ state, plan: dayView() });
   } catch (error) {
     const elapsedMs = Date.now() - started;
     const status = error instanceof z.ZodError ? 400 : 502;

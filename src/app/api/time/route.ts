@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { advanceDay, getState, retreatDay, setDate } from "@/lib/state";
 
 const setTimeSchema = z.object({
@@ -13,5 +13,5 @@ const setTimeSchema = z.object({
 export async function POST(request: NextRequest) {
   const input = setTimeSchema.parse(await request.json());
   const state = input.advance ? advanceDay() : input.retreat ? retreatDay() : input.date ? setDate(input.date, input.time) : getState();
-  return NextResponse.json({ state, plan: buildDayPlan(state) });
+  return NextResponse.json({ state, plan: dayView() });
 }

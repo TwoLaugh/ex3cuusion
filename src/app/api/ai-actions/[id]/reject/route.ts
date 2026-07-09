@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { rejectAiAction } from "@/lib/state";
 
 const rejectSchema = z.object({
@@ -11,5 +11,5 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   const { id } = await context.params;
   const input = rejectSchema.parse(await request.json().catch(() => ({})));
   const state = rejectAiAction(id, input.reason);
-  return NextResponse.json({ state, plan: buildDayPlan(state) });
+  return NextResponse.json({ state, plan: dayView() });
 }

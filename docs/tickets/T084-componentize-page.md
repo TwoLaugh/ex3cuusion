@@ -10,3 +10,5 @@ TaskEditor, InboxPanel, etc.) to reduce bug surface (e.g. the earlier staging mi
 ## Acceptance Criteria
 
 - Behaviour unchanged; tsc + tests + SSR render identical; files are smaller and focused.
+
+## Status: DONE (2026-06-10, branch daily-driver-polish)

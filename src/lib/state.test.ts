@@ -9,12 +9,14 @@ import {
   completePlanItem,
   confirmAiAction,
   dailyReviewSummary,
+  dayView,
   deferPlanItem,
   getState,
   listChangeHistory,
   maybeRunDailyOrganizer,
   recordPlanItemOutcome,
   rejectAiAction,
+  replanRestOfDay,
   resetState,
   runOrganizerPass,
   setAutoOrganizeEnabled,
@@ -1201,5 +1203,115 @@ describe("state integration", () => {
     expect(getState().currentDate).toBe("2026-06-03");
     retreatDay();
     expect(getState().currentDate).toBe("2026-06-02");
+  });
+
+  describe("committed day plan (T090)", () => {
+    it("commits on first dayView and stays stable when new tasks arrive; staleness count grows", () => {
+      const first = dayView();
+      expect(first.committedAt).toBeDefined();
+      expect(first.newCandidateCount).toBe(0);
+      expect(getState().committedPlans).toHaveLength(1);
+      const committedIds = first.items.map((item) => item.id);
+
+      applyStructureMutation({ entity: "task", action: "create", patch: { title: "Sneaky new task", effortMinutes: 15 } });
+
+      const second = dayView();
+      expect(second.items.map((item) => item.id)).toEqual(committedIds);
+      expect(second.items.some((item) => item.title === "Sneaky new task")).toBe(false);
+      expect(second.newCandidateCount).toBe(1);
+      // The new task is a fresh-generation candidate, just not part of the committed day.
+      expect(buildDayPlan(getState()).items.some((item) => item.title === "Sneaky new task")).toBe(true);
+    });
+
+    it("replanRestOfDay keeps settled items, pulls new candidates in, and is one undoable change", () => {
+      const first = dayView();
+      const message = first.items.find((item) => item.title === "Message Will")!;
+      completePlanItem(message.id);
+      applyStructureMutation({ entity: "task", action: "create", patch: { title: "Brand new errand", effortMinutes: 15 } });
+
+      const historyLength = listChangeHistory().length;
+      replanRestOfDay();
+      expect(listChangeHistory().length).toBe(historyLength + 1);
+      expect(listChangeHistory()[0].source).toBe("replan");
+
+      const replanned = dayView();
+      const keptMessage = replanned.items.find((item) => item.id === message.id);
+      expect(keptMessage?.status).toBe("completed");
+      expect(keptMessage?.startTime).toBe(message.startTime); // kept exactly as committed
+      expect(replanned.items.some((item) => item.title === "Brand new errand")).toBe(true);
+      expect(replanned.newCandidateCount).toBe(0);
+
+      undoChange();
+      const restored = dayView();
+      expect(restored.items.some((item) => item.title === "Brand new errand")).toBe(false);
+      expect(restored.items.find((item) => item.id === message.id)?.status).toBe("completed");
+      expect(restored.newCandidateCount).toBe(1);
+    });
+
+    it("marks committed items whose window passed as missed, leaving settled items alone", () => {
+      const first = dayView();
+      const message = first.items.find((item) => item.title === "Message Will")!;
+      const rehab = first.items.find((item) => item.title === "Back rehab")!;
+      expect(rehab.status).toBe("planned");
+      completePlanItem(message.id);
+
+      setClock("2026-06-01", "23:30");
+      const evening = dayView();
+      expect(evening.items.find((item) => item.id === rehab.id)?.status).toBe("missed");
+      expect(evening.items.find((item) => item.id === message.id)?.status).toBe("completed");
+    });
+
+    it("resolves Done against the committed plan", () => {
+      const view = dayView();
+      const item = view.items.find((entry) => entry.title === "Message Will")!;
+      completePlanItem(item.id);
+      expect(dayView().items.find((entry) => entry.id === item.id)?.status).toBe("completed");
+      expect(getState().tasks.find((task) => task.id === item.taskId)?.status).toBe("completed");
+    });
+
+    it("replans within the same change when the AI schedules a task for today", async () => {
+      dayView(); // commit the day before the AI acts
+      const historyLength = listChangeHistory().length;
+
+      await submitInbox("dump run today at 17:00", async () => ({
+        model: "t090-fixture",
+        summary: "Scheduled a dump run for today.",
+        actions: [
+          {
+            type: "create_task" as const,
+            label: "Add dump run",
+            title: "Go to the dump",
+            targetTaskId: null,
+            folderName: null,
+            parentFolderName: null,
+            dueDate: null,
+            scheduledDate: "2026-06-01",
+            scheduledTime: "17:00",
+            effortMinutes: 45,
+            energy: "medium" as const,
+            strictness: "normal" as const,
+            priority: 5,
+            importance: 5,
+            urgency: 5,
+            recurrenceDays: null,
+            completionBehavior: null,
+            completionMode: null,
+            definitionOfDone: null,
+            tags: null,
+            question: null,
+            clarificationKind: null,
+            clarificationOptions: null,
+            schedulingMode: null,
+            dateIntent: "today" as const
+          }
+        ]
+      }));
+
+      expect(listChangeHistory()).toHaveLength(historyLength + 1); // replan happened WITHIN the inbox change
+      const view = dayView();
+      const item = view.items.find((entry) => entry.title === "Go to the dump");
+      expect(item?.status).toBe("planned");
+      expect(item?.startTime).toBe("17:00");
+    });
   });
 });

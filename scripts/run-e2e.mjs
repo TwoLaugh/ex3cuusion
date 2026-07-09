@@ -5,7 +5,9 @@ const isWindows = process.platform === "win32";
 const runner = isWindows ? "cmd.exe" : "npx";
 const env = {
   ...process.env,
-  EX3CUUSION_AI_MODE: "fixture"
+  EX3CUUSION_AI_MODE: "fixture",
+  // E2E servers must be hermetic: never read/write the durable .data/ store.
+  EX3CUUSION_STATE_REPOSITORY: "memory"
 };
 const baseUrl = "http://127.0.0.1:3017";
 

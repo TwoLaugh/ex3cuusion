@@ -2,7 +2,7 @@ export type Energy = "low" | "medium" | "high";
 export type Strictness = "flexible" | "normal" | "strict";
 export type TaskStatus = "active" | "scheduled" | "completed" | "deferred" | "blocked" | "waiting" | "archived";
 export type PlanItemType = "routine" | "atomic_task" | "folder_block" | "soft_invitation";
-export type PlanItemStatus = "planned" | "completed" | "deferred" | "unscheduled";
+export type PlanItemStatus = "planned" | "completed" | "deferred" | "unscheduled" | "missed";
 export type LoadLevel = "light" | "normal" | "heavy" | "overloaded";
 export type CompletionBehavior = "exhaust_once" | "repeatable" | "keep_as_suggestion" | "regenerate_after_completion";
 export type CompletionMode =
@@ -188,6 +188,49 @@ export interface Task {
   completedAt?: string;
   lastCompletedAt?: string;
   source?: string;
+  // T092: habit tasks live on the Today habit strip (with streaks), never on the day list.
+  habit?: boolean;
+}
+
+// T093: per-task tray telemetry. Updated by the tray read path (surfacing, idempotent per date)
+// and by the explicit list mutations (add from tray / eject). ignoredStreak is PROVISIONAL on
+// surfacing: it is bumped when the task is shown on a new date and reset the moment the user
+// acts (add or eject — eject is information, not ignoring). firstSurfacedDate is the TMT delay
+// anchor: Task has no createdAt, so "how long has this been waiting" can only be measured from
+// the first time the tray showed it.
+export interface TraySignal {
+  taskId: string;
+  surfacedCount: number;
+  firstSurfacedDate?: string;
+  lastSurfacedDate?: string;
+  addedCount: number;
+  ignoredStreak: number;
+  lastOutcome?: "added" | "ignored" | "ejected";
+}
+
+// T092: where a day-list entry came from. "recurring" = auto-added by the morning build (due
+// recurring/dated), "manual" = user-authored (incl. instant capture), "tray" = pulled from the
+// tray, "ai" = AI-proposed list add, "carried" = unfinished entry carried from the previous list.
+export type DayListSource = "recurring" | "manual" | "tray" | "ai" | "carried";
+
+export interface DayListEntry {
+  taskId: string;
+  order: number;
+  pinnedTime?: string;
+  source: DayListSource;
+}
+
+// T092: the user's hand-authored list for one day — the day's commitment (list-first Today).
+// Built once on first view of a date (morning build), then mutated only by explicit, undoable
+// list edits. Supersedes committedPlans as the commitment; the timeline keeps using dayView.
+export interface DayList {
+  date: string;
+  committedAt: string;
+  entries: DayListEntry[];
+  // T110: built ahead of its own day (evening planning). The first view ON that day RECONCILES it
+  // (keep authored order, drop late-completed, append newly-due/carryover) instead of rebuilding
+  // from scratch, then clears this flag. Absent/false on same-day morning builds.
+  plannedAhead?: boolean;
 }
 
 
@@ -225,6 +268,45 @@ export interface DayPlan {
   availableMinutes: number;
   summary: string;
   items: PlanItem[];
+  // T090: set when the plan is a committed-day projection (dayView), absent on pure generation.
+  committedAt?: string;
+  // T090: plannable-today items in a fresh generation that are not in the committed plan.
+  newCandidateCount?: number;
+}
+
+// T090: snapshot of the PlanItem fields needed to re-render a committed item. Status is NOT
+// stored — it is overlaid live from completions/deferrals/executionEvents and the clock.
+export interface CommittedPlanItem {
+  id: string;
+  type: PlanItemType;
+  title: string;
+  section: PlanItem["section"];
+  startTime: string;
+  endTime: string;
+  fixedStartTime?: string;
+  hardAnchor?: boolean;
+  taskId?: string;
+  folderId?: string;
+  selectedTaskIds?: string[];
+  estimatedMinutes: number;
+  clockMinutes?: number;
+  blockingMinutes?: number;
+  schedulingMode?: SchedulingMode;
+  attentionLoad?: AttentionLoad;
+  canOverlap?: boolean;
+  overlapKinds?: OverlapKind[];
+  phaseKind?: TaskPhaseKind;
+  phaseIndex?: number;
+  parentTaskId?: string;
+  reason: string;
+}
+
+// T090: the day plan the user committed to. While one exists for a date, the day view renders it
+// with live status overlays instead of regenerating; "replan rest of day" is the only reshuffler.
+export interface CommittedDayPlan {
+  date: string;
+  committedAt: string;
+  items: CommittedPlanItem[];
 }
 
 export interface DeferralLog {
@@ -426,6 +508,15 @@ export interface AppState {
   dailyReviews: DailyReview[];
   inbox: InboxEntry[];
   captureSessions: CaptureSession[];
+  // T090: committed day plans, one per date, created on first view of a day or by explicit
+  // commit/replan. Source of truth for today's actionable plan once committed.
+  committedPlans: CommittedDayPlan[];
+  // T092: hand-authored day lists, one per date, created by the morning build on first view of a
+  // day. The list is the day's commitment; the timeline (committedPlans) is a secondary view.
+  dayLists: DayList[];
+  // T093: per-task tray acceptance telemetry (surfaced/added/ignored/ejected), one entry per task
+  // the tray has ever shown. Drives damping, the resurfacing floor, and the stale-task question.
+  traySignals: TraySignal[];
   // Local date of the last guarded organizer pass (T069); used only by the explicit auto route.
   lastAutoOrganizeDate?: string;
   // Reserved for the guarded auto organizer route. The client uses an explicit button by default.

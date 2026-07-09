@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { getState } from "@/lib/state";
 import { buildWeekPlan } from "@/lib/week-plan";
 
 export async function GET() {
+  const plan = dayView(); // T090: the committed-day projection, not a fresh generation
   const state = getState();
   return NextResponse.json({
     currentDate: state.currentDate,
     currentTime: state.currentTime,
+    committedAt: plan.committedAt,
+    newCandidateCount: plan.newCandidateCount,
     taskCount: state.tasks.length,
     folders: state.folders,
     inbox: state.inbox.map((entry) => ({
@@ -47,7 +50,7 @@ export async function GET() {
       scheduling: task.scheduling,
       effortMinutes: task.effortMinutes
     })),
-    planItems: buildDayPlan(state).items.map((item) => ({
+    planItems: plan.items.map((item) => ({
       id: item.id,
       title: item.title,
       status: item.status,

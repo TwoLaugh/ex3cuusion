@@ -1,15 +1,81 @@
 "use client";
 
-import { Archive, Bot, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Layers3, Menu, Plus, Save, Send, Undo2, X } from "lucide-react";
-import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { isDateInRange, nextWeekRange, weekRange } from "@/lib/dates";
-import type { AppState, DayPlan, Folder, PlanItem } from "@/lib/types";
+import {
+  ArrowRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Flame,
+  Folder,
+  GripVertical,
+  ListChecks,
+  Moon,
+  Pin,
+  Plus,
+  Repeat,
+  Settings2,
+  Sparkles,
+  Sun,
+  Undo2,
+  X
+} from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import type { DayListEntryView, DayListView } from "@/lib/day-list";
+import { addDays } from "@/lib/dates";
+import type { AppState, DayPlan, PlanItem } from "@/lib/types";
+import { EditableBadge } from "./components/EditableBadge";
+import { InboxSession } from "./components/InboxSession";
+import { PlanItemActions } from "./components/PlanItemActions";
+import { ReviewDayDialog } from "./components/ReviewDayDialog";
+import { PlanItemMeta, SecondaryPanel, type SecondaryView } from "./components/SecondaryPanel";
+import { addClockMinutes, formatDate, formatShortDate, fromMinutes, isClockTime, localNowParts, normalizeMoveTime, toMinutes } from "./lib/format";
+import { applyPendingTimelineMoves, buildTimeline, pixelsPerMinute, removePendingTimelineMove, type PendingTimelineMove } from "./lib/plan-view";
+import { childStats, clientBlockFolderId, dateIntentLabel } from "./lib/task-view";
 
-type ApiPayload = { state: AppState; plan: DayPlan };
-type PostFn = (url: string, body?: Record<string, unknown>) => Promise<void>;
-type SecondaryView = "Folders" | "Tasks" | "Planning preferences" | "AI activity";
-const secondaryViews: SecondaryView[] = ["Folders", "Tasks", "Planning preferences", "AI activity"];
-const showAiDebugTrace = process.env.NODE_ENV !== "production";
+// T092: the day-list endpoints return dayList alongside state+plan; older mutation endpoints
+// (structure, time, plan/*) still return only state+plan, so dayList is optional here and post()
+// backfills it (see post below).
+type ApiPayload = { state: AppState; plan: DayPlan; dayList?: DayListView };
+
+// T092: list rows open the same task drawer the timeline uses. When the task has no plan item
+// today, the drawer gets a minimal synthetic PlanItem (prefixed id) — the drawer's complete
+// action detects the prefix and ticks via /api/day-list/complete instead of /api/plan/complete.
+const dayListItemPrefix = "daylist_";
+
+function dayListPlanItem(entry: DayListEntryView): PlanItem {
+  return {
+    id: `${dayListItemPrefix}${entry.taskId}`,
+    type: "atomic_task",
+    title: entry.title,
+    section: "later",
+    status: entry.completedToday ? "completed" : "planned",
+    startTime: entry.pinnedTime ?? "",
+    endTime: "",
+    folderId: entry.folderId,
+    taskId: entry.taskId,
+    estimatedMinutes: entry.effortMinutes,
+    reason: "On today's list"
+  };
+}
+
+// T092 balance gauge: each pillar gets a stable muted warm tone from a fixed palette of
+// desaturated warm grays/browns (hash of the folder id, so the assignment never shifts).
+const pillarTones = ["#8a7d66", "#6e6353", "#9c8872", "#5d564a", "#7d6f5e", "#a89b85"];
+
+function pillarTone(folderId: string): string {
+  let hash = 0;
+  for (let index = 0; index < folderId.length; index += 1) hash = (hash * 31 + folderId.charCodeAt(index)) >>> 0;
+  return pillarTones[hash % pillarTones.length];
+}
+type MainView = "Today" | SecondaryView;
+
+const navItems: { label: string; view: MainView; ariaLabel: string; Icon: typeof Sun }[] = [
+  { label: "Today", view: "Today", ariaLabel: "Today", Icon: Sun },
+  { label: "Tasks", view: "Tasks", ariaLabel: "Tasks", Icon: ListChecks },
+  { label: "Folders", view: "Folders", ariaLabel: "Folders", Icon: Folder },
+  { label: "AI activity", view: "AI activity", ariaLabel: "AI activity", Icon: Sparkles },
+  { label: "Preferences", view: "Planning preferences", ariaLabel: "Planning preferences", Icon: Settings2 }
+];
 
 interface TimelineDragState {
   itemId: string;
@@ -28,18 +94,22 @@ interface TimelineDragState {
   moved: boolean;
 }
 
-interface PendingTimelineMove {
-  date: string;
-  startTime: string;
-  endTime: string;
-}
-
 export default function Home() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [activeView, setActiveView] = useState<SecondaryView | null>(null);
-  const [inboxOpen, setInboxOpen] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [view, setView] = useState<MainView>("Today");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [laterOpen, setLaterOpen] = useState(false);
+  // T092 list-first Today: inline-add draft, HTML5-DnD reorder state (mirrors BacklogBoard's
+  // draggable pattern), and the optimistic order applied while a reorder POST is in flight.
+  const [listDraft, setListDraft] = useState("");
+  // T110: "plan tomorrow" — the Today surface pointed at a future date. planningDate is the target
+  // day (null = live Today); planningView holds that day's list, kept SEPARATE from payload.dayList
+  // so a plan-ahead read never clobbers today's committed list.
+  const [planningDate, setPlanningDate] = useState<string | null>(null);
+  const [planningView, setPlanningView] = useState<DayListView | null>(null);
+  const [listDragId, setListDragId] = useState<string | null>(null);
+  const [listDragOverId, setListDragOverId] = useState<string | null>(null);
+  const [optimisticListOrder, setOptimisticListOrder] = useState<string[] | null>(null);
   const [sending, setSending] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PlanItem | null>(null);
@@ -53,8 +123,19 @@ export default function Home() {
   const [notDoneNote, setNotDoneNote] = useState("");
   const [clarificationDrafts, setClarificationDrafts] = useState<Record<string, string>>({});
   const [followUpDrafts, setFollowUpDrafts] = useState<Record<string, string>>({});
-  const [todayIndex, setTodayIndex] = useState<number | null>(null);
   const [history, setHistory] = useState<{ id: string; source: string; summary: string; createdAt: string }[]>([]);
+  // T078: transient post-action toast (one at a time, latest wins). The latest-history-id ref
+  // is primed on the first history fetch so pre-existing entries never toast; undo paths set
+  // the suppress ref so the resulting history shrink does not re-toast an older entry.
+  const [toast, setToast] = useState<{ key: number; message: string; undoId?: string } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastHistoryIdRef = useRef<string | null>(null);
+  const historyPrimedRef = useRef(false);
+  const suppressHistoryToastRef = useRef(false);
+  // T089: the AI session drawer auto-surfaces when a new clarification question appears.
+  // Tracking the last-seen pending question id keeps a manual close sticky until the AI
+  // actually asks something new.
+  const lastPendingQuestionRef = useRef<string | null>(null);
   // True while the view should track real "today" (T068). Manual day navigation turns it off so
   // the live tick does not yank the user back; the "Today" control turns it back on.
   const followingTodayRef = useRef(true);
@@ -285,14 +366,37 @@ export default function Home() {
   }
 
   // Undo an AI change (auto-apply-with-undo, T061). post() updates the plan/state; the
-  // [payload] effect below refreshes the change list.
+  // [payload] effect below refreshes the change list. Suppresses the history-diff toast (T078)
+  // and shows a plain confirmation instead.
   async function undoChange(id: string) {
+    suppressHistoryToastRef.current = true;
     try {
       await post("/api/history", { id });
+      showToast("Change undone");
     } catch {
       // ignore — list refresh will reflect actual state
+      suppressHistoryToastRef.current = false;
     }
   }
+
+  // T078: show a transient toast (~6s auto-dismiss, manual X, one at a time — latest wins).
+  function showToast(message: string, undoId?: string) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ key: Date.now(), message, undoId });
+    toastTimerRef.current = setTimeout(() => setToast(null), 6000);
+  }
+
+  function dismissToast() {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = null;
+    setToast(null);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   // Trigger a proactive maintenance pass (T066). Result is one undoable "organizer" change.
   async function runOrganizer() {
@@ -313,19 +417,49 @@ export default function Home() {
     await post("/api/settings", { availableMinutes: Number(form.get("availableMinutes")) });
   }
 
-  // Keep the recent-AI-changes list in sync after any state change.
+  // Keep the recent-AI-changes list in sync after any state change. Every successful mutating
+  // post() lands here (post() sets payload), so this is also the single funnel for post-action
+  // toasts (T078): a new latest history entry means an undoable change just happened. Pure
+  // reads and the live clock tick leave the latest id unchanged, so they never toast.
   useEffect(() => {
     if (!payload) return;
     let active = true;
     fetch("/api/history")
       .then((response) => (response.ok ? response.json() : { history: [] }))
-      .then((data) => {
-        if (active) setHistory(data.history ?? []);
+      .then((data: { history?: { id: string; source: string; summary: string; createdAt: string }[] }) => {
+        if (!active) return;
+        const entries = data.history ?? [];
+        setHistory(entries);
+        const latestId = entries[0]?.id ?? null;
+        const previousId = lastHistoryIdRef.current;
+        lastHistoryIdRef.current = latestId;
+        if (!historyPrimedRef.current) {
+          historyPrimedRef.current = true;
+          return;
+        }
+        if (suppressHistoryToastRef.current) {
+          suppressHistoryToastRef.current = false;
+          return;
+        }
+        if (latestId && latestId !== previousId) {
+          showToast(entries[0].summary, latestId);
+        }
       })
       .catch(() => {});
     return () => {
       active = false;
     };
+  }, [payload]);
+
+  // T089: surface the AI session drawer whenever the latest capture session has a freshly
+  // pending clarification question. Closing the drawer only hides it — nothing is reset.
+  useEffect(() => {
+    if (!payload) return;
+    const entry = payload.state.inbox[0];
+    const session = entry ? payload.state.captureSessions.find((candidate) => candidate.id === entry.captureSessionId) : undefined;
+    const pendingId = session?.questions.find((question) => question.status === "pending")?.id ?? null;
+    if (pendingId && pendingId !== lastPendingQuestionRef.current) setAiOpen(true);
+    lastPendingQuestionRef.current = pendingId;
   }, [payload]);
 
   async function post(url: string, body: Record<string, unknown> = {}) {
@@ -338,14 +472,66 @@ export default function Home() {
       const message = await responseError(response);
       throw new Error(message || `Request failed with ${response.status}`);
     }
-    setPayload(await response.json());
+    const data = (await response.json()) as ApiPayload;
+    if (data.dayList) {
+      setPayload(data);
+      return;
+    }
+    // T092: endpoints that predate the day list (structure, time, plan/*) return state+plan only.
+    // Re-read /api/day-list (also fresh state+plan) so the list-first Today never goes stale —
+    // crucial for day navigation, where the list for the new date must materialize.
+    try {
+      const listResponse = await fetch("/api/day-list", { cache: "no-store" });
+      if (listResponse.ok) {
+        setPayload((await listResponse.json()) as ApiPayload);
+        return;
+      }
+    } catch {}
+    setPayload((previous) => (previous?.dayList ? { ...data, dayList: previous.dayList } : data));
+  }
+
+  // T110: a plan-ahead read returns the FUTURE day's list in `dayList`; keep it in planningView and
+  // refresh the shared state/plan in place, but never let it overwrite today's payload.dayList.
+  function absorbPlanning(data: ApiPayload) {
+    setPlanningView(data.dayList ?? null);
+    setPayload((previous) => (previous ? { ...previous, state: data.state, plan: data.plan } : data));
+  }
+
+  async function loadPlanning(date: string) {
+    const response = await fetch(`/api/day-list?date=${encodeURIComponent(date)}`, { cache: "no-store" });
+    if (response.ok) absorbPlanning((await response.json()) as ApiPayload);
+  }
+
+  function enterPlanning() {
+    const date = addDays(localNowParts().date, 1); // the evening ritual plans the real next day
+    followingTodayRef.current = false; // the live clock tick must not yank us back to today
+    setPlanningDate(date);
+    void loadPlanning(date);
+  }
+
+  function exitPlanning() {
+    setPlanningDate(null);
+    setPlanningView(null);
+    void goToToday(); // re-sync to the live day
+  }
+
+  // T110: day-list mutations while planning target the plan-ahead date and route the response into
+  // planningView; on the live day they behave exactly as before (whole-payload refresh via post()).
+  async function listMutate(body: Record<string, unknown>) {
+    if (!planningDate) return post("/api/day-list", body);
+    const response = await fetch("/api/day-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, date: planningDate })
+    });
+    if (!response.ok) throw new Error((await responseError(response)) || `Request failed with ${response.status}`);
+    absorbPlanning((await response.json()) as ApiPayload);
   }
 
   useEffect(() => {
     syncClock().catch(() => {
       void refresh();
     });
-    setTodayIndex(systemWeekdayIndex());
   }, []);
 
   // Guarded live clock tick (T068): keep "today" current and roll past midnight, but only while
@@ -361,6 +547,23 @@ export default function Home() {
 
   const plan = payload?.plan;
   const state = payload?.state;
+  const dayList = payload?.dayList;
+  // T110: the list the surface shows — the plan-ahead view while planning, otherwise today's.
+  const activeList = planningDate && planningView ? planningView : dayList;
+  // Rows in `order` (renderDayList pre-sorts); while a reorder POST is in flight the optimistic
+  // order wins, with any entries it does not know about appended (e.g. a concurrent add).
+  const listEntries = useMemo(() => {
+    const entries = activeList?.entries ?? [];
+    if (!optimisticListOrder) return entries;
+    const byId = new Map(entries.map((entry) => [entry.taskId, entry]));
+    const ordered = optimisticListOrder.flatMap((taskId) => {
+      const entry = byId.get(taskId);
+      if (!entry) return [];
+      byId.delete(taskId);
+      return [entry];
+    });
+    return [...ordered, ...byId.values()];
+  }, [activeList, optimisticListOrder]);
   const selectedTasks = useMemo(() => {
     if (!state || !selected?.selectedTaskIds) return [];
     return selected.selectedTaskIds
@@ -369,6 +572,8 @@ export default function Home() {
   }, [state, selected]);
   const selectedFolder = selected?.folderId ? state?.folders?.find((folder) => folder.id === selected.folderId) : undefined;
   const selectedTask = selected?.taskId ? state?.tasks.find((task) => task.id === selected.taskId) : undefined;
+  // T079: label for the editable due-date badge in the task drawer.
+  const selectedDueLabel = selectedTask?.dueDate ? `due ${formatShortDate(selectedTask.dueDate)}` : "due —";
   const selectedBacklog = useMemo(() => {
     if (!state || !selected?.folderId) return [];
     const selectedIds = new Set(selected.selectedTaskIds ?? []);
@@ -389,9 +594,25 @@ export default function Home() {
 
   useEffect(() => {
     if (!selected || !plan) return;
+    // T092: synthetic day-list drawer items refresh from the day list (field-compared to avoid
+    // a setSelected loop on the freshly built object); plan items refresh from the plan as before.
+    if (selected.id.startsWith(dayListItemPrefix)) {
+      const entry = dayList?.entries.find((candidate) => `${dayListItemPrefix}${candidate.taskId}` === selected.id);
+      if (!entry) return;
+      const rebuilt = dayListPlanItem(entry);
+      if (
+        rebuilt.status !== selected.status ||
+        rebuilt.title !== selected.title ||
+        rebuilt.estimatedMinutes !== selected.estimatedMinutes ||
+        rebuilt.startTime !== selected.startTime
+      ) {
+        setSelected(rebuilt);
+      }
+      return;
+    }
     const refreshed = plan.items.find((item) => item.id === selected.id);
     if (refreshed && refreshed !== selected) setSelected(refreshed);
-  }, [plan, selected]);
+  }, [dayList, plan, selected]);
 
   useEffect(() => {
     if (!moveItem) {
@@ -403,22 +624,71 @@ export default function Home() {
     setMoveError(null);
   }, [moveItem, plan?.date]);
 
-  if (!payload || !plan || !state) {
+  if (!payload || !plan || !state || !dayList) {
     return <main className="loading">Building today...</main>;
   }
 
-  async function submitInbox() {
-    if (!draft.trim()) return;
-    setSending(true);
-    setInboxError(null);
+  // T110: the concrete list to render — plan-ahead view while planning (falling back to today's for
+  // the brief moment before it loads), otherwise today's committed list.
+  const shownList = activeList ?? dayList;
+
+  // T092 inline instant add (documented capture→enrich contract in api/day-list/capture): the
+  // input clears IMMEDIATELY, the capture POST lands as one undoable change, and enrichment is
+  // fired without awaiting — when it resolves, post() refreshes state quietly and the history
+  // funnel toasts what the AI decided.
+  async function submitListAdd(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = listDraft.trim();
+    if (!title) return;
+    setListDraft("");
+    const targetDate = planningDate; // captured: the user may leave planning mode before enrich lands
     try {
-      await post("/api/inbox", { input: draft.trim() });
-      setDraft("");
+      const response = await fetch("/api/day-list/capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(targetDate ? { title, date: targetDate } : { title })
+      });
+      if (!response.ok) throw new Error((await responseError(response)) || `Request failed with ${response.status}`);
+      const data = (await response.json()) as ApiPayload & { taskId?: string };
+      if (targetDate) absorbPlanning(data);
+      else setPayload(data);
+      // Enrichment (/api/day-list/enrich) is today-scoped; while planning, re-read the plan-ahead
+      // view once it lands so the enriched folder/effort/dates show on tomorrow's list too.
+      if (data.taskId) {
+        const enrich = post("/api/day-list/enrich", { taskId: data.taskId }).catch(() => {});
+        if (targetDate) void enrich.then(() => loadPlanning(targetDate));
+        else void enrich;
+      }
     } catch (error) {
-      setInboxError(error instanceof Error ? error.message : "AI request failed.");
-    } finally {
-      setSending(false);
+      setInboxError(error instanceof Error ? error.message : "Could not add to the list.");
     }
+  }
+
+  // Row click opens the same task drawer the timeline uses: prefer the real plan item for the
+  // task (full actions), else a minimal synthetic item (see dayListPlanItem).
+  function openListEntry(entry: DayListEntryView) {
+    const planItem = plan?.items.find((item) => item.taskId === entry.taskId);
+    setSelected(planItem ?? dayListPlanItem(entry));
+  }
+
+  // Drop a dragged list row onto a target row: reorder locally first (optimistic), then POST the
+  // full order through the post() funnel so the change toasts and is undoable; the response (or a
+  // failure) reconciles by clearing the optimistic order.
+  function dropListRow(targetTaskId: string) {
+    const draggedId = listDragId;
+    setListDragId(null);
+    setListDragOverId(null);
+    if (!draggedId || draggedId === targetTaskId) return;
+    const orderedTaskIds = listEntries.map((entry) => entry.taskId);
+    const from = orderedTaskIds.indexOf(draggedId);
+    const to = orderedTaskIds.indexOf(targetTaskId);
+    if (from < 0 || to < 0) return;
+    orderedTaskIds.splice(from, 1);
+    orderedTaskIds.splice(to, 0, draggedId);
+    setOptimisticListOrder(orderedTaskIds);
+    void listMutate({ action: "reorder", orderedTaskIds })
+      .catch(() => {})
+      .finally(() => setOptimisticListOrder(null));
   }
 
   async function submitNotDone() {
@@ -496,160 +766,407 @@ export default function Home() {
     setMoveError(null);
   }
 
+  // T092 list-first composition: the hand-authored list is the primary surface; the timeline is
+  // a secondary section. The Now card / Next-3 / Later rows are gone — the slim now-emphasis on
+  // the top unticked list row replaces them.
+  const newCandidateCount = plan.newCandidateCount ?? 0;
+  const capacityLeft = Math.max(0, plan.availableMinutes - plan.estimatedTotalMinutes);
+  const firstUntickedId = listEntries.find((entry) => !entry.completedToday)?.taskId;
+  const untickedCount = listEntries.filter((entry) => !entry.completedToday).length;
+  const { capacityMinutes, listMinutes } = shownList.gauges;
+  const overfull = listMinutes > capacityMinutes;
+  const capacityRatio = capacityMinutes > 0 ? Math.min(1, listMinutes / capacityMinutes) : listMinutes > 0 ? 1 : 0;
+  const firstMissingPillar = shownList.gauges.missingPillars[0];
+  const trayGroups = [
+    ["due", shownList.tray.due],
+    ["balance", shownList.tray.balance],
+    ["backlog", shownList.tray.backlog]
+  ] as const;
+  const traySuggestionCount = shownList.tray.due.length + shownList.tray.balance.length + shownList.tray.backlog.length;
+  const latestEntry = state.inbox[0];
+  const latestSession = latestEntry ? state.captureSessions.find((session) => session.id === latestEntry.captureSessionId) : undefined;
+  const hasPendingClarification = (latestSession?.questions ?? []).some((question) => question.status === "pending");
+
   return (
-    <main className="shell">
-      <aside className={menuOpen ? "sideNav sideNavOpen" : "sideNav"} aria-label="Secondary pages">
-        <button className="iconButton closeButton" onClick={() => setMenuOpen(false)} aria-label="Close menu">
-          <X size={19} />
-        </button>
-        <nav>
-          {secondaryViews.map((item) => (
+    <div className="appShell">
+      <aside className="navRail" aria-label="Primary navigation">
+        <p className="wordmark">ex3cuusion</p>
+        <nav className="railNav">
+          {navItems.map(({ label, view: navView, ariaLabel, Icon }) => (
             <button
-              key={item}
-              className={activeView === item ? "navItem activeNavItem" : "navItem"}
-              onClick={() => {
-                setActiveView(item);
-                setMenuOpen(false);
-              }}
+              key={navView}
+              className={view === navView ? "navItem activeNavItem" : "navItem"}
+              onClick={() => setView(navView)}
+              aria-label={ariaLabel}
+              aria-current={view === navView ? "page" : undefined}
             >
-              {item}
-              <ChevronRight size={16} />
+              <Icon size={17} />
+              <span className="navLabel">{label}</span>
             </button>
           ))}
         </nav>
+        <div className="railFooter">
+          <p className="railCapacity" data-testid="load-level">
+            {formatDuration(capacityLeft)} left
+          </p>
+          <button className="tidyButton" onClick={runOrganizer} disabled={sending} aria-label="Run a tidy-up maintenance pass">
+            Run tidy-up
+          </button>
+        </div>
       </aside>
 
-      <header className="topbar">
-        <button className="iconButton" onClick={() => setMenuOpen(true)} aria-label="Open menu">
-          <Menu size={22} />
-        </button>
-        <div className="dateNavigator">
-          <div className="dayDots" aria-label="Week position">
-            {weekDots(plan.date, todayIndex).map((dot) => (
-              <span
-                aria-label={dot.label}
-                className={`${dot.viewed ? "viewedDot" : ""} ${dot.today ? "todayDot" : ""}`}
-                key={dot.label}
-                title={dot.label}
-              />
-            ))}
-          </div>
-          <div className="dateControls">
-            <button
-              className="iconButton dateStep"
-              onClick={() => {
-                followingTodayRef.current = false;
-                post("/api/time", { retreat: true });
-              }}
-              aria-label="Previous day"
-            >
-              <ChevronLeft size={20} />
-            </button>
-            <div className="dateDisplay">
-              <h1 aria-label={formatDate(plan.date)}>{formatShortDate(plan.date)}</h1>
-              <p>{formatDay(plan.date)}</p>
-            </div>
-            <button
-              className="iconButton dateStep"
-              onClick={() => {
-                followingTodayRef.current = false;
-                post("/api/time", { advance: true });
-              }}
-              aria-label="Next day"
-            >
-              <ChevronRight size={20} />
-            </button>
-            {plan.date !== localNowParts().date && (
-              <button className="todayButton" onClick={goToToday} aria-label="Jump to today">
-                Today
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="loadBadge" data-testid="load-level">
-          <Clock3 size={16} />
-          {plan.loadLevel} - {state.currentTime} - committed {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
-        </div>
-        <button className="reviewButton" onClick={() => setReviewOpen(true)} aria-label="Review day">
-          <ClipboardCheck size={16} />
-          Review
-        </button>
-      </header>
-
-      {activeView && (
-        <SecondaryPanel
-          view={activeView}
-          state={state}
-          plan={plan}
-          post={post}
-          onClose={() => setActiveView(null)}
-          runOrganizer={runOrganizer}
-          organizerRunning={sending}
-          updateCapacity={updateCapacity}
-        />
-      )}
-
-      <section className="calendarTimeline" aria-label="Timed day plan">
-        <div className="calendarScroll">
-          <div className="timeColumn" style={{ height: timeline?.height }}>
-            {timeline?.hours.map((hour) => (
-              <div className="hourLabel" key={hour.time} style={{ top: hour.top }}>
-                {hour.time}
+      <main className="mainColumn">
+        {view !== "Today" ? (
+          <SecondaryPanel
+            view={view}
+            state={state}
+            plan={plan}
+            post={post}
+            runOrganizer={runOrganizer}
+            organizerRunning={sending}
+            updateCapacity={updateCapacity}
+          />
+        ) : (
+          <>
+            <header className={planningDate ? "todayHeader planningHeader" : "todayHeader"}>
+              <div>
+                {planningDate ? (
+                  <>
+                    <h1 aria-label={`Planning ${formatDate(planningDate)}`}>Planning {formatDate(planningDate)}</h1>
+                    <p className="capacityLine">the evening ritual · shape tomorrow before it arrives</p>
+                  </>
+                ) : (
+                  <>
+                    <h1 aria-label={formatDate(plan.date)}>{formatDate(plan.date)}</h1>
+                    <p className="capacityLine">your list · committed {shownList.committedAt.slice(11, 16)}</p>
+                  </>
+                )}
               </div>
-            ))}
-          </div>
-          <div
-            className={timelineDrag ? "calendarGrid draggingTimeline" : "calendarGrid"}
-            ref={calendarGridRef}
-            style={{ height: timeline?.height }}
-          >
-            {timeline?.hours.map((hour) => <div className="hourLine" key={hour.time} style={{ top: hour.top }} />)}
-            {timelineDrag && (
-              <div className="dragPlaceholder" style={dragPlaceholderStyle()} aria-hidden="true">
-                <span>{timelineDrag.previewTime}</span>
+              <div className="dayNav">
+                {planningDate ? (
+                  <button className="pill pillSecondary" onClick={exitPlanning} aria-label="Back to today">
+                    <ChevronLeft size={15} />
+                    Back to today
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      className="pill pillQuiet iconPill"
+                      onClick={() => {
+                        followingTodayRef.current = false;
+                        post("/api/time", { retreat: true });
+                      }}
+                      aria-label="Previous day"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    {plan.date !== localNowParts().date && (
+                      <button className="pill pillQuiet" onClick={goToToday} aria-label="Jump to today">
+                        Today
+                      </button>
+                    )}
+                    <button
+                      className="pill pillQuiet iconPill"
+                      onClick={() => {
+                        followingTodayRef.current = false;
+                        post("/api/time", { advance: true });
+                      }}
+                      aria-label="Next day"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                    <button type="button" className="pill pillQuiet iconPill aiPill" onClick={() => setAiOpen(true)} aria-label="Open AI session">
+                      <Sparkles size={15} />
+                      {hasPendingClarification && <span className="aiPendingDot" aria-hidden="true" />}
+                    </button>
+                    <button className="pill pillQuiet" onClick={enterPlanning} aria-label="Plan tomorrow">
+                      <Moon size={15} />
+                      Plan tomorrow
+                    </button>
+                    <button className="pill pillSecondary" onClick={() => setReviewOpen(true)} aria-label="Review day">
+                      Review day
+                    </button>
+                  </>
+                )}
               </div>
-            )}
-            {timeline?.items.map(({ item, top, height, left, width, laneCount }) => (
-              <article
-                className={`timelineBlock ${item.status} ${item.estimatedMinutes < 30 ? "compactBlock" : ""} ${
-                  item.estimatedMinutes <= 15 ? "microBlock" : ""
-                } ${laneCount > 1 ? "overlapBlock" : ""} ${
-                  item.schedulingMode && item.schedulingMode !== "exclusive" ? `mode-${item.schedulingMode}` : ""
-                } ${timelineDrag?.itemId === item.id ? "draggingBlock" : ""} ${
-                  timelineDrag && timelineDrag.itemId !== item.id ? "dragAwareBlock" : ""
-                }`}
-                key={item.id}
-                data-testid={`plan-item-${item.title}`}
-                aria-grabbed={timelineDrag?.itemId === item.id}
-                onPointerDown={(event) => beginTimelineDrag(event, item, { top, height, left, width })}
-                style={timelineBlockStyle({ item, top, height, left, width })}
-              >
-                <div className="blockContent">
-                  <div>
-                    <div className="blockTime">
-                      {item.startTime} - {item.endTime}
-                    </div>
-                    <h2>{item.title}</h2>
-                    <PlanItemMeta item={item} />
-                    {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
-                  </div>
-                  <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
+            </header>
+
+            <section className="gaugesRow" aria-label="Capacity and balance gauges">
+              <div className="gauge">
+                <div className="gaugeHead">
+                  <span className="gaugeLabel">capacity</span>
+                  <span className={overfull ? "gaugeValue gaugeAmber" : "gaugeValue"}>
+                    {formatDuration(listMinutes)} of {formatDuration(capacityMinutes)}
+                  </span>
                 </div>
-              </article>
-            ))}
-          </div>
-        </div>
-        {timeline?.unscheduled.map((item) => (
-          <article className={`unscheduledItem ${item.status}`} key={item.id} data-testid={`plan-item-${item.title}`}>
-            <div>
-              <h2>{item.title}</h2>
-              <PlanItemMeta item={item} />
-              {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
-            </div>
-            <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
-          </article>
-        ))}
-      </section>
+                <div className="gaugeTrack" aria-hidden="true">
+                  <div className="gaugeFill" style={{ width: `${Math.round(capacityRatio * 100)}%` }} />
+                </div>
+              </div>
+              <div className="gauge">
+                <div className="gaugeHead">
+                  <span className="gaugeLabel">balance</span>
+                  {firstMissingPillar && <span className="gaugeValue gaugeAmber">no {firstMissingPillar} yet</span>}
+                </div>
+                <div className="gaugeTrack balanceTrack" aria-hidden="true">
+                  {shownList.gauges.balance.map((pillar) => (
+                    <div
+                      key={pillar.folderId}
+                      className="balanceSegment"
+                      style={{ width: `${Math.round(pillar.share * 100)}%`, background: pillarTone(pillar.folderId) }}
+                      title={pillar.name}
+                    />
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            {!planningDate && shownList.habits.length > 0 && (
+              <section className="habitStrip" aria-label="Habits">
+                <span className="habitLabel">Habits</span>
+                {shownList.habits.map((habit) => (
+                  <button
+                    key={habit.taskId}
+                    className={habit.completedToday ? "habitChip habitDone" : "habitChip"}
+                    onClick={() => void post("/api/day-list/complete", { taskId: habit.taskId })}
+                    aria-label={habit.completedToday ? `Untick habit ${habit.title}` : `Tick habit ${habit.title}`}
+                  >
+                    {habit.completedToday && <Check size={12} aria-hidden="true" />}
+                    {habit.title} · {habit.effortMinutes}m
+                    {habit.streak >= 2 && (
+                      <span className="habitStreak" aria-label={`${habit.streak} day streak`}>
+                        <Flame size={11} aria-hidden="true" />
+                        {habit.streak}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </section>
+            )}
+
+            <section className="dayListSection" aria-label="Day list">
+              <div className="dayList">
+                {listEntries.map((entry) => {
+                  const folderName = entry.folderId ? state.folders?.find((folder) => folder.id === entry.folderId)?.name : undefined;
+                  const rowClass = [
+                    "listRow",
+                    entry.completedToday ? "tickedRow" : "",
+                    entry.taskId === firstUntickedId ? "nowRow" : "",
+                    listDragId && listDragId !== entry.taskId && listDragOverId === entry.taskId ? "dragOverRow" : ""
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+                  return (
+                    <div
+                      key={entry.taskId}
+                      className={rowClass}
+                      onClick={(event) => {
+                        if ((event.target as HTMLElement).closest(".listCheck, .listHandle, .listRemove")) return;
+                        openListEntry(entry);
+                      }}
+                      onDragOver={(event) => {
+                        if (!listDragId) return;
+                        event.preventDefault();
+                        setListDragOverId(entry.taskId);
+                      }}
+                      onDrop={() => dropListRow(entry.taskId)}
+                    >
+                      <span
+                        className="listHandle"
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          setListDragId(entry.taskId);
+                        }}
+                        onDragEnd={() => {
+                          setListDragId(null);
+                          setListDragOverId(null);
+                        }}
+                        aria-hidden="true"
+                      >
+                        <GripVertical size={14} />
+                      </span>
+                      <button
+                        className={entry.taskId === firstUntickedId ? "listCheck nowCheck" : "listCheck"}
+                        onClick={planningDate ? undefined : () => void post("/api/day-list/complete", { taskId: entry.taskId })}
+                        disabled={planningDate !== null}
+                        aria-label={
+                          planningDate
+                            ? `${entry.title} — tick it on the day`
+                            : entry.completedToday
+                              ? `Untick ${entry.title}`
+                              : `Tick ${entry.title}`
+                        }
+                      >
+                        {entry.completedToday && <Check size={13} aria-hidden="true" />}
+                      </button>
+                      <button className="listTitle" onClick={() => openListEntry(entry)} aria-label={`Details for ${entry.title}`}>
+                        {entry.source === "recurring" && <Repeat size={11} className="sourceGlyph" aria-hidden="true" />}
+                        {entry.source === "carried" && <ArrowRight size={11} className="sourceGlyph" aria-hidden="true" />}
+                        <span className="listTitleText">{entry.title}</span>
+                      </button>
+                      <span className={entry.missedPin ? "listMeta missedMeta" : "listMeta"}>
+                        {entry.pinnedTime ? (
+                          <>
+                            <Pin size={11} aria-hidden="true" />
+                            {entry.pinnedTime}
+                          </>
+                        ) : (
+                          `${folderName ? `${folderName} · ` : ""}${entry.effortMinutes}m`
+                        )}
+                      </span>
+                      <button
+                        className="listRemove"
+                        onClick={() => void listMutate({ action: "remove", taskId: entry.taskId })}
+                        aria-label={`Remove ${entry.title} to tray`}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  );
+                })}
+                <form className="listAddRow" onSubmit={(event) => void submitListAdd(event)}>
+                  <input
+                    className="listAddInput"
+                    value={listDraft}
+                    onChange={(event) => setListDraft(event.target.value)}
+                    placeholder={planningDate ? "type to add to tomorrow — files itself in the background" : "type to add — files itself in the background"}
+                    aria-label={planningDate ? "Add to tomorrow's plan" : "Add to today's list"}
+                  />
+                </form>
+              </div>
+            </section>
+
+            {traySuggestionCount > 0 && (
+              <details className="traySection" open={untickedCount < 3}>
+                <summary className="trayLabel">
+                  Tray · {traySuggestionCount} suggestion{traySuggestionCount === 1 ? "" : "s"}
+                </summary>
+                <div className="trayRows">
+                  {trayGroups.map(([group, tasks]) =>
+                    tasks.map((task) => (
+                      <div className="trayRow" key={`${group}_${task.taskId}`}>
+                        <span className={`trayTag trayTag_${group}`}>{group}</span>
+                        <span className="trayTitle">{task.title}</span>
+                        <span className="trayMeta">
+                          {group === "balance" && task.pillarName ? `${task.pillarName} · ` : ""}
+                          {task.effortMinutes}m
+                        </span>
+                        <button
+                          className="trayAdd"
+                          onClick={() => void listMutate({ action: "add", taskId: task.taskId, source: "tray" })}
+                          aria-label={`Add ${task.title} to ${planningDate ? "tomorrow's plan" : "today's list"}`}
+                        >
+                          add
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </details>
+            )}
+
+            {!planningDate && (
+            <details className="laterSection" open={laterOpen} onToggle={(event) => setLaterOpen(event.currentTarget.open)}>
+              <summary className="sectionEyebrow timelineSummary">
+                <span>Timeline &amp; schedule</span>
+                {newCandidateCount > 0 && (
+                  <button
+                    className="hintChip"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void post("/api/plan/replan");
+                    }}
+                    aria-label={`Replan to include ${newCandidateCount} new candidate${newCandidateCount === 1 ? "" : "s"}`}
+                  >
+                    {newCandidateCount} new candidate{newCandidateCount === 1 ? "" : "s"} · Replan?
+                  </button>
+                )}
+                <button
+                  className="pill pillQuiet timelineReplan"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void post("/api/plan/replan");
+                  }}
+                  aria-label="Replan rest of day"
+                >
+                  Replan rest of day
+                </button>
+              </summary>
+              <section className="calendarTimeline" aria-label="Timed day plan">
+                <div className="calendarScroll">
+                  <div className="timeColumn" style={{ height: timeline?.height }}>
+                    {timeline?.hours.map((hour) => (
+                      <div className="hourLabel" key={hour.time} style={{ top: hour.top }}>
+                        {hour.time}
+                      </div>
+                    ))}
+                  </div>
+                  <div
+                    className={timelineDrag ? "calendarGrid draggingTimeline" : "calendarGrid"}
+                    ref={calendarGridRef}
+                    style={{ height: timeline?.height }}
+                  >
+                    {timeline?.hours.map((hour) => <div className="hourLine" key={hour.time} style={{ top: hour.top }} />)}
+                    {timelineDrag && (
+                      <div className="dragPlaceholder" style={dragPlaceholderStyle()} aria-hidden="true">
+                        <span>{timelineDrag.previewTime}</span>
+                      </div>
+                    )}
+                    {timeline?.items.map(({ item, top, height, left, width, laneCount }) => (
+                      <article
+                        className={`timelineBlock ${item.status} ${item.estimatedMinutes < 30 ? "compactBlock" : ""} ${
+                          item.estimatedMinutes <= 15 ? "microBlock" : ""
+                        } ${laneCount > 1 ? "overlapBlock" : ""} ${
+                          item.schedulingMode && item.schedulingMode !== "exclusive" ? `mode-${item.schedulingMode}` : ""
+                        } ${timelineDrag?.itemId === item.id ? "draggingBlock" : ""} ${
+                          timelineDrag && timelineDrag.itemId !== item.id ? "dragAwareBlock" : ""
+                        }`}
+                        key={item.id}
+                        data-testid={`plan-item-${item.title}`}
+                        aria-grabbed={timelineDrag?.itemId === item.id}
+                        onPointerDown={(event) => beginTimelineDrag(event, item, { top, height, left, width })}
+                        style={timelineBlockStyle({ item, top, height, left, width })}
+                      >
+                        <div className="blockContent">
+                          <div>
+                            <div className="blockTime">
+                              {item.startTime} - {item.endTime}
+                            </div>
+                            <h2>{item.title}</h2>
+                            <PlanItemMeta item={item} />
+                            {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
+                          </div>
+                          <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+                {timeline?.unscheduled.map((item) => (
+                  <article className={`unscheduledItem ${item.status}`} key={item.id} data-testid={`plan-item-${item.title}`}>
+                    <div>
+                      <h2>{item.title}</h2>
+                      <PlanItemMeta item={item} />
+                      {item.status !== "planned" && <strong className="statusPill">{statusLabel(item.status)}</strong>}
+                    </div>
+                    <PlanItemActions item={item} post={post} setSelected={setSelected} setNotDoneItem={setNotDoneItem} setMoveItem={setMoveItem} />
+                  </article>
+                ))}
+              </section>
+            </details>
+            )}
+
+            {inboxError && (
+              <p className="errorMessage" role="alert">
+                {inboxError}
+              </p>
+            )}
+          </>
+        )}
+      </main>
 
       {selected && selected.type === "folder_block" && (
         <div className="drawer" role="dialog" aria-label={`${selected.title} folder drawer`}>
@@ -742,9 +1259,40 @@ export default function Home() {
           {selectedTask && (
             <>
               <div className="badgeRow">
-                <span className="taskBadge">{dateIntentLabel(selectedTask)}</span>
+                {dateIntentLabel(selectedTask) !== selectedDueLabel && <span className="taskBadge">{dateIntentLabel(selectedTask)}</span>}
+                <EditableBadge
+                  taskId={selectedTask.id}
+                  field="dueDate"
+                  inputType="date"
+                  value={selectedTask.dueDate}
+                  display={selectedDueLabel}
+                  ariaLabel={`Edit due date ${selectedTask.title}`}
+                  post={post}
+                />
                 <span className="taskBadge">{selectedTask.energy}</span>
-                <span className="taskBadge">p{selectedTask.priority}/i{selectedTask.importance}/u{selectedTask.urgency}</span>
+                <EditableBadge
+                  taskId={selectedTask.id}
+                  field="priority"
+                  inputType="number"
+                  min={1}
+                  max={10}
+                  value={selectedTask.priority}
+                  display={`p${selectedTask.priority}`}
+                  ariaLabel={`Edit priority ${selectedTask.title}`}
+                  post={post}
+                />
+                <span className="taskBadge">i{selectedTask.importance}/u{selectedTask.urgency}</span>
+                <EditableBadge
+                  taskId={selectedTask.id}
+                  field="effortMinutes"
+                  inputType="number"
+                  min={1}
+                  max={720}
+                  value={selectedTask.effortMinutes}
+                  display={`${selectedTask.effortMinutes}m`}
+                  ariaLabel={`Edit minutes ${selectedTask.title}`}
+                  post={post}
+                />
                 {selectedTask.scheduling?.mode && selectedTask.scheduling.mode !== "exclusive" && (
                   <span className="taskBadge highlightBadge">{selectedTask.scheduling.mode}</span>
                 )}
@@ -767,80 +1315,77 @@ export default function Home() {
           )}
           <div className="drawerActions">
             {selected.taskId && <button onClick={() => setMoveItem(selected)}>Reschedule</button>}
-            <button onClick={() => post("/api/plan/complete", { planItemId: selected.id })}>
-              {selected.status === "completed" ? "Mark not done" : "Mark done"}
-            </button>
+            {/* T110: completion is a live-day action — while planning ahead the drawer only reschedules. */}
+            {!planningDate && (
+              <button
+                onClick={() =>
+                  selected.id.startsWith(dayListItemPrefix) && selected.taskId
+                    ? post("/api/day-list/complete", { taskId: selected.taskId })
+                    : post("/api/plan/complete", { planItemId: selected.id })
+                }
+              >
+                {selected.status === "completed" ? "Mark not done" : "Mark done"}
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      <button className="aiButton" onClick={() => setInboxOpen(true)} aria-label="Open AI inbox">
-        <Bot size={28} />
-      </button>
-
-      {inboxOpen && (
-        <div className="overlay" role="dialog" aria-label="AI inbox">
-          <section className="inboxPanel">
-            <button className="iconButton closeButton" onClick={() => setInboxOpen(false)} aria-label="Close AI inbox">
-              <X size={18} />
-            </button>
-            <div className="inboxComposer">
-              <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="Tell me what changed..."
-                aria-label="Inbox input"
-              />
-              <button className="sendIconButton" onClick={submitInbox} disabled={sending} aria-label={sending ? "Thinking" : "Send to AI"}>
-                <Send size={18} />
-              </button>
-            </div>
-            <button className="tidyButton" onClick={runOrganizer} disabled={sending} aria-label="Run a tidy-up maintenance pass">
-              Tidy up
-            </button>
-            {inboxError && (
-              <p className="errorMessage" role="alert">
-                {inboxError}
-              </p>
-            )}
-            {history.length > 0 && (
-              <div className="changeHistory">
-                <span className="changeHistoryTitle">Recent AI changes</span>
-                {history.slice(0, 5).map((change) => (
-                  <div key={change.id} className="changeRow">
-                    <span className="changeSummary">{change.summary}</span>
-                    <button className="undoButton" onClick={() => undoChange(change.id)} aria-label={`Undo ${change.summary}`}>
-                      Undo
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="inboxLog">
-              {/* T087: keep the inbox fresh — only the current/most-recent exchange shows here;
-                  earlier sessions are logged on the AI activity page. */}
-              {state.inbox.slice(0, 1).map((entry, index) => (
-                <InboxSession
-                  key={`${entry.id}_${index}`}
-                  entry={entry}
-                  session={state.captureSessions.find((session) => session.id === entry.captureSessionId)}
-                  clarificationDrafts={clarificationDrafts}
-                  setClarificationDrafts={setClarificationDrafts}
-                  followUpDrafts={followUpDrafts}
-                  setFollowUpDrafts={setFollowUpDrafts}
-                  answerClarification={answerClarification}
-                  sendFollowUp={sendFollowUp}
-                  post={post}
-                />
+      {aiOpen && (
+        <aside className="drawer aiDrawer" role="dialog" aria-label="AI session">
+          <button className="iconButton closeButton" onClick={() => setAiOpen(false)} aria-label="Close AI session">
+            <X size={18} />
+          </button>
+          <p className="eyebrow">AI session</p>
+          {inboxError && (
+            <p className="errorMessage" role="alert">
+              {inboxError}
+            </p>
+          )}
+          {history.length > 0 && (
+            <div className="changeHistory">
+              <span className="changeHistoryTitle">Recent AI changes</span>
+              {history.slice(0, 5).map((change) => (
+                <div key={change.id} className="changeRow">
+                  <span className="changeSummary">{change.summary}</span>
+                  <button className="undoButton" onClick={() => undoChange(change.id)} aria-label={`Undo ${change.summary}`}>
+                    Undo
+                  </button>
+                </div>
               ))}
-              {state.inbox.length > 1 && (
-                <button className="inboxHistoryLink" onClick={() => { setInboxOpen(false); setActiveView("AI activity"); }}>
-                  View {state.inbox.length - 1} earlier session{state.inbox.length - 1 === 1 ? "" : "s"} in AI activity
-                </button>
-              )}
             </div>
-          </section>
-        </div>
+          )}
+          <div className="inboxLog">
+            {state.inbox.length === 0 && <p className="emptyPanel">No captures yet — type into the list on Today.</p>}
+            {/* T087: keep the session drawer fresh — only the current/most-recent exchange shows
+                here; earlier sessions are logged on the AI activity page. */}
+            {state.inbox.slice(0, 1).map((entry, index) => (
+              <InboxSession
+                key={`${entry.id}_${index}`}
+                entry={entry}
+                session={state.captureSessions.find((session) => session.id === entry.captureSessionId)}
+                clarificationDrafts={clarificationDrafts}
+                setClarificationDrafts={setClarificationDrafts}
+                followUpDrafts={followUpDrafts}
+                setFollowUpDrafts={setFollowUpDrafts}
+                answerClarification={answerClarification}
+                sendFollowUp={sendFollowUp}
+                post={post}
+              />
+            ))}
+            {state.inbox.length > 1 && (
+              <button
+                className="inboxHistoryLink"
+                onClick={() => {
+                  setAiOpen(false);
+                  setView("AI activity");
+                }}
+              >
+                View {state.inbox.length - 1} earlier session{state.inbox.length - 1 === 1 ? "" : "s"} in AI activity
+              </button>
+            )}
+          </div>
+        </aside>
       )}
 
       {notDoneItem && (
@@ -907,7 +1452,6 @@ export default function Home() {
               </div>
               {moveError && <p className="errorMessage">{moveError}</p>}
               <button className="sendButton" type="submit">
-                <Clock3 size={16} />
                 Move
               </button>
             </form>
@@ -916,247 +1460,25 @@ export default function Home() {
       )}
 
       {reviewOpen && <ReviewDayDialog state={state} post={post} onClose={() => setReviewOpen(false)} />}
-    </main>
-  );
-}
 
-function ReviewDayDialog({ state, post, onClose }: { state: AppState; post: PostFn; onClose: () => void }) {
-  const summary = useMemo(() => buildClientReviewSummary(state), [state]);
-  const existing = summary.existingReview;
-  const [energy, setEnergy] = useState(existing?.energy ?? "normal");
-  const [planFit, setPlanFit] = useState(existing?.planFit ?? (summary.deferredCount >= 2 ? "overplanned" : "realistic"));
-  const [note, setNote] = useState(existing?.note ?? "");
-  const [affectPlanning, setAffectPlanning] = useState(existing?.affectPlanning ?? true);
-
-  async function submitReview(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await post("/api/review/daily", {
-      date: state.currentDate,
-      energy,
-      planFit,
-      note: note.trim() || undefined,
-      affectPlanning
-    });
-    onClose();
-  }
-
-  return (
-    <div className="overlay" role="dialog" aria-label="Daily review">
-      <section className="reviewPanel">
-        <button className="iconButton closeButton" onClick={onClose} aria-label="Close daily review">
-          <X size={18} />
-        </button>
-        <p className="eyebrow">Daily review</p>
-        <h2>{formatDate(state.currentDate)}</h2>
-        <div className="reviewStats">
-          <span>{summary.completedCount} done</span>
-          <span>{summary.partialCount} partial</span>
-          <span>{summary.deferredCount} deferred</span>
-          <span>{summary.blockedCount} blocked</span>
-          <span>{summary.skippedCount} skipped</span>
-        </div>
-        <ReviewList title="Done" items={summary.completedTitles} />
-        <ReviewList title="Needs calibration" items={[...summary.partialTitles, ...summary.deferredTitles, ...summary.blockedTitles, ...summary.skippedTitles]} />
-        <form className="reviewForm" onSubmit={submitReview}>
-          <label>
-            Energy
-            <select value={energy} onChange={(event) => setEnergy(event.target.value as typeof energy)} aria-label="Review energy">
-              <option value="low">low</option>
-              <option value="normal">normal</option>
-              <option value="high">high</option>
-            </select>
-          </label>
-          <label>
-            Plan fit
-            <select value={planFit} onChange={(event) => setPlanFit(event.target.value as typeof planFit)} aria-label="Review plan fit">
-              <option value="overplanned">overplanned</option>
-              <option value="realistic">realistic</option>
-              <option value="underfilled">underfilled</option>
-            </select>
-          </label>
-          <label className="reviewCheckbox">
-            <input type="checkbox" checked={affectPlanning} onChange={(event) => setAffectPlanning(event.target.checked)} />
-            Use this to tune future plans
-          </label>
-          <textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            maxLength={280}
-            placeholder="Optional planning note, not a journal..."
-            aria-label="Review note"
-          />
-          {summary.calibrationSignals.length > 0 && (
-            <div className="reviewSignals">
-              {summary.calibrationSignals.map((signal) => (
-                <span key={signal}>{signal}</span>
-              ))}
-            </div>
-          )}
-          <button className="sendButton" type="submit">
-            <Save size={16} />
-            Save review
-          </button>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function ReviewList({ title, items }: { title: string; items: string[] }) {
-  return (
-    <div className="reviewList">
-      <h3>{title}</h3>
-      {items.length === 0 ? (
-        <p className="emptyPanel">Nothing here.</p>
-      ) : (
-        items.slice(0, 6).map((item) => <p key={item}>{item}</p>)
-      )}
-    </div>
-  );
-}
-
-function InboxSession({
-  entry,
-  session,
-  clarificationDrafts,
-  setClarificationDrafts,
-  followUpDrafts,
-  setFollowUpDrafts,
-  answerClarification,
-  sendFollowUp,
-  post
-}: {
-  entry: AppState["inbox"][number];
-  session?: AppState["captureSessions"][number];
-  clarificationDrafts: Record<string, string>;
-  setClarificationDrafts: Dispatch<SetStateAction<Record<string, string>>>;
-  followUpDrafts: Record<string, string>;
-  setFollowUpDrafts: Dispatch<SetStateAction<Record<string, string>>>;
-  answerClarification: (sessionId: string, questionId: string, answer: string) => Promise<void>;
-  sendFollowUp: (sessionId: string) => Promise<void>;
-  post: PostFn;
-}) {
-  const entryActions = Array.isArray(entry.actions) ? entry.actions : [];
-  const sessionQuestions = Array.isArray(session?.questions) ? session.questions : [];
-  const sessionMessages = Array.isArray(session?.messages) ? session.messages : [];
-  const pendingQuestions = sessionQuestions.filter((question) => question.status === "pending");
-  const pendingQuestionText = new Set(pendingQuestions.map((question) => question.question));
-  const visibleMessages = sessionMessages.slice(1).filter((message) => !(message.role === "assistant" && pendingQuestionText.has(message.content)));
-  const appliedActions = entryActions.filter((action) => action.status === "applied" && action.type !== "ask_clarification");
-  const proposedActions = entryActions.filter(
-    (action) => action.status === "proposed" && action.safety === "needs_confirmation" && action.type !== "ask_clarification"
-  );
-
-  return (
-    <article className={pendingQuestions.length ? "inboxSession needsAnswer" : "inboxSession"}>
-      <div className="chatMessage userMessage">
-        <span>You</span>
-        <p>{entry.input}</p>
+      <div className="toastRegion" aria-live="polite">
+        {toast && (
+          <div className="toast" key={toast.key} data-testid="toast">
+            <span className="toastMessage">{toast.message}</span>
+            {toast.undoId && (
+              <button className="toastUndo" onClick={() => void undoChange(toast.undoId!)}>
+                <Undo2 size={13} />
+                Undo
+              </button>
+            )}
+            <button className="toastDismiss" onClick={dismissToast} aria-label="Dismiss notification">
+              <X size={14} />
+            </button>
+          </div>
+        )}
       </div>
-      {pendingQuestions.length === 0 && (
-        <div className="chatMessage assistantMessage">
-          <span>AI</span>
-          <p>{entry.summary}</p>
-        </div>
-      )}
-      {visibleMessages.length > 0 && (
-        <div className="sessionMessages">
-          {visibleMessages.map((message) => (
-            <div className={message.role === "user" ? "chatMessage userMessage" : "chatMessage assistantMessage"} key={message.id}>
-              <span>{message.role === "user" ? "You" : "AI"}</span>
-              <p>{message.content}</p>
-            </div>
-          ))}
-        </div>
-      )}
-      {pendingQuestions.map((question) => (
-        <div className="clarificationCard" key={question.id}>
-          <div className="chatMessage assistantMessage">
-            <span>AI</span>
-            <strong>{question.question}</strong>
-            {question.rationale && <small>{question.rationale}</small>}
-          </div>
-          {question.options?.length ? (
-            <div className="clarificationOptions">
-              {question.options.map((option) => (
-                <button key={option} onClick={() => answerClarification(session!.id, question.id, option)}>
-                  {option}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <div className="clarificationAnswer">
-            <input
-              value={clarificationDrafts[question.id] ?? ""}
-              onChange={(event) => setClarificationDrafts((drafts) => ({ ...drafts, [question.id]: event.target.value }))}
-              placeholder="Answer briefly..."
-              aria-label={`Answer ${question.question}`}
-            />
-            <button onClick={() => answerClarification(session!.id, question.id, clarificationDrafts[question.id] ?? "")}>Answer</button>
-          </div>
-        </div>
-      ))}
-      {appliedActions.length > 0 && (
-        <div className="actionSummary">
-          <strong>Applied</strong>
-          {appliedActions.map((action) => (
-            <span key={action.id}>{actionSummary(action)}</span>
-          ))}
-        </div>
-      )}
-      {proposedActions.map((action) => (
-        <div className="actionDecision" key={action.id}>
-          <strong>Needs confirmation</strong>
-          <span>{action.label}</span>
-          <button onClick={() => post(`/api/ai-actions/${action.id}/confirm`)}>Confirm</button>
-          <button onClick={() => post(`/api/ai-actions/${action.id}/reject`, { reason: "Rejected from inbox." })}>Reject</button>
-        </div>
-      ))}
-      {showAiDebugTrace && entry.debugTrace?.calls?.length ? (
-        <details className="aiDebugTrace">
-          <summary>AI debug</summary>
-          {entry.debugTrace.calls.map((call, index) => (
-            <section key={`${call.label}_${index}`}>
-              <h3>
-                {call.label}
-                {call.model ? ` · ${call.model}` : ""}
-              </h3>
-              <strong>Prompt sent</strong>
-              <pre>{`Instructions:\n${call.instructions}\n\nInput:\n${call.input}`}</pre>
-              <strong>Response received</strong>
-              <pre>{call.response}</pre>
-              {call.parsedResponse !== undefined && (
-                <>
-                  <strong>Parsed response</strong>
-                  <pre>{JSON.stringify(call.parsedResponse, null, 2)}</pre>
-                </>
-              )}
-            </section>
-          ))}
-        </details>
-      ) : null}
-      {session && (
-        <div className="followUpBox">
-          <input
-            value={followUpDrafts[session.id] ?? ""}
-            onChange={(event) => setFollowUpDrafts((drafts) => ({ ...drafts, [session.id]: event.target.value }))}
-            placeholder="Correct or add context..."
-            aria-label={`Follow up on ${entry.input}`}
-          />
-          <button onClick={() => sendFollowUp(session.id)}>Send</button>
-        </div>
-      )}
-    </article>
+    </div>
   );
-}
-
-function actionSummary(action: AppState["inbox"][number]["actions"][number]): string {
-  const payload = action.payload ?? {};
-  if (action.type === "create_task") return `Task: ${String(payload.title ?? action.label)}`;
-  if (action.type === "schedule_task") return `Moved: ${String(payload.title ?? action.label)}`;
-  if (action.type === "archive_task") return `Removed: ${String(payload.title ?? action.label)}`;
-  if (action.type === "create_folder") return `Folder: ${String(payload.name ?? payload.title ?? action.label)}`;
-  return action.label;
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -1169,1151 +1491,17 @@ async function responseError(response: Response): Promise<string> {
   }
 }
 
-const taskStatuses = ["active", "scheduled", "completed", "deferred", "blocked", "waiting", "archived"] as const;
-const completionBehaviors = ["exhaust_once", "repeatable", "keep_as_suggestion", "regenerate_after_completion"] as const;
-const completionModes = ["simple_done", "outcome_done", "timebox", "repeatable_checkoff", "progress_accumulating", "suggestion_used"] as const;
-
-function submitStructureForm(
-  event: FormEvent<HTMLFormElement>,
-  post: PostFn,
-  entity: "task" | "folder",
-  action: "create" | "update",
-  id?: string
-) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const formData = new FormData(form);
-  const patch = structurePatch(entity, formData);
-  void post("/api/structure", { entity, action, id, patch }).then(() => {
-    if (action === "create") form.reset();
-  });
-}
-
-function structurePatch(entity: "task" | "folder", formData: FormData): Record<string, unknown> {
-  if (entity === "folder") {
-    return {
-      name: fieldText(formData, "name"),
-      // Empty string = top level; state.ts treats "" as clearing the parent.
-      parentFolderId: fieldText(formData, "parentFolderId"),
-      weight: fieldNumber(formData, "weight"),
-      canBlock: formData.get("canBlock") === "on",
-      defaultBlockMinutes: fieldNumber(formData, "defaultBlockMinutes")
-    };
-  }
-
-  const tagsRaw = fieldText(formData, "tags");
-  const minMinutesRaw = fieldText(formData, "minMinutes");
-  const maxMinutesRaw = fieldText(formData, "maxMinutes");
-  const importance = fieldNumber(formData, "importance");
-  const urgency = fieldNumber(formData, "urgency");
-  const priority = fieldNumber(formData, "priority");
-  const repeatType = fieldText(formData, "repeatType");
-  const repeatDays = fieldText(formData, "repeatDays")
-    .split(",")
-    .map((day) => Number(day.trim()))
-    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
-  const repeatPolicy =
-    repeatType === "weekly"
-      ? { type: "weekly", days: repeatDays.length ? repeatDays : [1] }
-      : repeatType === "daily"
-        ? { type: "daily" }
-        : { type: "none" };
-  return {
-    repeatPolicy,
-    title: fieldText(formData, "title"),
-    // Folders are the only structure (T088): the single folder picker drives placement.
-    folderId: fieldText(formData, "folderId"),
-    parentTaskId: fieldText(formData, "parentTaskId"),
-    status: fieldText(formData, "status"),
-    priority,
-    // If the Advanced importance/urgency fields are absent (simple view), mirror priority so the
-    // planner still has all three scores.
-    importance: importance || priority,
-    urgency: urgency || priority,
-    effortMinutes: fieldNumber(formData, "effortMinutes"),
-    dueDate: fieldText(formData, "dueDate"),
-    scheduledDate: fieldText(formData, "scheduledDate"),
-    scheduledTime: fieldText(formData, "scheduledTime"),
-    completionBehavior: fieldText(formData, "completionBehavior"),
-    completionMode: fieldText(formData, "completionMode"),
-    energy: fieldText(formData, "energy"),
-    strictness: fieldText(formData, "strictness"),
-    schedulingMode: fieldText(formData, "schedulingMode"),
-    tags: tagsRaw ? tagsRaw.split(",").map((tag) => tag.trim()).filter(Boolean) : undefined,
-    minMinutes: minMinutesRaw ? Number(minMinutesRaw) : undefined,
-    maxMinutes: maxMinutesRaw ? Number(maxMinutesRaw) : undefined,
-    definitionOfDone: fieldText(formData, "definitionOfDone"),
-    notes: fieldText(formData, "notes")
-  };
-}
-
-function fieldText(formData: FormData, key: string): string {
-  const value = formData.get(key);
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function fieldNumber(formData: FormData, key: string): number | undefined {
-  const value = fieldText(formData, key);
-  return value ? Number(value) : undefined;
-}
-
-function SecondaryPanel({
-  view,
-  state,
-  plan,
-  post,
-  onClose,
-  runOrganizer,
-  organizerRunning,
-  updateCapacity
-}: {
-  view: SecondaryView;
-  state: AppState;
-  plan: DayPlan;
-  post: PostFn;
-  onClose: () => void;
-  runOrganizer: () => Promise<void>;
-  organizerRunning: boolean;
-  updateCapacity: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-}) {
-  const taskGroups = buildTaskGroups(state, plan);
-  const backlogSummary = buildBacklogSummary(state, plan);
-
-  return (
-    <section className="secondaryPanel" aria-label={view}>
-      <button className="iconButton closeButton" onClick={onClose} aria-label={`Close ${view}`}>
-        <X size={18} />
-      </button>
-      <p className="eyebrow">{view}</p>
-      {view === "Folders" && <FoldersPanel state={state} post={post} />}
-      {view === "Tasks" && (
-        <div className="taskSections">
-          <details className="backlogBoardWrap" open>
-            <summary>Backlog board — drag to reschedule</summary>
-            <BacklogBoard state={state} post={post} />
-          </details>
-          <form className="structureForm wideStructureForm" aria-label="Create task" onSubmit={(event) => submitStructureForm(event, post, "task", "create")}>
-            <h2>New task</h2>
-            <input name="title" placeholder="Task title" aria-label="Task title" />
-            <FolderPicker state={state} ariaLabel="Task folder" defaultValue="" includeNone />
-            <input name="effortMinutes" type="number" min="1" max="720" defaultValue="30" aria-label="Task minutes" />
-            <input name="dueDate" type="date" aria-label="Task due date" />
-            <button type="submit">
-              <Plus size={15} />
-              Add
-            </button>
-          </form>
-          {taskGroups.map((group) => (
-            <section className="taskSection" aria-label={group.title} key={group.title}>
-              <div className="sectionHeader">
-                <div>
-                  <h2>{group.title}</h2>
-                  <p>{group.description}</p>
-                </div>
-                <span>{group.tasks.length}</span>
-              </div>
-              <div className="taskCards">
-                {group.tasks.length === 0 && <p className="emptyPanel">Nothing here.</p>}
-                {group.tasks.map((task) => (
-                  <article className="taskCard" key={`${group.title}_${task.id}`}>
-                    <div>
-                      <h3>{task.title}</h3>
-                      <p>{task.definitionOfDone || task.notes || task.plannerFields.intentType}</p>
-                    </div>
-                    <div className="badgeRow">
-                      <span className="taskBadge">{task.status}</span>
-                      <span className="taskBadge">{dateIntentLabel(task)}</span>
-                      <span className="taskBadge">{task.effortMinutes}m</span>
-                      {task.folderId && <span className="taskBadge">{folderPath(state, task.folderId)}</span>}
-                      {task.parentTaskId && <span className="taskBadge">↳ subtask</span>}
-                      {task.repeatPolicy?.type && task.repeatPolicy.type !== "none" && (
-                        <span className="taskBadge">↻ {task.repeatPolicy.type}</span>
-                      )}
-                      {childStats(state, task.id).count > 0 && (
-                        <span className="taskBadge highlightBadge">
-                          {childStats(state, task.id).count} subtasks · {childStats(state, task.id).done}/{childStats(state, task.id).count} done · {childStats(state, task.id).minutes}m
-                        </span>
-                      )}
-                      {task.scheduling?.mode && task.scheduling.mode !== "exclusive" && (
-                        <span className="taskBadge highlightBadge">
-                          {task.scheduling.mode}/{task.scheduling.attentionLoad}
-                        </span>
-                      )}
-                    </div>
-                    <details className="inlineEditor">
-                      <summary>Edit</summary>
-                      <form onSubmit={(event) => submitStructureForm(event, post, "task", "update", task.id)}>
-                        <input name="title" defaultValue={task.title} aria-label={`Title ${task.title}`} />
-                        <FolderPicker state={state} ariaLabel={`Folder ${task.title}`} defaultValue={task.folderId ?? ""} includeNone />
-                        <select name="status" defaultValue={task.status} aria-label={`Status ${task.title}`}>
-                          {taskStatuses.map((status) => (
-                            <option value={status} key={status}>
-                              {status}
-                            </option>
-                          ))}
-                        </select>
-                        <div className="compactFields">
-                          <label className="fieldLabel">
-                            Priority
-                            <input name="priority" type="number" min="1" max="10" defaultValue={task.priority} aria-label={`Priority ${task.title}`} />
-                          </label>
-                          <label className="fieldLabel">
-                            Effort (min)
-                            <input name="effortMinutes" type="number" min="1" max="720" defaultValue={task.effortMinutes} aria-label={`Minutes ${task.title}`} />
-                          </label>
-                        </div>
-                        <div className="compactFields">
-                          <input name="dueDate" type="date" defaultValue={task.dueDate ?? ""} aria-label={`Due ${task.title}`} />
-                          <input name="scheduledDate" type="date" defaultValue={task.scheduledDate ?? ""} aria-label={`Scheduled ${task.title}`} />
-                          <input name="scheduledTime" type="time" defaultValue={task.scheduledTime ?? ""} aria-label={`Time ${task.title}`} />
-                        </div>
-                        <div className="compactFields">
-                          <select name="completionBehavior" defaultValue={task.completionBehavior} aria-label={`Behavior ${task.title}`}>
-                            {completionBehaviors.map((behavior) => (
-                              <option value={behavior} key={behavior}>
-                                {behavior}
-                              </option>
-                            ))}
-                          </select>
-                          <select name="completionMode" defaultValue={task.completionMode ?? "simple_done"} aria-label={`Mode ${task.title}`}>
-                            {completionModes.map((mode) => (
-                              <option value={mode} key={mode}>
-                                {mode}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <details className="advancedFields">
-                          <summary>Advanced</summary>
-                          <div className="compactFields">
-                            <label className="fieldLabel">
-                              Importance
-                              <input name="importance" type="number" min="1" max="10" defaultValue={task.importance} aria-label={`Importance ${task.title}`} />
-                            </label>
-                            <label className="fieldLabel">
-                              Urgency
-                              <input name="urgency" type="number" min="1" max="10" defaultValue={task.urgency} aria-label={`Urgency ${task.title}`} />
-                            </label>
-                          </div>
-                          <div className="compactFields">
-                            <label className="fieldLabel">
-                              Energy
-                              <select name="energy" defaultValue={task.energy} aria-label={`Energy ${task.title}`}>
-                                {["low", "medium", "high"].map((value) => (
-                                  <option value={value} key={value}>{value}</option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="fieldLabel">
-                              Strictness
-                              <select name="strictness" defaultValue={task.strictness} aria-label={`Strictness ${task.title}`}>
-                                {["flexible", "normal", "strict"].map((value) => (
-                                  <option value={value} key={value}>{value}</option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="fieldLabel">
-                              Overlap
-                              <select
-                                name="schedulingMode"
-                                defaultValue={["concurrent", "background", "phased"].includes(task.scheduling?.mode ?? "") ? task.scheduling!.mode : "exclusive"}
-                                aria-label={`Overlap mode ${task.title}`}
-                              >
-                                {["exclusive", "concurrent", "background", "phased"].map((value) => (
-                                  <option value={value} key={value}>{value}</option>
-                                ))}
-                              </select>
-                            </label>
-                          </div>
-                          <div className="compactFields">
-                            <label className="fieldLabel">
-                              Min (min)
-                              <input name="minMinutes" type="number" min="1" max="720" defaultValue={task.minMinutes ?? ""} aria-label={`Min minutes ${task.title}`} />
-                            </label>
-                            <label className="fieldLabel">
-                              Max (min)
-                              <input name="maxMinutes" type="number" min="1" max="720" defaultValue={task.maxMinutes ?? ""} aria-label={`Max minutes ${task.title}`} />
-                            </label>
-                          </div>
-                          <div className="compactFields">
-                            <label className="fieldLabel">
-                              Repeats
-                              <select name="repeatType" defaultValue={task.repeatPolicy?.type ?? "none"} aria-label={`Repeats ${task.title}`}>
-                                {["none", "daily", "weekly"].map((value) => (
-                                  <option value={value} key={value}>{value}</option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="fieldLabel">
-                              Weekly days (0-6)
-                              <input
-                                name="repeatDays"
-                                defaultValue={task.repeatPolicy?.type === "weekly" ? (task.repeatPolicy.days ?? []).join(", ") : ""}
-                                placeholder="1, 3, 5"
-                                aria-label={`Repeat days ${task.title}`}
-                              />
-                            </label>
-                          </div>
-                          <input name="tags" defaultValue={(task.tags ?? []).join(", ")} placeholder="tags, comma, separated" aria-label={`Tags ${task.title}`} />
-                          <label className="fieldLabel">
-                            Parent task (subtask of)
-                            <select name="parentTaskId" defaultValue={task.parentTaskId ?? ""} aria-label={`Parent task ${task.title}`}>
-                              <option value="">No parent</option>
-                              {state.tasks
-                                .filter(
-                                  (candidate) =>
-                                    candidate.id !== task.id &&
-                                    candidate.status !== "archived" &&
-                                    !isDescendantOfClient(state, candidate.id, task.id)
-                                )
-                                .map((candidate) => (
-                                  <option value={candidate.id} key={candidate.id}>{candidate.title}</option>
-                                ))}
-                            </select>
-                          </label>
-                        </details>
-                        <textarea name="definitionOfDone" defaultValue={task.definitionOfDone ?? ""} aria-label={`Definition of done ${task.title}`} />
-                        <textarea name="notes" defaultValue={task.notes ?? ""} aria-label={`Notes ${task.title}`} />
-                        <div className="formActions">
-                          <button type="submit">
-                            <Save size={15} />
-                            Save
-                          </button>
-                          <button type="button" onClick={() => post("/api/structure", { entity: "task", action: "archive", id: task.id })}>
-                            <Archive size={15} />
-                            Archive
-                          </button>
-                        </div>
-                      </form>
-                    </details>
-                  </article>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-      {view === "Planning preferences" && (
-        <div className="panelGrid">
-          <article>
-            <h2>Capacity</h2>
-            <p>{plan.summary}</p>
-            <span>
-              {plan.loadLevel} - committed {plan.estimatedTotalMinutes}/{plan.availableMinutes}m
-            </span>
-            <form className="inlineForm" onSubmit={updateCapacity}>
-              <label>
-                Focus capacity
-                <input name="availableMinutes" type="number" min="90" max="960" step="15" defaultValue={state.availableMinutes} aria-label="Focus capacity minutes" />
-              </label>
-              <button aria-label="Save focus capacity">
-                <Save size={14} />
-              </button>
-            </form>
-          </article>
-          <article>
-            <h2>Time Model</h2>
-            <p>{schedulingSummary(state)}</p>
-            <span>{state.currentDate} - {state.currentTime}</span>
-          </article>
-          <article>
-            <h2>Backlog</h2>
-            <p>{backlogSummary.text}</p>
-            <span>
-              {backlogSummary.thisWeek} this week - {backlogSummary.nextWeek} next week - {backlogSummary.someday} someday
-            </span>
-          </article>
-          <article>
-            <h2>Automation</h2>
-            <p>Run a conservative tidy-up only when you ask for it.</p>
-            <button className="tidyButton" onClick={runOrganizer} disabled={organizerRunning} aria-label="Run a tidy-up maintenance pass">
-              {organizerRunning ? "Tidying..." : "Run tidy-up"}
-            </button>
-          </article>
-        </div>
-      )}
-      {view === "AI activity" && (
-        <div className="panelList">
-          {state.captureSessions.length === 0 && <p className="emptyPanel">No AI activity yet.</p>}
-          {state.captureSessions.map((session) => (
-            <article key={session.id}>
-              <div>
-                <h2>{session.summary}</h2>
-                <p>{session.questions[0]?.question ?? session.messages[0]?.content ?? "No open questions."}</p>
-                {session.revisionEvents.length > 0 && (
-                  <small>
-                    Last revision: {session.revisionEvents[session.revisionEvents.length - 1].changes.join(", ") || session.revisionEvents[session.revisionEvents.length - 1].summary}
-                  </small>
-                )}
-              </div>
-              <span>
-                {session.status} - {session.actionIds.length} action{session.actionIds.length === 1 ? "" : "s"} - {session.appliedEntityIds.length} applied -{" "}
-                {session.revisionEvents.length} revision{session.revisionEvents.length === 1 ? "" : "s"}
-              </span>
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-// --- Folders (T088) ---------------------------------------------------------------------------
-// Folders are the canonical nested structure. These helpers/components render them as a tree and
-// drive task placement via a single folder picker.
-
-function activeFolders(state: AppState): Folder[] {
-  return (state.folders ?? []).filter((folder) => folder.status !== "archived");
-}
-
-// Full "Parent / Child / Grandchild" path for a folder, walking parentFolderId. Guards cycles.
-function folderPath(state: AppState, folderId: string): string {
-  const folders = state.folders ?? [];
-  const names: string[] = [];
-  const seen = new Set<string>();
-  let current = folders.find((folder) => folder.id === folderId);
-  while (current && !seen.has(current.id)) {
-    seen.add(current.id);
-    names.unshift(current.name);
-    current = current.parentFolderId ? folders.find((folder) => folder.id === current!.parentFolderId) : undefined;
-  }
-  return names.join(" / ");
-}
-
-// True if `nodeId` is within the subtree rooted at `ancestorId` (UI cycle guard for parent select).
-function isFolderDescendantOfClient(state: AppState, nodeId: string, ancestorId: string): boolean {
-  const folders = state.folders ?? [];
-  let current = folders.find((folder) => folder.id === nodeId);
-  const seen = new Set<string>();
-  while (current?.parentFolderId && !seen.has(current.id)) {
-    seen.add(current.id);
-    if (current.parentFolderId === ancestorId) return true;
-    current = folders.find((folder) => folder.id === current!.parentFolderId);
-  }
-  return false;
-}
-
-// A <select name="folderId"> listing every active folder by full path. Used by both the task
-// editor and the new-task form (folderId is canonical for grouping).
-function FolderPicker({
-  state,
-  ariaLabel,
-  defaultValue,
-  includeNone
-}: {
-  state: AppState;
-  ariaLabel: string;
-  defaultValue: string;
-  includeNone?: boolean;
-}) {
-  const folders = activeFolders(state).slice().sort((a, b) => folderPath(state, a.id).localeCompare(folderPath(state, b.id)));
-  return (
-    <select name="folderId" aria-label={ariaLabel} defaultValue={defaultValue}>
-      {includeNone && <option value="">No folder</option>}
-      {folders.map((folder) => (
-        <option value={folder.id} key={folder.id}>
-          {folderPath(state, folder.id)}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function FoldersPanel({ state, post }: { state: AppState; post: PostFn }) {
-  const folders = activeFolders(state);
-  const childrenOf = (parentId: string | undefined) =>
-    folders.filter((folder) => (folder.parentFolderId ?? undefined) === parentId).sort((a, b) => a.name.localeCompare(b.name));
-  const taskCount = (folderId: string) =>
-    state.tasks.filter((task) => task.folderId === folderId && task.status !== "archived").length;
-
-  function renderFolder(folder: Folder, depth: number) {
-    const parentOptions = folders.filter(
-      (candidate) => candidate.id !== folder.id && !isFolderDescendantOfClient(state, candidate.id, folder.id)
-    );
-    return (
-      <div className="folderTreeNode" key={folder.id}>
-        <article className="folderRow" style={{ marginLeft: depth * 18 }}>
-          <details className="inlineEditor">
-            <summary>
-              <span className="folderName">{folder.name}</span>
-              <span className="folderMeta">
-                {taskCount(folder.id)} task{taskCount(folder.id) === 1 ? "" : "s"}
-                {folder.canBlock ? ` · blocks ${folder.defaultBlockMinutes ?? 30}m` : ""}
-              </span>
-            </summary>
-            <form onSubmit={(event) => submitStructureForm(event, post, "folder", "update", folder.id)}>
-              <input name="name" defaultValue={folder.name} aria-label={`Folder name ${folder.name}`} />
-              <label className="fieldLabel">
-                Parent folder
-                <select name="parentFolderId" defaultValue={folder.parentFolderId ?? ""} aria-label={`Parent folder ${folder.name}`}>
-                  <option value="">(top level)</option>
-                  {parentOptions.map((candidate) => (
-                    <option value={candidate.id} key={candidate.id}>
-                      {folderPath(state, candidate.id)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="compactFields">
-                <label className="fieldLabel">
-                  Weight
-                  <input name="weight" type="number" min="1" max="10" defaultValue={folder.weight ?? 5} aria-label={`Weight ${folder.name}`} />
-                </label>
-                <label className="fieldLabel">
-                  Block (min)
-                  <input
-                    name="defaultBlockMinutes"
-                    type="number"
-                    min="5"
-                    max="480"
-                    defaultValue={folder.defaultBlockMinutes ?? 30}
-                    aria-label={`Default block minutes ${folder.name}`}
-                  />
-                </label>
-              </div>
-              <label className="fieldLabel folderCheckbox">
-                <input type="checkbox" name="canBlock" defaultChecked={folder.canBlock ?? false} aria-label={`Can block ${folder.name}`} />
-                Can block (schedule as a focus block)
-              </label>
-              <div className="formActions">
-                <button type="submit" aria-label={`Save ${folder.name}`}>
-                  <Save size={15} />
-                  Save
-                </button>
-                <button type="button" onClick={() => post("/api/structure", { entity: "folder", action: "archive", id: folder.id })}>
-                  <Archive size={15} />
-                  Archive
-                </button>
-              </div>
-            </form>
-          </details>
-        </article>
-        {childrenOf(folder.id).map((child) => renderFolder(child, depth + 1))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="foldersPanel">
-      <form className="structureForm" aria-label="Create folder" onSubmit={(event) => submitStructureForm(event, post, "folder", "create")}>
-        <h2>New folder</h2>
-        <input name="name" placeholder="Folder name" aria-label="Folder name" />
-        <select name="parentFolderId" aria-label="New folder parent" defaultValue="">
-          <option value="">(top level)</option>
-          {folders
-            .slice()
-            .sort((a, b) => folderPath(state, a.id).localeCompare(folderPath(state, b.id)))
-            .map((folder) => (
-              <option value={folder.id} key={folder.id}>
-                {folderPath(state, folder.id)}
-              </option>
-            ))}
-        </select>
-        <div className="compactFields">
-          <label className="fieldLabel">
-            Weight
-            <input name="weight" type="number" min="1" max="10" defaultValue="5" aria-label="New folder weight" />
-          </label>
-          <label className="fieldLabel">
-            Block (min)
-            <input name="defaultBlockMinutes" type="number" min="5" max="480" defaultValue="30" aria-label="New folder block minutes" />
-          </label>
-        </div>
-        <label className="fieldLabel folderCheckbox">
-          <input type="checkbox" name="canBlock" aria-label="New folder can block" />
-          Can block (schedule as a focus block)
-        </label>
-        <button type="submit">
-          <Plus size={15} />
-          Add
-        </button>
-      </form>
-      <div className="folderTree" aria-label="Folder tree">
-        {folders.length === 0 && <p className="emptyPanel">No folders yet.</p>}
-        {childrenOf(undefined).map((folder) => renderFolder(folder, 0))}
-      </div>
-    </div>
-  );
-}
-
-function PlanItemMeta({ item }: { item: PlanItem }) {
-  return (
-    <div className="metaRow">
-      <span>{item.estimatedMinutes}m - {labelForSection(item.section)}</span>
-      {item.schedulingMode && item.schedulingMode !== "exclusive" && (
-        <span className="modeBadge" title={schedulingLabel(item)}>
-          <Layers3 size={13} />
-          {item.schedulingMode}
-        </span>
-      )}
-      {item.attentionLoad && item.attentionLoad !== "full" && <span className="loadPill">{item.attentionLoad}</span>}
-    </div>
-  );
-}
-
-type Task = AppState["tasks"][number];
-
-function buildTaskGroups(state: AppState, plan: DayPlan): { title: string; description: string; tasks: Task[] }[] {
-  const plannedTaskIds = new Set(plan.items.flatMap((item) => [...(item.taskId ? [item.taskId] : []), ...(item.selectedTaskIds ?? [])]));
-  const openTasks = state.tasks.filter((task) => !["completed", "archived"].includes(task.status));
-  const plannedToday = openTasks.filter((task) => plannedTaskIds.has(task.id));
-  const blockedWaiting = openTasks.filter((task) => ["blocked", "waiting"].includes(task.status));
-  const background = openTasks.filter((task) => task.scheduling && task.scheduling.mode !== "exclusive");
-  const nextWeek = openTasks.filter((task) => !plannedTaskIds.has(task.id) && isTaskInNamedWeek(task, state.currentDate, "next"));
-  const thisWeek = openTasks.filter(
-    (task) =>
-      !plannedTaskIds.has(task.id) &&
-      !nextWeek.some((candidate) => candidate.id === task.id) &&
-      isTaskInNamedWeek(task, state.currentDate, "this")
-  );
-  const someday = openTasks.filter(
-    (task) =>
-      !plannedTaskIds.has(task.id) &&
-      !nextWeek.some((candidate) => candidate.id === task.id) &&
-      !thisWeek.some((candidate) => candidate.id === task.id) &&
-      isSomedayTask(task)
-  );
-  const loose = openTasks.filter(
-    (task) =>
-      !plannedTaskIds.has(task.id) &&
-      !nextWeek.some((candidate) => candidate.id === task.id) &&
-      !thisWeek.some((candidate) => candidate.id === task.id) &&
-      !someday.some((candidate) => candidate.id === task.id) &&
-      !blockedWaiting.some((candidate) => candidate.id === task.id)
-  );
-
-  return [
-    { title: "Planned today", description: "Visible in the current day timeline or project block.", tasks: sortTasks(plannedToday) },
-    { title: "This week backlog", description: "Due, scheduled, or windowed inside the current week but not on this day.", tasks: sortTasks(thisWeek) },
-    { title: "Next week backlog", description: "Captured for next week without needing a full calendar view.", tasks: sortTasks(nextWeek) },
-    { title: "Someday / suggestions", description: "Soft ideas and reusable suggestions that should not compete with urgent work.", tasks: sortTasks(someday) },
-    { title: "Blocked / waiting", description: "Items that need an unblock action, person, or external event.", tasks: sortTasks(blockedWaiting) },
-    { title: "Background / phased", description: "Work that can overlap, run passively, or return in phases.", tasks: sortTasks(background) },
-    { title: "Loose backlog", description: "Active tasks without a strong date intent yet.", tasks: sortTasks(loose) }
-  ];
-}
-
-function buildBacklogSummary(state: AppState, plan: DayPlan) {
-  const groups = buildTaskGroups(state, plan);
-  const count = (title: string) => groups.find((group) => group.title === title)?.tasks.length ?? 0;
-  const thisWeek = count("This week backlog");
-  const nextWeek = count("Next week backlog");
-  const someday = count("Someday / suggestions");
-  const blocked = count("Blocked / waiting");
-  return {
-    thisWeek,
-    nextWeek,
-    someday,
-    text: `${thisWeek + nextWeek} dated backlog tasks outside this day, ${someday} soft items, ${blocked} blocked or waiting.`
-  };
-}
-
-function buildClientReviewSummary(state: AppState) {
-  const date = state.currentDate;
-  const events = state.executionEvents.filter((event) => event.date === date);
-  const completions = state.completions.filter((event) => event.date === date);
-  const completedPlanIds = new Set([...events.filter((event) => event.type === "completed").map((event) => event.planItemId), ...completions.map((event) => event.planItemId)].filter(Boolean) as string[]);
-  const partialEvents = events.filter((event) => event.type === "worked_on" || event.type === "partially_completed");
-  const deferredEvents = events.filter((event) => event.type === "deferred");
-  const blockedEvents = events.filter((event) => event.type === "blocked" || event.type === "waiting_on");
-  const skippedEvents = events.filter((event) => ["skipped", "canceled", "marked_not_important"].includes(event.type));
-  const deferrals = state.deferrals.filter((entry) => entry.date === date);
-  const deferredPlanIds = new Set([...deferredEvents.map((event) => event.planItemId), ...deferrals.map((entry) => entry.planItemId)].filter(Boolean) as string[]);
-  const calibrationSignals = [];
-  const overloadCount = deferrals.filter((entry) => ["no_time", "overplanned"].includes(entry.reason)).length;
-  const lowEnergyCount = deferrals.filter((entry) => entry.reason === "low_energy").length;
-  const vagueCount = events.filter((event) => event.reason === "too_vague").length;
-  const blockedCount = blockedEvents.length;
-  if (overloadCount) calibrationSignals.push(`${overloadCount} time/load deferral${overloadCount === 1 ? "" : "s"}`);
-  if (lowEnergyCount) calibrationSignals.push(`${lowEnergyCount} low-energy deferral${lowEnergyCount === 1 ? "" : "s"}`);
-  if (vagueCount) calibrationSignals.push(`${vagueCount} vague item${vagueCount === 1 ? "" : "s"} need sharper next actions`);
-  if (blockedCount) calibrationSignals.push(`${blockedCount} blocked/waiting item${blockedCount === 1 ? "" : "s"}`);
-
-  return {
-    completedCount: completedPlanIds.size,
-    partialCount: partialEvents.length,
-    deferredCount: deferredPlanIds.size,
-    blockedCount: blockedEvents.length,
-    skippedCount: skippedEvents.length,
-    completedTitles: [...completedPlanIds].map((planItemId) => clientPlanTitleFromId(state, date, planItemId)),
-    partialTitles: partialEvents.map((event) => clientEventTitle(state, date, event)),
-    deferredTitles: [...deferredPlanIds].map((planItemId) => clientPlanTitleFromId(state, date, planItemId)),
-    blockedTitles: blockedEvents.map((event) => clientEventTitle(state, date, event)),
-    skippedTitles: skippedEvents.map((event) => clientEventTitle(state, date, event)),
-    calibrationSignals,
-    existingReview: state.dailyReviews.find((review) => review.date === date)
-  };
-}
-
-function clientEventTitle(state: AppState, date: string, event: AppState["executionEvents"][number]): string {
-  if (event.taskId) return state.tasks.find((task) => task.id === event.taskId)?.title ?? event.taskId;
-  if (event.taskIds?.[0]) return state.tasks.find((task) => task.id === event.taskIds?.[0])?.title ?? event.taskIds[0];
-  return event.planItemId ? clientPlanTitleFromId(state, date, event.planItemId) : "Untitled item";
-}
-
-function clientPlanTitleFromId(state: AppState, date: string, planItemId: string): string {
-  const prefix = `plan_${date}_`;
-  const entityId = planItemId.startsWith(prefix) ? planItemId.slice(prefix.length).replace(/_phase_\d+$/, "") : planItemId;
-  return (
-    state.tasks.find((task) => task.id === entityId)?.title ??
-    (state.folders ?? []).find((folder) => folder.id === entityId)?.name ??
-    planItemId
-  );
-}
-
-function sortTasks(tasks: Task[]): Task[] {
-  return [...tasks].sort((a, b) => b.priority + b.importance + b.urgency - (a.priority + a.importance + a.urgency));
-}
-
-function isTaskInNamedWeek(task: Task, currentDate: string, target: "this" | "next"): boolean {
-  const range = target === "this" ? weekRange(currentDate) : nextWeekRange(currentDate);
-  if (isDateInRange(task.scheduledDate, range.startDate, range.endDate)) return true;
-  if (isDateInRange(task.dueDate, range.startDate, range.endDate)) return true;
-  if (task.dateIntent?.kind === "week_window") {
-    return Boolean(task.dateIntent.startDate && task.dateIntent.endDate && task.dateIntent.startDate <= range.endDate && task.dateIntent.endDate >= range.startDate);
-  }
-  if (task.dateIntent?.kind === "deadline") return isDateInRange(task.dateIntent.dueDate, range.startDate, range.endDate);
-  if (task.dateIntent?.kind === "specific_date" || task.dateIntent?.kind === "today" || task.dateIntent?.kind === "tomorrow") {
-    return isDateInRange(task.dateIntent.scheduledDate, range.startDate, range.endDate);
-  }
-  return false;
-}
-
-function isSomedayTask(task: Task): boolean {
-  return (
-    task.dateIntent?.kind === "someday" ||
-    task.completionBehavior === "keep_as_suggestion" ||
-    task.plannerFields.pressureLevel === "someday" ||
-    task.plannerFields.pressureLevel === "soft"
-  );
-}
-
-function dateIntentLabel(task: Task): string {
-  if (task.dateIntent?.kind === "week_window" && task.dateIntent.startDate && task.dateIntent.endDate) {
-    return `${formatShortDate(task.dateIntent.startDate)}-${formatShortDate(task.dateIntent.endDate)}`;
-  }
-  if (task.dateIntent?.kind === "deadline" && task.dateIntent.dueDate) return `due ${formatShortDate(task.dateIntent.dueDate)}`;
-  if (task.dateIntent?.kind === "specific_date" && task.dateIntent.scheduledDate) return formatShortDate(task.dateIntent.scheduledDate);
-  if (task.dateIntent?.kind && task.dateIntent.kind !== "none") return task.dateIntent.kind.replace("_", " ");
-  if (task.scheduledDate) return formatShortDate(task.scheduledDate);
-  if (task.dueDate) return `due ${formatShortDate(task.dueDate)}`;
-  return task.plannerFields.pressureLevel;
-}
-
-// Client mirror of planner.blockFolderId (T088 2c-A): nearest ancestor-or-self folder (walking
-// task.folderId up via parentFolderId, cycle-guarded) whose canBlock === true and not archived.
-function clientBlockFolderId(state: AppState, task: AppState["tasks"][number]): string | undefined {
-  const folders = state.folders ?? [];
-  let current = task.folderId ? folders.find((folder) => folder.id === task.folderId) : undefined;
-  const seen = new Set<string>();
-  while (current && !seen.has(current.id)) {
-    seen.add(current.id);
-    if (current.canBlock === true && current.status !== "archived") return current.id;
-    current = current.parentFolderId ? folders.find((folder) => folder.id === current!.parentFolderId) : undefined;
-  }
-  return undefined;
-}
-
-function PlanItemActions({
-  item,
-  post,
-  setSelected,
-  setNotDoneItem,
-  setMoveItem
-}: {
-  item: PlanItem;
-  post: PostFn;
-  setSelected: Dispatch<SetStateAction<PlanItem | null>>;
-  setNotDoneItem: Dispatch<SetStateAction<PlanItem | null>>;
-  setMoveItem: Dispatch<SetStateAction<PlanItem | null>>;
-}) {
-  return (
-    <div className="itemActions">
-      <button
-        className={item.status === "completed" ? "doneButton active" : "doneButton"}
-        onClick={() => post("/api/plan/complete", { planItemId: item.id })}
-        aria-label={item.status === "completed" ? `Undo complete ${item.title}` : `Complete ${item.title}`}
-      >
-        {item.status === "completed" ? <Undo2 size={16} /> : <Check size={16} />}
-      </button>
-      <button
-        className={item.status === "deferred" ? "deferButton active" : "deferButton"}
-        onClick={() => setNotDoneItem(item)}
-      >
-        {item.status === "deferred" ? "Deferred" : "Not done"}
-      </button>
-      {item.taskId && (
-        <button className="moveButton" onClick={() => setMoveItem(item)} aria-label={`Move ${item.title}`}>
-          <Clock3 size={15} />
-        </button>
-      )}
-      {item.type === "folder_block" ? (
-        <button onClick={() => setSelected(item)}>Open</button>
-      ) : (
-        item.taskId && (
-          <button onClick={() => setSelected(item)} aria-label={`Details for ${item.title}`}>
-            Details
-          </button>
-        )
-      )}
-    </div>
-  );
-}
-
-const pixelsPerMinute = 2;
-
-function buildTimeline(items: PlanItem[], currentTime?: string) {
-  const scheduled = items.filter((item) => isClockTime(item.startTime) && isClockTime(item.endTime));
-  const unscheduled = items.filter((item) => !isClockTime(item.startTime) || !isClockTime(item.endTime));
-  const scheduledWithLanes = assignOverlapLanes(scheduled, currentTime);
-  const fallbackStart = currentTime ? toMinutes(currentTime) : 8 * 60;
-  const fallbackEnd = currentTime ? toMinutes(currentTime) : 17 * 60;
-  const startMinutes = Math.max(0, Math.min(...scheduled.map((item) => absoluteStartMinutes(item, currentTime)), fallbackStart) - 30);
-  const endMinutes = Math.max(...scheduled.map((item) => absoluteEndMinutes(item, currentTime)), fallbackEnd) + 30;
-  const height = Math.max(480, (endMinutes - startMinutes) * pixelsPerMinute);
-  const firstHour = Math.ceil(startMinutes / 60) * 60;
-  const hours = [];
-
-  for (let minute = firstHour; minute <= endMinutes; minute += 60) {
-    hours.push({ time: fromMinutes(minute), top: (minute - startMinutes) * pixelsPerMinute });
-  }
-
-  return {
-    height,
-    hours,
-    startMinutes,
-    endMinutes,
-    unscheduled,
-    items: scheduledWithLanes.map(({ item, lane, laneCount }) => {
-      const itemStart = absoluteStartMinutes(item, currentTime);
-      const itemEnd = absoluteEndMinutes(item, currentTime);
-      const gutter = laneCount > 1 ? 1.5 : 0;
-      const width = laneCount > 1 ? 100 / laneCount - gutter : 100;
-      return {
-        item,
-        top: (itemStart - startMinutes) * pixelsPerMinute,
-        height: Math.max(22, (itemEnd - itemStart) * pixelsPerMinute - 6),
-        left: laneCount > 1 ? lane * (100 / laneCount) : 0,
-        width,
-        laneCount
-      };
-    })
-  };
-}
-
-function assignOverlapLanes(items: PlanItem[], currentTime?: string) {
-  const sorted = [...items].sort((a, b) => absoluteStartMinutes(a, currentTime) - absoluteStartMinutes(b, currentTime));
-  const laneEnds: number[] = [];
-  const assigned = sorted.map((item) => {
-    const start = absoluteStartMinutes(item, currentTime);
-    const end = absoluteEndMinutes(item, currentTime);
-    let lane = laneEnds.findIndex((candidateEnd) => candidateEnd <= start);
-    if (lane === -1) {
-      lane = laneEnds.length;
-      laneEnds.push(end);
-    } else {
-      laneEnds[lane] = end;
-    }
-    return { item, lane, start, end, laneCount: 1 };
-  });
-
-  return assigned.map((entry) => {
-    const laneCount = Math.max(
-      1,
-      ...assigned
-        .filter((candidate) => candidate.start < entry.end && candidate.end > entry.start)
-        .map((candidate) => candidate.lane + 1)
-    );
-    return { ...entry, laneCount };
-  });
-}
-
-function isClockTime(value: string): boolean {
-  return /^\d{2}:\d{2}$/.test(value);
-}
-
-function normalizeMoveTime(value: string): string | undefined {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return undefined;
-
-  const colon = trimmed.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-  if (colon) return `${colon[1].padStart(2, "0")}:${colon[2]}`;
-
-  const meridiem = trimmed.match(/^(1[0-2]|0?[1-9])(?:[.:]([0-5]\d))?\s*(am|pm)$/);
-  if (!meridiem) return undefined;
-  let hours = Number(meridiem[1]);
-  const minutes = meridiem[2] ?? "00";
-  if (meridiem[3] === "pm" && hours !== 12) hours += 12;
-  if (meridiem[3] === "am" && hours === 12) hours = 0;
-  return `${String(hours).padStart(2, "0")}:${minutes}`;
-}
-
-function toMinutes(time: string): number {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-}
-
-function endMinutesFor(item: PlanItem): number {
-  const start = toMinutes(item.startTime);
-  const end = toMinutes(item.endTime);
-  return end <= start ? end + 24 * 60 : end;
-}
-
-function absoluteStartMinutes(item: PlanItem, currentTime?: string): number {
-  const start = toMinutes(item.startTime);
-  const current = currentTime ? toMinutes(currentTime) : 0;
-  if (current >= 18 * 60 && start < 6 * 60) return start + 24 * 60;
-  return start;
-}
-
-function absoluteEndMinutes(item: PlanItem, currentTime?: string): number {
-  const start = absoluteStartMinutes(item, currentTime);
-  const rawEnd = toMinutes(item.endTime);
-  const normalizedEnd = rawEnd <= toMinutes(item.startTime) ? rawEnd + 24 * 60 : rawEnd;
-  return normalizedEnd < start ? normalizedEnd + 24 * 60 : normalizedEnd;
-}
-
-function fromMinutes(minutes: number): string {
-  const wrapped = minutes % (24 * 60);
-  const hours = Math.floor(wrapped / 60);
-  const mins = wrapped % 60;
-  return `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}`;
-}
-
-function addClockMinutes(time: string, minutes: number): string {
-  return fromMinutes(toMinutes(time) + minutes);
-}
-
-function applyPendingTimelineMoves(items: PlanItem[], planDate: string, moves: Record<string, PendingTimelineMove>): PlanItem[] {
-  if (Object.keys(moves).length === 0) return items;
-  return items.map((item) => {
-    if (!item.taskId) return item;
-    const move = moves[item.taskId];
-    if (!move || move.date !== planDate) return item;
-    return {
-      ...item,
-      startTime: move.startTime,
-      endTime: move.endTime,
-      fixedStartTime: move.startTime
-    };
-  });
-}
-
-function removePendingTimelineMove(
-  moves: Record<string, PendingTimelineMove>,
-  taskId: string,
-  move: PendingTimelineMove
-): Record<string, PendingTimelineMove> {
-  const current = moves[taskId];
-  if (!current || current.date !== move.date || current.startTime !== move.startTime) return moves;
-  const next = { ...moves };
-  delete next[taskId];
-  return next;
-}
-
-function formatDate(dateOnly: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric"
-  }).format(new Date(`${dateOnly}T12:00:00.000Z`));
-}
-
-function formatShortDate(dateOnly: string): string {
-  const [year, month, day] = dateOnly.split("-");
-  return `${day}.${month}.${year.slice(2)}`;
-}
-
-function formatDay(dateOnly: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short"
-  }).format(new Date(`${dateOnly}T12:00:00.000Z`));
-}
-
-function weekDots(dateOnly: string, todayIndex: number | null) {
-  const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const jsDay = new Date(`${dateOnly}T12:00:00.000Z`).getUTCDay();
-  const mondayFirstIndex = (jsDay + 6) % 7;
-  return labels.map((label, index) => ({
-    label,
-    viewed: index === mondayFirstIndex,
-    today: index === todayIndex
-  }));
-}
-
-function systemWeekdayIndex() {
-  const jsDay = new Date().getDay();
-  return (jsDay + 6) % 7;
-}
-
-type BacklogBucket = "today" | "this_week" | "next_week" | "someday" | "none";
-
-const BACKLOG_COLUMNS: { key: BacklogBucket; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "this_week", label: "This week" },
-  { key: "next_week", label: "Next week" },
-  { key: "someday", label: "Someday" },
-  { key: "none", label: "Unscheduled" }
-];
-
-// Which backlog column a task currently belongs in (T072).
-function taskBucket(task: AppState["tasks"][number], currentDate: string): BacklogBucket {
-  const intent = task.dateIntent;
-  if (task.scheduledDate === currentDate || intent?.kind === "today" || intent?.kind === "tomorrow") return "today";
-  if (intent?.kind === "someday") return "someday";
-  const thisWeek = weekRange(currentDate);
-  const nextWeek = nextWeekRange(currentDate);
-  if (intent?.kind === "week_window") {
-    return intent.startDate === nextWeek.startDate ? "next_week" : "this_week";
-  }
-  if (task.scheduledDate) {
-    if (isDateInRange(task.scheduledDate, thisWeek.startDate, thisWeek.endDate)) return "this_week";
-    if (isDateInRange(task.scheduledDate, nextWeek.startDate, nextWeek.endDate)) return "next_week";
-  }
-  if (task.dueDate) {
-    if (task.dueDate <= thisWeek.endDate) return "this_week";
-    if (task.dueDate <= nextWeek.endDate) return "next_week";
-  }
-  return "none";
-}
-
-// Drag-and-drop backlog board (T072): drag a task between date-intent columns to promote/demote
-// it, sharing the same applyTaskDateIntent semantics as the AI. The per-card select is the
-// keyboard-accessible fallback for the drag interaction.
-function BacklogBoard({ state, post }: { state: AppState; post: PostFn }) {
-  const [dragId, setDragId] = useState<string | null>(null);
-  const tasks = state.tasks.filter(
-    (task) => !["archived", "completed"].includes(task.status) && !task.parentTaskId
-  );
-  function move(taskId: string, bucket: BacklogBucket) {
-    void post("/api/structure", { entity: "task", action: "update", id: taskId, patch: { dateIntentKind: bucket } });
-  }
-  return (
-    <div className="backlogBoard" aria-label="Backlog board">
-      {BACKLOG_COLUMNS.map((column) => {
-        const columnTasks = tasks.filter((task) => taskBucket(task, state.currentDate) === column.key);
-        return (
-          <div
-            key={column.key}
-            className="backlogColumn"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={() => {
-              if (dragId) move(dragId, column.key);
-              setDragId(null);
-            }}
-          >
-            <h3>
-              {column.label} <span>{columnTasks.length}</span>
-            </h3>
-            {columnTasks.map((task) => (
-              <div
-                key={task.id}
-                className="backlogCard"
-                draggable
-                onDragStart={() => setDragId(task.id)}
-                onDragEnd={() => setDragId(null)}
-              >
-                <span className="backlogCardTitle">{task.title}</span>
-                <select
-                  value=""
-                  aria-label={`Move ${task.title}`}
-                  onChange={(event) => {
-                    if (event.target.value) move(task.id, event.target.value as BacklogBucket);
-                  }}
-                >
-                  <option value="">Move…</option>
-                  {BACKLOG_COLUMNS.filter((option) => option.key !== column.key).map((option) => (
-                    <option value={option.key} key={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// Subtask rollup for a parent task (T071/T076): recursive count, completed count, and aggregate
-// effort across all descendants.
-function childStats(state: AppState, taskId: string): { count: number; done: number; minutes: number } {
-  const children = state.tasks.filter((task) => task.parentTaskId === taskId && task.status !== "archived");
-  let count = 0;
-  let done = 0;
-  let minutes = 0;
-  for (const child of children) {
-    count += 1;
-    minutes += child.effortMinutes;
-    if (child.status === "completed") done += 1;
-    const sub = childStats(state, child.id);
-    count += sub.count;
-    done += sub.done;
-    minutes += sub.minutes;
-  }
-  return { count, done, minutes };
-}
-
-// True if `nodeId` is within the subtree rooted at `ancestorId` (T076 cycle guard for the UI).
-function isDescendantOfClient(state: AppState, nodeId: string, ancestorId: string): boolean {
-  let current = state.tasks.find((task) => task.id === nodeId);
-  const seen = new Set<string>();
-  while (current?.parentTaskId && !seen.has(current.id)) {
-    seen.add(current.id);
-    if (current.parentTaskId === ancestorId) return true;
-    current = state.tasks.find((task) => task.id === current!.parentTaskId);
-  }
-  return false;
-}
-
-// Real local wall-clock now, as the app's date/time format. Used to anchor the app to the
-// user's actual current time on load (the in-memory state would otherwise stay frozen at
-// whatever time the server process first created it).
-function localNowParts() {
-  const now = new Date();
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return {
-    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
-    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`
-  };
-}
-
-function labelForSection(section: PlanItem["section"]): string {
-  return {
-    routines: "routine",
-    main_blocks: "main block",
-    quick_tasks: "quick task",
-    soft_invitations: "soft invitation",
-    later: "later"
-  }[section];
-}
-
-function schedulingLabel(item: PlanItem): string {
-  const blocking = item.blockingMinutes ?? item.estimatedMinutes;
-  const clock = item.clockMinutes ?? item.estimatedMinutes;
-  return `${item.schedulingMode} - ${item.attentionLoad ?? "full"} attention - ${blocking}/${clock}m blocking`;
-}
-
-function taskSummary(task: AppState["tasks"][number]): string {
-  const scheduling = task.scheduling?.mode && task.scheduling.mode !== "exclusive" ? ` - ${task.scheduling.mode}/${task.scheduling.attentionLoad}` : "";
-  return `${task.status} - ${task.effortMinutes}m - ${task.completionMode ?? task.completionBehavior}${scheduling}`;
-}
-
-function schedulingSummary(state: AppState): string {
-  const counts = state.tasks.reduce<Record<string, number>>((acc, task) => {
-    const mode = task.scheduling?.mode ?? "exclusive";
-    acc[mode] = (acc[mode] ?? 0) + 1;
-    return acc;
-  }, {});
-  return `${counts.background ?? 0} background, ${counts.concurrent ?? 0} concurrent, ${counts.phased ?? 0} phased tasks tracked. Passive work can overlap; full-focus work still blocks the day.`;
-}
-
 function statusLabel(status: PlanItem["status"]): string {
   if (status === "deferred") return "not done";
   return status;
+}
+
+function formatDuration(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours === 0) return `${mins}m`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
 }
 
 function isTaskCompletedToday(task: AppState["tasks"][number], date: string): boolean {

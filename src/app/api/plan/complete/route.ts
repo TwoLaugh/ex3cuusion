@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { buildDayPlan } from "@/lib/planner";
+import { dayView } from "@/lib/state";
 import { completePlanItem } from "@/lib/state";
 
 const completeSchema = z.object({
@@ -12,5 +12,5 @@ const completeSchema = z.object({
 export async function POST(request: NextRequest) {
   const input = completeSchema.parse(await request.json());
   const state = completePlanItem(input.planItemId, input.actualMinutes, input.completedTaskIds);
-  return NextResponse.json({ state, plan: buildDayPlan(state) });
+  return NextResponse.json({ state, plan: dayView() });
 }

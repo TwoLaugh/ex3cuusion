@@ -7,7 +7,8 @@ type PlanCandidate = Omit<PlanItem, "startTime" | "endTime"> & {
   preferredWindow?: "morning" | "afternoon" | "evening";
 };
 
-function isRepeatPolicyDue(task: Task, date: string): boolean {
+// Exported for the day-list build (T092), which reuses the planner's due/plannable semantics.
+export function isRepeatPolicyDue(task: Task, date: string): boolean {
   if (task.repeatPolicy.type === "none") return true;
   if (task.repeatPolicy.type === "daily") return true;
   return task.repeatPolicy.days?.includes(dayOfWeek(date)) ?? true;
@@ -30,7 +31,8 @@ export function hasActiveChildren(state: AppState, taskId: string): boolean {
   return state.tasks.some((task) => task.parentTaskId === taskId && !["archived", "completed"].includes(task.status));
 }
 
-function isTaskPlannable(task: Task, date: string): boolean {
+// Exported for the day-list build (T092).
+export function isTaskPlannable(task: Task, date: string): boolean {
   if (task.status === "blocked") return Boolean(task.blocked?.unblockAction);
   if (task.status === "waiting") return Boolean(task.waiting?.followUpDate && daysUntil(date, task.waiting.followUpDate) <= 0);
   const statusAllowsPlanning =
@@ -45,7 +47,8 @@ function isTaskPlannable(task: Task, date: string): boolean {
   return true;
 }
 
-function taskScore(state: AppState, task: Task, date: string): number {
+// Exported for the day-list build and tray ranking (T092).
+export function taskScore(state: AppState, task: Task, date: string): number {
   const dueDistance = daysUntil(date, task.dueDate);
   const dueBoost = dueDistance <= 0 ? 25 : dueDistance <= 2 ? 16 : dueDistance <= 5 ? 8 : 0;
   const strictnessBoost = task.strictness === "strict" ? 8 : task.strictness === "normal" ? 4 : 0;
@@ -75,10 +78,13 @@ function taskScore(state: AppState, task: Task, date: string): number {
   );
 }
 
-function calculateCapacity(state: AppState): number {
+// Exported for the committed day view (T090), which recomputes capacity over committed items.
+// T110: a `date` in the future (evening planning) is measured against the WHOLE day — no
+// current-clock subtraction — since none of its hours have elapsed yet. Same-day is clock-aware.
+export function calculateCapacity(state: AppState, date: string = state.currentDate): number {
   const dayEndMinutes = 22 * 60;
   const remainingToday = Math.max(45, dayEndMinutes - timeToMinutes(state.currentTime));
-  const clockAwareAvailable = Math.min(state.availableMinutes, remainingToday);
+  const clockAwareAvailable = date > state.currentDate ? state.availableMinutes : Math.min(state.availableMinutes, remainingToday);
   const recentDeferrals = state.deferrals.slice(-5);
   const overloadSignals = recentDeferrals.filter((entry) =>
     ["no_time", "overplanned", "low_energy"].includes(entry.reason)
@@ -99,7 +105,7 @@ function calculateCapacity(state: AppState): number {
   return Math.max(90, clockAwareAvailable + reviewAdjustment);
 }
 
-function loadLevel(total: number, available: number): LoadLevel {
+export function loadLevel(total: number, available: number): LoadLevel {
   if (total > available * 1.15) return "overloaded";
   if (total > available * 0.85) return "heavy";
   if (total < available * 0.45) return "light";
@@ -251,13 +257,14 @@ export function buildDayPlan(state: AppState): DayPlan {
   };
 }
 
-function countsTowardCommittedLoad(item: PlanItem): boolean {
+export function countsTowardCommittedLoad(item: PlanItem): boolean {
   if (item.type === "soft_invitation" || item.section === "soft_invitations") return false;
   if (item.hardAnchor && /sleep|bed/i.test(item.title)) return false;
   return true;
 }
 
-function completedTaskIdsByPlan(state: AppState, date: string): Map<string, string[]> {
+// Exported so the committed day view (T090) resolves completion identically to generation.
+export function completedTaskIdsByPlan(state: AppState, date: string): Map<string, string[]> {
   const byPlan = new Map<string, string[]>();
   for (const event of state.completions.filter((entry) => entry.date === date)) {
     const existing = byPlan.get(event.planItemId) ?? [];
@@ -266,7 +273,7 @@ function completedTaskIdsByPlan(state: AppState, date: string): Map<string, stri
   return byPlan;
 }
 
-function blockCompletionPlanIds(state: AppState, date: string): Set<string> {
+export function blockCompletionPlanIds(state: AppState, date: string): Set<string> {
   return new Set(
     state.completions
       .filter((entry) => entry.date === date && (!entry.taskIds || entry.taskIds.length === 0))
@@ -327,7 +334,9 @@ function recentEventsForTask(state: AppState, taskId: string): ExecutionEvent[] 
     .slice(-5);
 }
 
-function effectiveEffortMinutes(state: AppState, task: Task): number {
+// Exported for the tray's gap-fit check (T093): the calibrated effort estimate is what must fit
+// the gap, not the user's possibly stale raw estimate.
+export function effectiveEffortMinutes(state: AppState, task: Task): number {
   const actuals = state.completions
     .filter(
       (event) =>
@@ -345,7 +354,7 @@ function effectiveEffortMinutes(state: AppState, task: Task): number {
   return task.effortMinutes;
 }
 
-function isItemCompleted(
+export function isItemCompleted(
   item: PlanItem,
   completed: Set<string>,
   completedTaskIdsByPlanMap: Map<string, string[]>,
