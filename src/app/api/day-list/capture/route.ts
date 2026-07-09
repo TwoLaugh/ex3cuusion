@@ -9,12 +9,14 @@ import { dayListView, dayView, instantCaptureToDayList } from "@/lib/state";
 // e.g. without awaiting before re-render) to run AI enrichment (folder/effort/dates parsed from
 // the title) and toast what it decided. Route handlers cannot reliably fire-and-forget after
 // responding, so the client owns kicking off the enrichment call.
+// T110: an optional `date` lands the capture on a future plan-ahead list instead of today.
 const captureSchema = z.object({
-  title: z.string()
+  title: z.string(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
 });
 
 export async function POST(request: NextRequest) {
   const input = captureSchema.parse(await request.json());
-  const { state, taskId } = instantCaptureToDayList(input.title);
-  return NextResponse.json({ state, plan: dayView(), dayList: dayListView(), taskId });
+  const { state, taskId } = instantCaptureToDayList(input.title, input.date);
+  return NextResponse.json({ state, plan: dayView(), dayList: dayListView(undefined, input.date), taskId });
 }

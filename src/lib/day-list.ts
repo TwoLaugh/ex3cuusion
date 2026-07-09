@@ -25,6 +25,9 @@ const TRAY_FLOOR_DAYS = 7; // guaranteed minimum resurfacing frequency for activ
 const STALE_QUESTION_STREAK = 5; // ignored surfacings before the tray asks someday/keep
 const SOMEDAY_RESURFACE_INTERVALS = [7, 14, 30, 90]; // spaced someday schedule, indexed by surfacedCount
 const END_OF_EVENING = "22:30"; // gap anchor when no pinned entry remains today
+// T110: for a FUTURE (plan-ahead) date no clock has elapsed, so gaps/pins are measured from a
+// nominal day start rather than the current time — the whole day is available.
+const DAY_START_MINUTES = 8 * 60;
 // TMT delay anchor for undated tasks: an undated task starts with a synthetic ~3-week horizon
 // that shrinks as it ages in the tray, so older backlog discounts less and rises.
 const UNDATED_DELAY_HORIZON_DAYS = 21;
@@ -154,7 +157,31 @@ export function buildMorningList(state: AppState, date: string): DayList {
   for (const task of scored) push(task, task.repeatPolicy.type !== "none" ? "recurring" : "manual");
   for (const task of carried) push(task, "carried");
 
-  return { date, committedAt: stateTimestamp(state), entries };
+  // T110: a list built for a date beyond today is an evening plan-ahead; it is reconciled (not
+  // rebuilt) on the morning it becomes the live day.
+  return { date, committedAt: stateTimestamp(state), entries, plannedAhead: date > state.currentDate };
+}
+
+// T110: reconcile a plan-ahead list on the first view of the day it belongs to. AUTHORED ORDER is
+// sacred: surviving entries keep their position and any pins the user set while planning. Only two
+// changes are applied — (1) DROP entries that went stale overnight (the task was completed late the
+// prior evening, archived, or re-dated to another day), and (2) APPEND, at the end, the entries a
+// fresh morning build now requires (recurring that became due, and carryover that became unfinished)
+// which are not already present. A due-recurring the user deliberately removed while planning WILL
+// reappear — the same as an ordinary morning build, and it stays one tap away in the tray. The flag
+// is cleared so the reconcile runs exactly once.
+export function reconcileDayList(state: AppState, list: DayList): void {
+  const date = list.date;
+  const survivors = list.entries.filter((entry) => {
+    const task = state.tasks.find((candidate) => candidate.id === entry.taskId);
+    if (!task || task.habit || task.status === "archived") return false;
+    if (task.status === "completed") return false; // one-shot finished late the prior evening
+    return isTaskPlannable(task, date); // re-dated away / no longer plannable → drop
+  });
+  const survivorIds = new Set(survivors.map((entry) => entry.taskId));
+  const additions = buildMorningList(state, date).entries.filter((entry) => !survivorIds.has(entry.taskId));
+  list.entries = [...survivors, ...additions].map((entry, index) => ({ ...entry, order: index }));
+  list.plannedAhead = false;
 }
 
 // The read model the Today surface consumes: the list (sorted by order — pins are display
@@ -162,7 +189,10 @@ export function buildMorningList(state: AppState, date: string): DayList {
 // and the capacity + pillar-balance gauges.
 export function renderDayList(state: AppState, list: DayList): DayListView {
   const date = list.date;
-  const nowMinutes = timeToMinutes(state.currentTime);
+  // T110: on a plan-ahead date "now" is the start of that day, not the current clock (which belongs
+  // to today). missedPin already keys off `date === state.currentDate`, so future pins never miss.
+  const isFuture = date > state.currentDate;
+  const nowMinutes = isFuture ? DAY_START_MINUTES : timeToMinutes(state.currentTime);
   const taskById = new Map(state.tasks.map((task) => [task.id, task]));
 
   const entries: DayListEntryView[] = [...list.entries]
@@ -298,12 +328,15 @@ export function renderDayList(state: AppState, list: DayList): DayListView {
 
   // T093 telemetry: every task the tray shows today is recorded as surfaced (idempotent per date
   // — repeated same-day reads change nothing). Mutating signals on read matches the repository's
-  // persist-on-read pattern.
-  recordTraySurfacing(state, date, [
-    ...due.map((task) => task.id),
-    ...balanceTray.map(({ task }) => task.id),
-    ...backlogRows.map((row) => row.task.id)
-  ]);
+  // persist-on-read pattern. T110: a future plan-ahead preview does NOT record surfacing — that
+  // telemetry belongs to the live day, and reconcile re-renders it as today when it arrives.
+  if (!isFuture) {
+    recordTraySurfacing(state, date, [
+      ...due.map((task) => task.id),
+      ...balanceTray.map(({ task }) => task.id),
+      ...backlogRows.map((row) => row.task.id)
+    ]);
+  }
 
   // T093 calibrated capacity: per-folder actual/estimate ratios re-price the remaining list.
   const calibration = buildTrayCalibration(state);
@@ -339,7 +372,7 @@ export function renderDayList(state: AppState, list: DayList): DayListView {
       gapMinutes
     },
     gauges: {
-      capacityMinutes: calculateCapacity(state),
+      capacityMinutes: calculateCapacity(state, date),
       listMinutes,
       calibratedListMinutes,
       balance,

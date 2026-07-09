@@ -9,6 +9,7 @@ import {
   Folder,
   GripVertical,
   ListChecks,
+  Moon,
   Pin,
   Plus,
   Repeat,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { DayListEntryView, DayListView } from "@/lib/day-list";
+import { addDays } from "@/lib/dates";
 import type { AppState, DayPlan, PlanItem } from "@/lib/types";
 import { EditableBadge } from "./components/EditableBadge";
 import { InboxSession } from "./components/InboxSession";
@@ -100,6 +102,11 @@ export default function Home() {
   // T092 list-first Today: inline-add draft, HTML5-DnD reorder state (mirrors BacklogBoard's
   // draggable pattern), and the optimistic order applied while a reorder POST is in flight.
   const [listDraft, setListDraft] = useState("");
+  // T110: "plan tomorrow" — the Today surface pointed at a future date. planningDate is the target
+  // day (null = live Today); planningView holds that day's list, kept SEPARATE from payload.dayList
+  // so a plan-ahead read never clobbers today's committed list.
+  const [planningDate, setPlanningDate] = useState<string | null>(null);
+  const [planningView, setPlanningView] = useState<DayListView | null>(null);
   const [listDragId, setListDragId] = useState<string | null>(null);
   const [listDragOverId, setListDragOverId] = useState<string | null>(null);
   const [optimisticListOrder, setOptimisticListOrder] = useState<string[] | null>(null);
@@ -483,6 +490,44 @@ export default function Home() {
     setPayload((previous) => (previous?.dayList ? { ...data, dayList: previous.dayList } : data));
   }
 
+  // T110: a plan-ahead read returns the FUTURE day's list in `dayList`; keep it in planningView and
+  // refresh the shared state/plan in place, but never let it overwrite today's payload.dayList.
+  function absorbPlanning(data: ApiPayload) {
+    setPlanningView(data.dayList ?? null);
+    setPayload((previous) => (previous ? { ...previous, state: data.state, plan: data.plan } : data));
+  }
+
+  async function loadPlanning(date: string) {
+    const response = await fetch(`/api/day-list?date=${encodeURIComponent(date)}`, { cache: "no-store" });
+    if (response.ok) absorbPlanning((await response.json()) as ApiPayload);
+  }
+
+  function enterPlanning() {
+    const date = addDays(localNowParts().date, 1); // the evening ritual plans the real next day
+    followingTodayRef.current = false; // the live clock tick must not yank us back to today
+    setPlanningDate(date);
+    void loadPlanning(date);
+  }
+
+  function exitPlanning() {
+    setPlanningDate(null);
+    setPlanningView(null);
+    void goToToday(); // re-sync to the live day
+  }
+
+  // T110: day-list mutations while planning target the plan-ahead date and route the response into
+  // planningView; on the live day they behave exactly as before (whole-payload refresh via post()).
+  async function listMutate(body: Record<string, unknown>) {
+    if (!planningDate) return post("/api/day-list", body);
+    const response = await fetch("/api/day-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, date: planningDate })
+    });
+    if (!response.ok) throw new Error((await responseError(response)) || `Request failed with ${response.status}`);
+    absorbPlanning((await response.json()) as ApiPayload);
+  }
+
   useEffect(() => {
     syncClock().catch(() => {
       void refresh();
@@ -503,10 +548,12 @@ export default function Home() {
   const plan = payload?.plan;
   const state = payload?.state;
   const dayList = payload?.dayList;
+  // T110: the list the surface shows — the plan-ahead view while planning, otherwise today's.
+  const activeList = planningDate && planningView ? planningView : dayList;
   // Rows in `order` (renderDayList pre-sorts); while a reorder POST is in flight the optimistic
   // order wins, with any entries it does not know about appended (e.g. a concurrent add).
   const listEntries = useMemo(() => {
-    const entries = dayList?.entries ?? [];
+    const entries = activeList?.entries ?? [];
     if (!optimisticListOrder) return entries;
     const byId = new Map(entries.map((entry) => [entry.taskId, entry]));
     const ordered = optimisticListOrder.flatMap((taskId) => {
@@ -516,7 +563,7 @@ export default function Home() {
       return [entry];
     });
     return [...ordered, ...byId.values()];
-  }, [dayList, optimisticListOrder]);
+  }, [activeList, optimisticListOrder]);
   const selectedTasks = useMemo(() => {
     if (!state || !selected?.selectedTaskIds) return [];
     return selected.selectedTaskIds
@@ -581,6 +628,10 @@ export default function Home() {
     return <main className="loading">Building today...</main>;
   }
 
+  // T110: the concrete list to render — plan-ahead view while planning (falling back to today's for
+  // the brief moment before it loads), otherwise today's committed list.
+  const shownList = activeList ?? dayList;
+
   // T092 inline instant add (documented capture→enrich contract in api/day-list/capture): the
   // input clears IMMEDIATELY, the capture POST lands as one undoable change, and enrichment is
   // fired without awaiting — when it resolves, post() refreshes state quietly and the history
@@ -590,16 +641,24 @@ export default function Home() {
     const title = listDraft.trim();
     if (!title) return;
     setListDraft("");
+    const targetDate = planningDate; // captured: the user may leave planning mode before enrich lands
     try {
       const response = await fetch("/api/day-list/capture", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title })
+        body: JSON.stringify(targetDate ? { title, date: targetDate } : { title })
       });
       if (!response.ok) throw new Error((await responseError(response)) || `Request failed with ${response.status}`);
       const data = (await response.json()) as ApiPayload & { taskId?: string };
-      setPayload(data);
-      if (data.taskId) void post("/api/day-list/enrich", { taskId: data.taskId }).catch(() => {});
+      if (targetDate) absorbPlanning(data);
+      else setPayload(data);
+      // Enrichment (/api/day-list/enrich) is today-scoped; while planning, re-read the plan-ahead
+      // view once it lands so the enriched folder/effort/dates show on tomorrow's list too.
+      if (data.taskId) {
+        const enrich = post("/api/day-list/enrich", { taskId: data.taskId }).catch(() => {});
+        if (targetDate) void enrich.then(() => loadPlanning(targetDate));
+        else void enrich;
+      }
     } catch (error) {
       setInboxError(error instanceof Error ? error.message : "Could not add to the list.");
     }
@@ -627,7 +686,7 @@ export default function Home() {
     orderedTaskIds.splice(from, 1);
     orderedTaskIds.splice(to, 0, draggedId);
     setOptimisticListOrder(orderedTaskIds);
-    void post("/api/day-list", { action: "reorder", orderedTaskIds })
+    void listMutate({ action: "reorder", orderedTaskIds })
       .catch(() => {})
       .finally(() => setOptimisticListOrder(null));
   }
@@ -714,16 +773,16 @@ export default function Home() {
   const capacityLeft = Math.max(0, plan.availableMinutes - plan.estimatedTotalMinutes);
   const firstUntickedId = listEntries.find((entry) => !entry.completedToday)?.taskId;
   const untickedCount = listEntries.filter((entry) => !entry.completedToday).length;
-  const { capacityMinutes, listMinutes } = dayList.gauges;
+  const { capacityMinutes, listMinutes } = shownList.gauges;
   const overfull = listMinutes > capacityMinutes;
   const capacityRatio = capacityMinutes > 0 ? Math.min(1, listMinutes / capacityMinutes) : listMinutes > 0 ? 1 : 0;
-  const firstMissingPillar = dayList.gauges.missingPillars[0];
+  const firstMissingPillar = shownList.gauges.missingPillars[0];
   const trayGroups = [
-    ["due", dayList.tray.due],
-    ["balance", dayList.tray.balance],
-    ["backlog", dayList.tray.backlog]
+    ["due", shownList.tray.due],
+    ["balance", shownList.tray.balance],
+    ["backlog", shownList.tray.backlog]
   ] as const;
-  const traySuggestionCount = dayList.tray.due.length + dayList.tray.balance.length + dayList.tray.backlog.length;
+  const traySuggestionCount = shownList.tray.due.length + shownList.tray.balance.length + shownList.tray.backlog.length;
   const latestEntry = state.inbox[0];
   const latestSession = latestEntry ? state.captureSessions.find((session) => session.id === latestEntry.captureSessionId) : undefined;
   const hasPendingClarification = (latestSession?.questions ?? []).some((question) => question.status === "pending");
@@ -769,44 +828,66 @@ export default function Home() {
           />
         ) : (
           <>
-            <header className="todayHeader">
+            <header className={planningDate ? "todayHeader planningHeader" : "todayHeader"}>
               <div>
-                <h1 aria-label={formatDate(plan.date)}>{formatDate(plan.date)}</h1>
-                <p className="capacityLine">your list · committed {dayList.committedAt.slice(11, 16)}</p>
+                {planningDate ? (
+                  <>
+                    <h1 aria-label={`Planning ${formatDate(planningDate)}`}>Planning {formatDate(planningDate)}</h1>
+                    <p className="capacityLine">the evening ritual · shape tomorrow before it arrives</p>
+                  </>
+                ) : (
+                  <>
+                    <h1 aria-label={formatDate(plan.date)}>{formatDate(plan.date)}</h1>
+                    <p className="capacityLine">your list · committed {shownList.committedAt.slice(11, 16)}</p>
+                  </>
+                )}
               </div>
               <div className="dayNav">
-                <button
-                  className="pill pillQuiet iconPill"
-                  onClick={() => {
-                    followingTodayRef.current = false;
-                    post("/api/time", { retreat: true });
-                  }}
-                  aria-label="Previous day"
-                >
-                  <ChevronLeft size={16} />
-                </button>
-                {plan.date !== localNowParts().date && (
-                  <button className="pill pillQuiet" onClick={goToToday} aria-label="Jump to today">
-                    Today
+                {planningDate ? (
+                  <button className="pill pillSecondary" onClick={exitPlanning} aria-label="Back to today">
+                    <ChevronLeft size={15} />
+                    Back to today
                   </button>
+                ) : (
+                  <>
+                    <button
+                      className="pill pillQuiet iconPill"
+                      onClick={() => {
+                        followingTodayRef.current = false;
+                        post("/api/time", { retreat: true });
+                      }}
+                      aria-label="Previous day"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    {plan.date !== localNowParts().date && (
+                      <button className="pill pillQuiet" onClick={goToToday} aria-label="Jump to today">
+                        Today
+                      </button>
+                    )}
+                    <button
+                      className="pill pillQuiet iconPill"
+                      onClick={() => {
+                        followingTodayRef.current = false;
+                        post("/api/time", { advance: true });
+                      }}
+                      aria-label="Next day"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                    <button type="button" className="pill pillQuiet iconPill aiPill" onClick={() => setAiOpen(true)} aria-label="Open AI session">
+                      <Sparkles size={15} />
+                      {hasPendingClarification && <span className="aiPendingDot" aria-hidden="true" />}
+                    </button>
+                    <button className="pill pillQuiet" onClick={enterPlanning} aria-label="Plan tomorrow">
+                      <Moon size={15} />
+                      Plan tomorrow
+                    </button>
+                    <button className="pill pillSecondary" onClick={() => setReviewOpen(true)} aria-label="Review day">
+                      Review day
+                    </button>
+                  </>
                 )}
-                <button
-                  className="pill pillQuiet iconPill"
-                  onClick={() => {
-                    followingTodayRef.current = false;
-                    post("/api/time", { advance: true });
-                  }}
-                  aria-label="Next day"
-                >
-                  <ChevronRight size={16} />
-                </button>
-                <button type="button" className="pill pillQuiet iconPill aiPill" onClick={() => setAiOpen(true)} aria-label="Open AI session">
-                  <Sparkles size={15} />
-                  {hasPendingClarification && <span className="aiPendingDot" aria-hidden="true" />}
-                </button>
-                <button className="pill pillSecondary" onClick={() => setReviewOpen(true)} aria-label="Review day">
-                  Review day
-                </button>
               </div>
             </header>
 
@@ -828,7 +909,7 @@ export default function Home() {
                   {firstMissingPillar && <span className="gaugeValue gaugeAmber">no {firstMissingPillar} yet</span>}
                 </div>
                 <div className="gaugeTrack balanceTrack" aria-hidden="true">
-                  {dayList.gauges.balance.map((pillar) => (
+                  {shownList.gauges.balance.map((pillar) => (
                     <div
                       key={pillar.folderId}
                       className="balanceSegment"
@@ -840,10 +921,10 @@ export default function Home() {
               </div>
             </section>
 
-            {dayList.habits.length > 0 && (
+            {!planningDate && shownList.habits.length > 0 && (
               <section className="habitStrip" aria-label="Habits">
                 <span className="habitLabel">Habits</span>
-                {dayList.habits.map((habit) => (
+                {shownList.habits.map((habit) => (
                   <button
                     key={habit.taskId}
                     className={habit.completedToday ? "habitChip habitDone" : "habitChip"}
@@ -907,8 +988,15 @@ export default function Home() {
                       </span>
                       <button
                         className={entry.taskId === firstUntickedId ? "listCheck nowCheck" : "listCheck"}
-                        onClick={() => void post("/api/day-list/complete", { taskId: entry.taskId })}
-                        aria-label={entry.completedToday ? `Untick ${entry.title}` : `Tick ${entry.title}`}
+                        onClick={planningDate ? undefined : () => void post("/api/day-list/complete", { taskId: entry.taskId })}
+                        disabled={planningDate !== null}
+                        aria-label={
+                          planningDate
+                            ? `${entry.title} — tick it on the day`
+                            : entry.completedToday
+                              ? `Untick ${entry.title}`
+                              : `Tick ${entry.title}`
+                        }
                       >
                         {entry.completedToday && <Check size={13} aria-hidden="true" />}
                       </button>
@@ -929,7 +1017,7 @@ export default function Home() {
                       </span>
                       <button
                         className="listRemove"
-                        onClick={() => void post("/api/day-list", { action: "remove", taskId: entry.taskId })}
+                        onClick={() => void listMutate({ action: "remove", taskId: entry.taskId })}
                         aria-label={`Remove ${entry.title} to tray`}
                       >
                         <X size={13} />
@@ -942,8 +1030,8 @@ export default function Home() {
                     className="listAddInput"
                     value={listDraft}
                     onChange={(event) => setListDraft(event.target.value)}
-                    placeholder="type to add — files itself in the background"
-                    aria-label="Add to today's list"
+                    placeholder={planningDate ? "type to add to tomorrow — files itself in the background" : "type to add — files itself in the background"}
+                    aria-label={planningDate ? "Add to tomorrow's plan" : "Add to today's list"}
                   />
                 </form>
               </div>
@@ -966,8 +1054,8 @@ export default function Home() {
                         </span>
                         <button
                           className="trayAdd"
-                          onClick={() => void post("/api/day-list", { action: "add", taskId: task.taskId, source: "tray" })}
-                          aria-label={`Add ${task.title} to today's list`}
+                          onClick={() => void listMutate({ action: "add", taskId: task.taskId, source: "tray" })}
+                          aria-label={`Add ${task.title} to ${planningDate ? "tomorrow's plan" : "today's list"}`}
                         >
                           add
                         </button>
@@ -978,6 +1066,7 @@ export default function Home() {
               </details>
             )}
 
+            {!planningDate && (
             <details className="laterSection" open={laterOpen} onToggle={(event) => setLaterOpen(event.currentTarget.open)}>
               <summary className="sectionEyebrow timelineSummary">
                 <span>Timeline &amp; schedule</span>
@@ -1068,6 +1157,7 @@ export default function Home() {
                 ))}
               </section>
             </details>
+            )}
 
             {inboxError && (
               <p className="errorMessage" role="alert">
@@ -1225,15 +1315,18 @@ export default function Home() {
           )}
           <div className="drawerActions">
             {selected.taskId && <button onClick={() => setMoveItem(selected)}>Reschedule</button>}
-            <button
-              onClick={() =>
-                selected.id.startsWith(dayListItemPrefix) && selected.taskId
-                  ? post("/api/day-list/complete", { taskId: selected.taskId })
-                  : post("/api/plan/complete", { planItemId: selected.id })
-              }
-            >
-              {selected.status === "completed" ? "Mark not done" : "Mark done"}
-            </button>
+            {/* T110: completion is a live-day action — while planning ahead the drawer only reschedules. */}
+            {!planningDate && (
+              <button
+                onClick={() =>
+                  selected.id.startsWith(dayListItemPrefix) && selected.taskId
+                    ? post("/api/day-list/complete", { taskId: selected.taskId })
+                    : post("/api/plan/complete", { planItemId: selected.id })
+                }
+              >
+                {selected.status === "completed" ? "Mark not done" : "Mark done"}
+              </button>
+            )}
           </div>
         </div>
       )}

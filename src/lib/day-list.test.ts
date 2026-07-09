@@ -391,3 +391,97 @@ describe("intelligent tray (T093)", () => {
     });
   });
 });
+
+// T110: plan tomorrow — the evening ritual. A plan-ahead list is the Today surface pointed at a
+// future date: built once, authored, then RECONCILED (not rebuilt) on the morning it becomes today.
+describe("plan tomorrow (T110)", () => {
+  const TODAY = "2026-06-01"; // Monday
+  const TOMORROW = "2026-06-02";
+
+  beforeEach(() => {
+    resetState();
+    setClock(TODAY, "08:30");
+  });
+
+  function createTask(patch: Record<string, unknown>): string {
+    applyStructureMutation({ entity: "task", action: "create", patch });
+    const tasks = getState().tasks;
+    return tasks[tasks.length - 1].id;
+  }
+
+  it("builds an isolated, plannedAhead list for a future date without recording tray telemetry", () => {
+    const datedTomorrow = createTask({ title: "Dentist", scheduledDate: TOMORROW, effortMinutes: 30 });
+    createTask({ title: "Backlog thing", effortMinutes: 20 }); // undated → surfaces in the tray
+
+    const tomorrow = dayListView(undefined, TOMORROW);
+    expect(tomorrow.entries.some((entry) => entry.taskId === datedTomorrow)).toBe(true);
+    expect(getState().dayLists.find((list) => list.date === TOMORROW)?.plannedAhead).toBe(true);
+    // A plan-ahead preview is not the live day: it must not advance any tray surfacing counters.
+    expect(getState().traySignals ?? []).toHaveLength(0);
+
+    // Today is untouched — the future-dated task is not plannable today.
+    expect(dayListView().entries.some((entry) => entry.taskId === datedTomorrow)).toBe(false);
+    // And once the day arrives, the live render DOES record surfacing (contrast).
+    advanceDay();
+    dayListView();
+    expect((getState().traySignals ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("routes adds and captures to tomorrow's list, leaving today's untouched", () => {
+    const x = createTask({ title: "Prep slides", effortMinutes: 45 });
+    dayListView(); // materialize today first
+
+    addTaskToDayList(x, { date: TOMORROW, source: "manual" });
+    const { taskId: milk } = instantCaptureToDayList("Buy milk", TOMORROW);
+
+    const tomorrow = dayListView(undefined, TOMORROW);
+    expect(tomorrow.entries.some((entry) => entry.taskId === x)).toBe(true);
+    expect(tomorrow.entries.some((entry) => entry.taskId === milk)).toBe(true);
+
+    const today = dayListView();
+    expect(today.entries.some((entry) => entry.taskId === x)).toBe(false);
+    expect(today.entries.some((entry) => entry.taskId === milk)).toBe(false);
+
+    // The change log names the surface it touched.
+    expect(listChangeHistory().some((change) => change.summary.includes(`the plan for ${TOMORROW}`))).toBe(true);
+  });
+
+  it("reconciles on arrival: keeps authored order, drops late-completed, appends newly-required, keeps deliberate adds", () => {
+    const carryA = createTask({ title: "Carry A", effortMinutes: 15 });
+    const carryB = createTask({ title: "Carry B", effortMinutes: 15 });
+    dayListView(); // materialize today
+    addTaskToDayList(carryA);
+    addTaskToDayList(carryB);
+
+    // Plan tomorrow (carries A+B as a live preview; back_rehab is the due recurring).
+    dayListView(undefined, TOMORROW);
+    const deliberate = createTask({ title: "Deliberate M", effortMinutes: 20 }); // undated backlog
+    addTaskToDayList(deliberate, { date: TOMORROW, source: "manual" });
+    reorderDayList([deliberate, carryA], TOMORROW); // author: M first, then A, then the rest
+
+    // The evening happens: B gets finished late; a new task is scheduled for tomorrow after planning.
+    completeTaskDirect(carryB);
+    const newlyDated = createTask({ title: "New dated N", scheduledDate: TOMORROW, effortMinutes: 20 });
+
+    advanceDay(); // TOMORROW is now today → first view reconciles
+    const view = dayListView();
+    const order = view.entries.map((entry) => entry.taskId);
+
+    expect(order[0]).toBe(deliberate); // deliberately-added undated task survives at its authored spot
+    expect(order[1]).toBe(carryA); // authored order preserved for survivors
+    expect(order).not.toContain(carryB); // completed late the prior evening → dropped
+    expect(order[order.length - 1]).toBe(newlyDated); // newly-required work appended after the authored block
+    expect(order).toContain("task_back_rehab"); // the due recurring stays
+    expect(getState().dayLists.find((list) => list.date === TOMORROW)?.plannedAhead).toBe(false);
+
+    // Reconcile runs exactly once — a second view is stable.
+    expect(dayListView().entries.map((entry) => entry.taskId)).toEqual(order);
+  });
+
+  it("gauges a future date against the whole day (no current-clock subtraction)", () => {
+    setClock(TODAY, "21:30"); // almost no clock time left today
+    const todayCapacity = dayListView().gauges.capacityMinutes;
+    const tomorrowCapacity = dayListView(undefined, TOMORROW).gauges.capacityMinutes;
+    expect(tomorrowCapacity).toBeGreaterThan(todayCapacity); // full day, not the ~45m clock remnant
+  });
+});

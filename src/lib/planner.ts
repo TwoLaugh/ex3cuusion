@@ -79,10 +79,12 @@ export function taskScore(state: AppState, task: Task, date: string): number {
 }
 
 // Exported for the committed day view (T090), which recomputes capacity over committed items.
-export function calculateCapacity(state: AppState): number {
+// T110: a `date` in the future (evening planning) is measured against the WHOLE day — no
+// current-clock subtraction — since none of its hours have elapsed yet. Same-day is clock-aware.
+export function calculateCapacity(state: AppState, date: string = state.currentDate): number {
   const dayEndMinutes = 22 * 60;
   const remainingToday = Math.max(45, dayEndMinutes - timeToMinutes(state.currentTime));
-  const clockAwareAvailable = Math.min(state.availableMinutes, remainingToday);
+  const clockAwareAvailable = date > state.currentDate ? state.availableMinutes : Math.min(state.availableMinutes, remainingToday);
   const recentDeferrals = state.deferrals.slice(-5);
   const overloadSignals = recentDeferrals.filter((entry) =>
     ["no_time", "overplanned", "low_energy"].includes(entry.reason)

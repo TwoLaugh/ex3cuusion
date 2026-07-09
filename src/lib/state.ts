@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defaultOrganizerInterpreter, interpretCaptureRevision, interpretInboxInput, schedulingForMode, type AiInterpreter, type AiRevisionInterpreter, type CaptureRevision } from "./ai-actions";
 import { addDays, nextWeekRange, weekRange } from "./dates";
-import { buildMorningList, ensureTraySignal, findDayList, renderDayList, type DayListView } from "./day-list";
+import { buildMorningList, ensureTraySignal, findDayList, reconcileDayList, renderDayList, type DayListView } from "./day-list";
 import { buildCommitment, countNewCandidates, findCommitment, renderCommittedPlan, snapshotPlanItem } from "./day-view";
 import { nextId } from "./ids";
 import { blockFolderId, buildDayPlan, hasActiveChildren } from "./planner";
@@ -324,21 +324,26 @@ function maybeReplanForScheduleChange(state: AppState, task: Task): void {
 // mirrors the T090 auto-commit); every list change after that is an explicit, undoable mutation.
 // The T090 committedPlans/dayView machinery stays intact as the (secondary) timeline view.
 
-// THE single read-path gate: builds + stores today's list on first access. Silent, like the
-// dayView auto-commit. Returns the LIVE list object inside the repository state.
-export function ensureDayList(state: AppState = currentState()): DayList {
+// THE single read-path gate: builds + stores a date's list on first access. Silent, like the
+// dayView auto-commit. Returns the LIVE list object inside the repository state. `date` defaults to
+// today; a future date (T110 evening planning) materializes a plan-ahead list. When a plan-ahead
+// list is first read on the day it belongs to, it is RECONCILED once (never rebuilt) — also silent.
+export function ensureDayList(state: AppState = currentState(), date: string = state.currentDate): DayList {
   state.dayLists ??= [];
-  let list = findDayList(state, state.currentDate);
+  let list = findDayList(state, date);
   if (!list) {
-    list = buildMorningList(state, state.currentDate);
+    list = buildMorningList(state, date);
     state.dayLists.push(list);
+  } else if (list.plannedAhead && date <= state.currentDate) {
+    reconcileDayList(state, list);
   }
   return list;
 }
 
-// The read model for the Today surface (list + habit strip + tray + gauges).
-export function dayListView(state: AppState = currentState()): DayListView {
-  return renderDayList(state, ensureDayList(state));
+// The read model for the Today surface (list + habit strip + tray + gauges). `date` targets a
+// future day for the plan-ahead (T110) surface; defaults to today.
+export function dayListView(state: AppState = currentState(), date: string = state.currentDate): DayListView {
+  return renderDayList(state, ensureDayList(state, date));
 }
 
 function normalizeDayListOrder(list: DayList): void {
@@ -351,18 +356,25 @@ function truncateTitle(title: string): string {
   return title.length > 40 ? `${title.slice(0, 37)}...` : title;
 }
 
+// T110: undo-history phrasing — "today's list" for the live day, "the plan for <date>" while
+// planning ahead — so a reordered/added entry reads correctly in the change log for either surface.
+function dayListLabel(state: AppState, date: string): string {
+  return date === state.currentDate ? "today's list" : `the plan for ${date}`;
+}
+
 // Append a task to today's list. Idempotent: re-adding an existing entry is a silent no-op (no
 // history noise). Default source is "tray" (the one-tap tray add).
-export function addTaskToDayList(taskId: string, options?: { source?: DayListSource }): AppState {
+export function addTaskToDayList(taskId: string, options?: { source?: DayListSource; date?: string }): AppState {
   const state = currentState();
-  const list = ensureDayList(state);
+  const date = options?.date ?? state.currentDate;
+  const list = ensureDayList(state, date);
   const task = state.tasks.find((entry) => entry.id === taskId && entry.status !== "archived");
   if (!task || list.entries.some((entry) => entry.taskId === taskId)) return getState();
-  recordChange("day_list", `Added "${truncateTitle(task.title)}" to today's list`);
+  recordChange("day_list", `Added "${truncateTitle(task.title)}" to ${dayListLabel(state, date)}`);
   list.entries.push({
     taskId,
     order: list.entries.length,
-    pinnedTime: task.scheduledDate === state.currentDate && validTime(task.scheduledTime) ? task.scheduledTime : undefined,
+    pinnedTime: task.scheduledDate === date && validTime(task.scheduledTime) ? task.scheduledTime : undefined,
     source: options?.source ?? "tray"
   });
   normalizeDayListOrder(list);
@@ -377,13 +389,13 @@ export function addTaskToDayList(taskId: string, options?: { source?: DayListSou
 }
 
 // Remove an entry from today's list (back to the tray). The task itself is untouched.
-export function removeTaskFromDayList(taskId: string): AppState {
+export function removeTaskFromDayList(taskId: string, date: string = currentState().currentDate): AppState {
   const state = currentState();
-  const list = ensureDayList(state);
+  const list = ensureDayList(state, date);
   const entry = list.entries.find((candidate) => candidate.taskId === taskId);
   if (!entry) return getState();
   const task = state.tasks.find((candidate) => candidate.id === taskId);
-  recordChange("day_list", `Removed "${truncateTitle(task?.title ?? taskId)}" from today's list`);
+  recordChange("day_list", `Removed "${truncateTitle(task?.title ?? taskId)}" from ${dayListLabel(state, date)}`);
   list.entries = list.entries.filter((candidate) => candidate.taskId !== taskId);
   normalizeDayListOrder(list);
   // T093: eject is information, not ignoring — record it and clear the ignore streak.
@@ -423,16 +435,16 @@ export function resolveStaleTask(taskId: string, resolution: "someday" | "keep")
 // Full replacement order for today's list. Unknown/duplicate ids in the request are ignored;
 // entries missing from the request keep their previous relative order at the end. A no-op
 // reorder records nothing.
-export function reorderDayList(orderedTaskIds: string[]): AppState {
+export function reorderDayList(orderedTaskIds: string[], date: string = currentState().currentDate): AppState {
   const state = currentState();
-  const list = ensureDayList(state);
+  const list = ensureDayList(state, date);
   const byTaskId = new Map(list.entries.map((entry) => [entry.taskId, entry]));
   const requested = orderedTaskIds.filter((taskId, index, all) => byTaskId.has(taskId) && all.indexOf(taskId) === index);
   const requestedSet = new Set(requested);
   const current = [...list.entries].sort((a, b) => a.order - b.order);
   const next = [...requested.map((taskId) => byTaskId.get(taskId)!), ...current.filter((entry) => !requestedSet.has(entry.taskId))];
   if (next.every((entry, index) => entry === current[index])) return getState();
-  recordChange("day_list", "Reordered today's list");
+  recordChange("day_list", `Reordered ${dayListLabel(state, date)}`);
   list.entries = next;
   normalizeDayListOrder(list);
   return getState();
@@ -440,9 +452,9 @@ export function reorderDayList(orderedTaskIds: string[]): AppState {
 
 // Pin (or clear, with undefined) a display time on a list entry. Pins sort/display only — the
 // capacity gauge owns the "does the day fit" question. Invalid times are rejected silently.
-export function setDayListPin(taskId: string, pinnedTime?: string): AppState {
+export function setDayListPin(taskId: string, pinnedTime?: string, date: string = currentState().currentDate): AppState {
   const state = currentState();
-  const list = ensureDayList(state);
+  const list = ensureDayList(state, date);
   const entry = list.entries.find((candidate) => candidate.taskId === taskId);
   if (!entry) return getState();
   if (pinnedTime !== undefined && !validTime(pinnedTime)) return getState();
@@ -520,12 +532,12 @@ function rollBackCompletionTimestamps(state: AppState, taskId: string): void {
 // Inline instant add: create a minimal task and put it on today's list as ONE undoable change.
 // AI enrichment is a SEPARATE follow-up step (enrichCapturedTask via POST /api/day-list/enrich)
 // so the add itself never blocks on a model call.
-export function instantCaptureToDayList(title: string): { state: AppState; taskId?: string } {
+export function instantCaptureToDayList(title: string, date: string = currentState().currentDate): { state: AppState; taskId?: string } {
   const cleaned = cleanText(title);
   if (!cleaned) return { state: getState() };
   const state = currentState();
-  ensureDayList(state); // materialize the morning list BEFORE the snapshot so undo keeps it
-  recordChange("capture", `Captured "${truncateTitle(cleaned)}" to today's list`);
+  ensureDayList(state, date); // materialize the list BEFORE the snapshot so undo keeps it
+  recordChange("capture", `Captured "${truncateTitle(cleaned)}" to ${dayListLabel(state, date)}`);
   const task: Task = {
     id: uniqueStateId(state, "task"),
     title: cleaned,
@@ -544,7 +556,7 @@ export function instantCaptureToDayList(title: string): { state: AppState; taskI
     source: "manual"
   };
   state.tasks.push(task);
-  const list = ensureDayList(state);
+  const list = ensureDayList(state, date);
   list.entries.push({ taskId: task.id, order: list.entries.length, source: "manual" });
   normalizeDayListOrder(list);
   return { state: getState(), taskId: task.id };

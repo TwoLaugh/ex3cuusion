@@ -269,6 +269,13 @@ textarea {
   margin: 4px 0 0;
 }
 
+/* T110 plan-tomorrow: a quiet accent so the plan-ahead surface is unmistakably not the live day. */
+.planningHeader {
+  border-left: 2px solid var(--accent);
+  padding-left: 14px;
+  margin-left: -16px;
+}
+
 .dayNav {
   align-items: center;
   display: flex;

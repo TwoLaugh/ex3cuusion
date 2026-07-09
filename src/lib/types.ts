@@ -227,6 +227,10 @@ export interface DayList {
   date: string;
   committedAt: string;
   entries: DayListEntry[];
+  // T110: built ahead of its own day (evening planning). The first view ON that day RECONCILES it
+  // (keep authored order, drop late-completed, append newly-due/carryover) instead of rebuilding
+  // from scratch, then clears this flag. Absent/false on same-day morning builds.
+  plannedAhead?: boolean;
 }
 
 
